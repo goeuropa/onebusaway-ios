@@ -72,7 +72,7 @@ targets:
         DEVELOPMENT_TEAM: 4ZQCMA634J
         PRODUCT_BUNDLE_IDENTIFIER: com.transportationamerica.iphone
   TodayView:
-    sources: ["Apps/CoMB/Assets.xcassets"]
+    sources: ["Apps/TransportationAmerica/Assets.xcassets"]
     entitlements:
       properties:
         com.apple.security.application-groups:
