@@ -35,7 +35,7 @@ targets:
       path: Apps/OBASW/Info.plist
       properties:
         CFBundleDisplayName: OBASW
-        CFBundleURLTypes: [{CFBundleTypeRole: "Editor", CFBundleURLIconFile: "", CFBundleURLName: "OBASW", CFBundleURLSchemes: ["OBASW"]}]
+        CFBundleURLTypes: [{CFBundleTypeRole: "Editor", CFBundleURLIconFile: "", CFBundleURLName: "obasw", CFBundleURLSchemes: ["obasw"]}]
         LSApplicationQueriesSchemes:
           - fb
           - twitter
@@ -61,7 +61,7 @@ targets:
           AppGroup: group.pl.goeuropa.obasw.iphone
           BundledRegionsFileName: regions.json
           DeepLinkServerBaseAddress: https://onebusaway.co
-          ExtensionURLScheme: OBASW
+          ExtensionURLScheme: obasw
           PrivacyPolicyURL: https://onebusaway.org/privacy/
           PushNotificationAPIKey: d5d0d28a-6091-46cd-9627-0ce01ffa9f9e
           RESTServerAPIKey: pl.goeuropa.OBASW.iphone
@@ -70,7 +70,7 @@ targets:
     settings:
       base:
         DEVELOPMENT_TEAM: 4ZQCMA634J
-        PRODUCT_BUNDLE_IDENTIFIER: pl.goeuropa.OBASW.iphone
+        PRODUCT_BUNDLE_IDENTIFIER: pl.goeuropa.obasw.iphone
   TodayView:
     sources: ["Apps/OBASW/Assets.xcassets"]
     entitlements:
