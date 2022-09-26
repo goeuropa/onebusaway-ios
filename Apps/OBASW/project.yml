@@ -69,7 +69,7 @@ targets:
           RegionsServerAPIPath: /regions-obasw.json
     settings:
       base:
-        DEVELOPMENT_TEAM: 4ZQCMA634J
+        DEVELOPMENT_TEAM: 85APG5FQFE
         PRODUCT_BUNDLE_IDENTIFIER: pl.goeuropa.obasw.iphone
   TodayView:
     sources: ["Apps/OBASW/Assets.xcassets"]
@@ -90,7 +90,7 @@ targets:
           RegionsServerAPIPath: /regions-obasw.json
     settings:
       base:
-        DEVELOPMENT_TEAM: 4ZQCMA634J
+        DEVELOPMENT_TEAM: 85APG5FQFE
         PRODUCT_BUNDLE_IDENTIFIER: pl.goeuropa.obasw.iphone.TodayView
 
 include:
