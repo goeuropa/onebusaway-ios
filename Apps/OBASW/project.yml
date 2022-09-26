@@ -3,39 +3,39 @@
 ############
 
 options:
-  bundleIdPrefix: pl.goeuropa.obata
+  bundleIdPrefix: pl.goeuropa.obasw
 
 targets:
   App:
     sources:
-      - path: Apps/OBATA
+      - path: Apps/OBASW
         name: App
-        group: OBATA
+        group: OBASW
       - path: Apps/Shared/Analytics
         name: Analytics
-        group: OBATA
+        group: OBASW
       - path: Apps/Shared/CommonClient
         name: Common
-        group: OBATA
+        group: OBASW
       - path: Apps/Shared/OneSignal
         name: OneSignal
-        group: OBATA
+        group: OBASW
     dependencies:
       - package: OneSignal
     entitlements:
-      path: Apps/OBATA/OBATA.entitlements
+      path: Apps/OBASW/OBASW.entitlements
       properties:
         com.apple.security.application-groups:
-          - group.pl.goeuropa.obata.iphone
+          - group.pl.goeuropa.obasw.iphone
         com.apple.developer.associated-domains:
           - applinks:onebusaway.co
           - applinks:www.onebusaway.co
           - applinks:alerts.onebusaway.org
     info:
-      path: Apps/OBATA/Info.plist
+      path: Apps/OBASW/Info.plist
       properties:
-        CFBundleDisplayName: OBATA
-        CFBundleURLTypes: [{CFBundleTypeRole: "Editor", CFBundleURLIconFile: "", CFBundleURLName: "obata", CFBundleURLSchemes: ["obata"]}]
+        CFBundleDisplayName: OBASW
+        CFBundleURLTypes: [{CFBundleTypeRole: "Editor", CFBundleURLIconFile: "", CFBundleURLName: "OBASW", CFBundleURLSchemes: ["OBASW"]}]
         LSApplicationQueriesSchemes:
           - fb
           - twitter
@@ -54,44 +54,44 @@ targets:
           }
         NSHumanReadableCopyright: © Open Transit Software Foundation
         NSUserActivityTypes:
-          - pl.goeuropa.obata.iphone.user_activity.stop
-          - pl.goeuropa.obata.iphone.user_activity.trip
+          - pl.goeuropa.obasw.iphone.user_activity.stop
+          - pl.goeuropa.obasw.iphone.user_activity.trip
         OBAKitConfig:
           AppDevelopersEmailAddress: oba@transportationamerica.com
-          AppGroup: group.pl.goeuropa.obata.iphone
+          AppGroup: group.pl.goeuropa.obasw.iphone
           BundledRegionsFileName: regions.json
           DeepLinkServerBaseAddress: https://onebusaway.co
-          ExtensionURLScheme: obata
+          ExtensionURLScheme: OBASW
           PrivacyPolicyURL: https://onebusaway.org/privacy/
           PushNotificationAPIKey: d5d0d28a-6091-46cd-9627-0ce01ffa9f9e
-          RESTServerAPIKey: pl.goeuropa.obata.iphone
+          RESTServerAPIKey: pl.goeuropa.OBASW.iphone
           RegionsServerBaseAddress: http://data.tracktrolley.com
-          RegionsServerAPIPath: /regions-v3.json
+          RegionsServerAPIPath: /regions-obasw.json
     settings:
       base:
         DEVELOPMENT_TEAM: 4ZQCMA634J
-        PRODUCT_BUNDLE_IDENTIFIER: pl.goeuropa.obata.iphone
+        PRODUCT_BUNDLE_IDENTIFIER: pl.goeuropa.OBASW.iphone
   TodayView:
-    sources: ["Apps/OBATA/Assets.xcassets"]
+    sources: ["Apps/OBASW/Assets.xcassets"]
     entitlements:
       properties:
         com.apple.security.application-groups:
-          - group.pl.goeuropa.obata.iphone
+          - group.pl.goeuropa.obasw.iphone
     info:
       properties:
-        CFBundleDisplayName: OBATA
+        CFBundleDisplayName: OBASW
         OBAKitConfig:
-          AppGroup: group.pl.goeuropa.obata.iphone
+          AppGroup: group.pl.goeuropa.obasw.iphone
           BundledRegionsFileName: regions.json
           DeepLinkServerBaseAddress: https://onebusaway.co
-          ExtensionURLScheme: obata
-          RESTServerAPIKey: pl.goeuropa.obata.iphone
+          ExtensionURLScheme: obasw
+          RESTServerAPIKey: pl.goeuropa.obasw.iphone
           RegionsServerBaseAddress: http://data.tracktrolley.com
-          RegionsServerAPIPath: /regions-v3.json
+          RegionsServerAPIPath: /regions-obasw.json
     settings:
       base:
         DEVELOPMENT_TEAM: 4ZQCMA634J
-        PRODUCT_BUNDLE_IDENTIFIER: pl.goeuropa.obata.iphone.TodayView
+        PRODUCT_BUNDLE_IDENTIFIER: pl.goeuropa.obasw.iphone.TodayView
 
 include:
   - path: Apps/Shared/app_shared.yml
