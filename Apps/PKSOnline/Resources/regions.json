@@ -8,11 +8,11 @@
         "siriBaseUrl": null, 
         "supportsEmbeddedSocial": false, 
         "supportsObaRealtimeApis": true, 
-        "contactEmail": "oba@transportationamerica.com", 
+        "contactEmail": "app@pks.poznan.pl", 
         "enrollParticipantsInStudy": true, 
-        "obaBaseUrl": "hhttp://20.115.6.221:8080/oba-api-comb/", 
+        "obaBaseUrl": "https://pksonline.pl:8443/oba-api/?key=web", 
         "id": 0, 
-        "regionName": "TransportationAmerica", 
+        "regionName": "PKS Poznan", 
         "obaVersionInfo": "2.0.0-SNAPSHOT|2|0|0|SNAPSHOT|", 
         "travelBehaviorDataCollectionEnabled": false, 
         "supportsObaDiscoveryApis": true, 
@@ -21,23 +21,23 @@
         "otpBaseUrl": null, 
         "paymentWarningBody": null, 
         "supportsSiriRealtimeApis": false, 
-        "twitterUrl": "https://mobile.twitter.com/OBAMiami", 
+        "twitterUrl": null, 
         "paymentAndroidAppId": null, 
         "paymentiOSAppStoreIdentifier": null, 
         "paymentiOSAppUrlScheme": null, 
         "active": true, 
         "open311Servers": [], 
         "paymentWarningTitle": null, 
-        "language": "en_US", 
+        "language": "pl_PL", 
         "bounds": [
           {
-            "lat": 25.945697, 
+            "lat": 52.407014, 
             "latSpan": 0.5424609999999994, 
-            "lon": -80.293579, 
+            "lon": 16.926709, 
             "lonSpan": 0.576357999999999
           }
         ], 
-        "facebookUrl": "https://www.facebook.com/OBAMiami", 
+        "facebookUrl": "null", 
         "stopInfoUrl": null, 
         "experimental": true
       }
