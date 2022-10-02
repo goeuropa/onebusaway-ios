@@ -64,7 +64,7 @@ targets:
           PrivacyPolicyURL: https://onebusaway.org/privacy/
           PushNotificationAPIKey: d5d0d28a-6091-46cd-9627-0ce01ffa9f9e
           RESTServerAPIKey: pl.goeuropa.OBASW.iphone
-          RegionsServerBaseAddress: http://data.tracktrolley.com
+          RegionsServerBaseAddress: https://data.tracktrolley.com
           RegionsServerAPIPath: /regions-obasw.json
     settings:
       base:
@@ -85,7 +85,7 @@ targets:
           DeepLinkServerBaseAddress: https://onebusaway.co
           ExtensionURLScheme: obasw
           RESTServerAPIKey: pl.goeuropa.obasw.iphone
-          RegionsServerBaseAddress: http://data.tracktrolley.com
+          RegionsServerBaseAddress: https://data.tracktrolley.com
           RegionsServerAPIPath: /regions-obasw.json
     settings:
       base:
