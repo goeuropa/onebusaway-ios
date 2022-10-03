@@ -10,7 +10,7 @@
         "supportsObaRealtimeApis": true, 
         "contactEmail": "oba@transportationamerica.com", 
         "enrollParticipantsInStudy": true, 
-        "obaBaseUrl": "https://oba.tracktrolley.com/oba-api?key=web", 
+        "obaBaseUrl": "https://obasw.tracktrolley.com/oba-api-sw?key=web", 
         "id": 0, 
         "regionName": "City of Sweetwater", 
         "obaVersionInfo": "2.0.0-SNAPSHOT|2|0|0|SNAPSHOT|", 

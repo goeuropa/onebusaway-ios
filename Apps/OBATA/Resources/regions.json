@@ -10,7 +10,7 @@
         "supportsObaRealtimeApis": true, 
         "contactEmail": "oba@transportationamerica.com", 
         "enrollParticipantsInStudy": true, 
-        "obaBaseUrl": "hhttp://20.115.6.221:8080/oba-api-comb/", 
+        "obaBaseUrl": "https://oba.tracktrolley.com/oba-api/?key=web", 
         "id": 0, 
         "regionName": "TransportationAmerica", 
         "obaVersionInfo": "2.0.0-SNAPSHOT|2|0|0|SNAPSHOT|", 
