@@ -1,0 +1,46 @@
+{
+  "code": 200, 
+  "text": "OK", 
+  "version": 3, 
+  "data": {
+    "list": [
+{
+        "siriBaseUrl": null, 
+        "supportsEmbeddedSocial": false, 
+        "supportsObaRealtimeApis": true, 
+        "contactEmail": "oba@transportationamerica.com", 
+        "enrollParticipantsInStudy": true, 
+        "obaBaseUrl": "https://oba.tracktrolley.com/oba-api/?key=web", 
+        "id": 0, 
+        "regionName": "TransportationAmerica", 
+        "obaVersionInfo": "2.0.0-SNAPSHOT|2|0|0|SNAPSHOT|", 
+        "travelBehaviorDataCollectionEnabled": false, 
+        "supportsObaDiscoveryApis": true, 
+        "supportsOtpBikeshare": false, 
+        "otpContactEmail": null, 
+        "otpBaseUrl": null, 
+        "paymentWarningBody": null, 
+        "supportsSiriRealtimeApis": false, 
+        "twitterUrl": "https://mobile.twitter.com/OBAMiami", 
+        "paymentAndroidAppId": null, 
+        "paymentiOSAppStoreIdentifier": null, 
+        "paymentiOSAppUrlScheme": null, 
+        "active": true, 
+        "open311Servers": [], 
+        "paymentWarningTitle": null, 
+        "language": "en_US", 
+        "bounds": [
+          {
+            "lat": 25.775844868894005, 
+            "latSpan": 0.5424609999999994, 
+            "lon": -80.2947081163978, 
+            "lonSpan": 0.576357999999999
+          }
+        ], 
+        "facebookUrl": "https://www.facebook.com/OBAMiami", 
+        "stopInfoUrl": null, 
+        "experimental": true
+      }
+    ]
+  }
+}
