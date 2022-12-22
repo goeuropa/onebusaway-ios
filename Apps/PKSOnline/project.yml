@@ -68,7 +68,7 @@ targets:
           RegionsServerAPIPath: /regions-v3.json
     settings:
       base:
-        DEVELOPMENT_TEAM: 85APG5FQFE
+        DEVELOPMENT_TEAM: F6YL2VS3DH
         PRODUCT_BUNDLE_IDENTIFIER: pl.pkspoznan.pksonline.iphone
   TodayView:
     sources: ["Apps/PKSOnline/Assets.xcassets"]
@@ -89,7 +89,7 @@ targets:
           RegionsServerAPIPath: /regions-v3.json
     settings:
       base:
-        DEVELOPMENT_TEAM: 85APG5FQFE
+        DEVELOPMENT_TEAM: F6YL2VS3DH
         PRODUCT_BUNDLE_IDENTIFIER: pl.pkspoznan.pksonline.iphone.TodayView
 
 include:
