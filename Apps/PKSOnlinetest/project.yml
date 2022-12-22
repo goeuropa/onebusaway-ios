@@ -1,0 +1,103 @@
+############
+# OneBusAway
+############
+
+options:
+  bundleIdPrefix: pl.goeuropa.pksonline
+
+targets:
+  App:
+    sources:
+      - path: Apps/PKSOnline
+        name: App
+        group: PKSOnline
+      - path: Apps/Shared/Analytics
+        name: Analytics
+        group: PKSOnline
+      - path: Apps/Shared/CommonClient
+        name: Common
+        group: PKSOnline
+      - path: Apps/Shared/OneSignal
+        name: OneSignal
+        group: PKSOnline
+    dependencies:
+      - package: OneSignal
+    entitlements:
+      path: Apps/PKSOnline/PKSOnline.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.pl.goeuropa.pksonline.iphone
+        com.apple.developer.associated-domains:
+          - applinks:onebusaway.co
+          - applinks:www.onebusaway.co
+          - applinks:alerts.onebusaway.org
+    info:
+      path: Apps/PKSOnline/Info.plist
+      properties:
+        CFBundleDisplayName: PKSOnline
+        CFBundleURLTypes: [{CFBundleTypeRole: "Editor", CFBundleURLIconFile: "", CFBundleURLName: "pksonline", CFBundleURLSchemes: ["pksonline"]}]
+        LSApplicationQueriesSchemes:
+          - fb
+          - twitter
+          - comgooglemaps
+          - fb313213768708402HART
+          - org.sdmts.riderapp.compassmobile.payments
+          - org.sdmts.pronto
+          - co.bytemark.tgt
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: false
+          NSExceptionDomains: {
+            "onebusaway.co": {
+                NSIncludesSubdomains: true,
+                NSExceptionAllowsInsecureHTTPLoads: true
+            }
+          }
+        NSHumanReadableCopyright: © Open Transit Software Foundation
+        NSUserActivityTypes:
+          - pl.goeuropa.pksonline.iphone.user_activity.stop
+          - pl.goeuropa.pksonline.iphone.user_activity.trip
+        OBAKitConfig:
+          AppDevelopersEmailAddress: it@pks.poznan.pl
+          AppGroup: group.pl.goeuropa.pksonline.iphone
+          BundledRegionsFileName: regions.json
+          ExtensionURLScheme: obata
+          PrivacyPolicyURL: https://onebusaway.org/privacy/
+          PushNotificationAPIKey: d5d0d28a-6091-46cd-9627-0ce01ffa9f9e
+          RESTServerAPIKey: pl.goeuropa.obata.iphone
+          RegionsServerBaseAddress: https://www.pksonline.pl/
+          RegionsServerAPIPath: /regions-v3.json
+    settings:
+      base:
+        DEVELOPMENT_TEAM: 85APG5FQFE
+        PRODUCT_BUNDLE_IDENTIFIER: pl.goeuropa.pksonline.iphone
+  TodayView:
+    sources: ["Apps/PKSOnline/Assets.xcassets"]
+    entitlements:
+      properties:
+        com.apple.security.application-groups:
+          - group.pl.goeuropa.pksonline.iphone
+    info:
+      properties:
+        CFBundleDisplayName: PKSOnline
+        OBAKitConfig:
+          AppGroup: group.pl.goeuropa.pksonline.iphone
+          BundledRegionsFileName: regions.json
+          DeepLinkServerBaseAddress: https://onebusaway.co
+          ExtensionURLScheme: pksonline
+          RESTServerAPIKey: pl.goeuropa.obata.iphone
+          RegionsServerBaseAddress: https://www.pksonline.pl/
+          RegionsServerAPIPath: /regions-v3.json
+    settings:
+      base:
+        DEVELOPMENT_TEAM: 85APG5FQFE
+        PRODUCT_BUNDLE_IDENTIFIER: pl.goeuropa.pksonline.iphone.TodayView
+
+include:
+  - path: Apps/Shared/app_shared.yml
+  - path: Apps/Shared/analytics_fx_config.yml
+  - path: Apps/Shared/push_config.yml
+  - path: OBAKitCore/project.yml
+  - path: OBAKit/project.yml
+  - path: OBAKitTests/project.yml
+  - path: OBAKitUITests/project.yml
+  - path: TodayView/project.yml

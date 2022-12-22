@@ -3,7 +3,7 @@
 ############
 
 options:
-  bundleIdPrefix: pl.goeuropa.pksonline
+  bundleIdPrefix: pl.pkspoznan.pksonline
 
 targets:
   App:
@@ -26,7 +26,7 @@ targets:
       path: Apps/PKSOnline/PKSOnline.entitlements
       properties:
         com.apple.security.application-groups:
-          - group.pl.goeuropa.pksonline.iphone
+          - group.pl.pkspoznan.pksonline.iphone
         com.apple.developer.associated-domains:
           - applinks:onebusaway.co
           - applinks:www.onebusaway.co
@@ -54,43 +54,43 @@ targets:
           }
         NSHumanReadableCopyright: © Open Transit Software Foundation
         NSUserActivityTypes:
-          - pl.goeuropa.pksonline.iphone.user_activity.stop
-          - pl.goeuropa.pksonline.iphone.user_activity.trip
+          - pl.pkspoznan.pksonline.iphone.user_activity.stop
+          - pl.pkspoznan.pksonline.iphone.user_activity.trip
         OBAKitConfig:
           AppDevelopersEmailAddress: it@pks.poznan.pl
-          AppGroup: group.pl.goeuropa.pksonline.iphone
+          AppGroup: group.pl.pkspoznan.pksonline.iphone
           BundledRegionsFileName: regions.json
-          ExtensionURLScheme: obata
+          ExtensionURLScheme: oba
           PrivacyPolicyURL: https://onebusaway.org/privacy/
           PushNotificationAPIKey: d5d0d28a-6091-46cd-9627-0ce01ffa9f9e
-          RESTServerAPIKey: pl.goeuropa.obata.iphone
+          RESTServerAPIKey: pl.pkspoznan.pksonline.iphone
           RegionsServerBaseAddress: https://www.pksonline.pl/
           RegionsServerAPIPath: /regions-v3.json
     settings:
       base:
         DEVELOPMENT_TEAM: 85APG5FQFE
-        PRODUCT_BUNDLE_IDENTIFIER: pl.goeuropa.pksonline.iphone
+        PRODUCT_BUNDLE_IDENTIFIER: pl.pkspoznan.pksonline.iphone
   TodayView:
     sources: ["Apps/PKSOnline/Assets.xcassets"]
     entitlements:
       properties:
         com.apple.security.application-groups:
-          - group.pl.goeuropa.pksonline.iphone
+          - group.pl.pkspoznan.pksonline.iphone
     info:
       properties:
         CFBundleDisplayName: PKSOnline
         OBAKitConfig:
-          AppGroup: group.pl.goeuropa.pksonline.iphone
+          AppGroup: group.pl.pkspoznan.pksonline.iphone
           BundledRegionsFileName: regions.json
           DeepLinkServerBaseAddress: https://onebusaway.co
           ExtensionURLScheme: pksonline
-          RESTServerAPIKey: pl.goeuropa.obata.iphone
+          RESTServerAPIKey: pl.pkspoznan.obata.iphone
           RegionsServerBaseAddress: https://www.pksonline.pl/
           RegionsServerAPIPath: /regions-v3.json
     settings:
       base:
         DEVELOPMENT_TEAM: 85APG5FQFE
-        PRODUCT_BUNDLE_IDENTIFIER: pl.goeuropa.pksonline.iphone.TodayView
+        PRODUCT_BUNDLE_IDENTIFIER: pl.pkspoznan.pksonline.iphone.TodayView
 
 include:
   - path: Apps/Shared/app_shared.yml
