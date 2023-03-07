@@ -30,9 +30,6 @@ open class OBATestCase: XCTestCase {
 
     open override func tearDown() {
         super.tearDown()
-        regionsAPIService.networkQueue.cancelAllOperations()
-        obacoService.networkQueue.cancelAllOperations()
-        restService.networkQueue.cancelAllOperations()
         NSTimeZone.resetSystemTimeZone()
         userDefaults.removePersistentDomain(forName: userDefaultsSuiteName)
     }
@@ -70,16 +67,8 @@ open class OBATestCase: XCTestCase {
     var obacoService: ObacoAPIService!
 
     func buildObacoService(networkQueue: OperationQueue? = nil, dataLoader: MockDataLoader? = nil) -> ObacoAPIService {
-        ObacoAPIService(
-            baseURL: obacoURL,
-            apiKey: apiKey,
-            uuid: uuid,
-            appVersion: appVersion,
-            regionID: obacoRegionID,
-            networkQueue: networkQueue ?? OperationQueue(),
-            delegate: nil,
-            dataLoader: dataLoader ?? MockDataLoader(testName: name)
-        )
+        let config = APIServiceConfiguration(baseURL: obacoURL, apiKey: apiKey, uuid: uuid, appVersion: appVersion, regionIdentifier: obacoRegionID)
+        return ObacoAPIService(regionID: obacoRegionID, delegate: nil, configuration: config, dataLoader: dataLoader ?? MockDataLoader(testName: name))
     }
 
     // MARK: - Network/REST API Service
@@ -92,16 +81,9 @@ open class OBATestCase: XCTestCase {
 
     var restService: RESTAPIService!
 
-    func buildRESTService(networkQueue: OperationQueue? = nil, dataLoader: MockDataLoader? = nil) -> RESTAPIService {
-        RESTAPIService(
-            baseURL: baseURL,
-            apiKey: apiKey,
-            uuid: uuid,
-            appVersion: appVersion,
-            networkQueue: networkQueue ?? OperationQueue(),
-            dataLoader: dataLoader ?? MockDataLoader(testName: name),
-            regionIdentifier: pugetSoundRegionIdentifier
-        )
+    func buildRESTService(dataLoader: MockDataLoader? = nil) -> RESTAPIService {
+        let config = APIServiceConfiguration(baseURL: baseURL, apiKey: apiKey, uuid: uuid, appVersion: appVersion, regionIdentifier: pugetSoundRegionIdentifier)
+        return RESTAPIService(config, dataLoader: dataLoader ?? MockDataLoader(testName: name))
     }
 
     // MARK: - Network Request Stubbing
@@ -150,13 +132,17 @@ open class OBATestCase: XCTestCase {
 
     var regionsAPIService: RegionsAPIService!
 
-    func buildRegionsAPIService(networkQueue: OperationQueue? = nil, dataLoader: MockDataLoader? = nil) -> RegionsAPIService {
-        RegionsAPIService(
+    func buildRegionsAPIService(dataLoader: MockDataLoader? = nil) -> RegionsAPIService {
+        let configuration = APIServiceConfiguration(
             baseURL: regionsURL,
             apiKey: "org.onebusaway.iphone.test",
             uuid: "12345-12345-12345-12345-12345",
             appVersion: "2018.12.31",
-            networkQueue: networkQueue ?? OperationQueue(),
+            regionIdentifier: nil
+        )
+
+        return RegionsAPIService(
+            configuration,
             dataLoader: dataLoader ?? MockDataLoader(testName: name)
         )
     }

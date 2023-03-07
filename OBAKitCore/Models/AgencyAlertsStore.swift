@@ -8,6 +8,7 @@
 //
 
 import Foundation
+import os.log
 
 @objc public protocol AgencyAlertsDelegate: NSObjectProtocol {
     @objc optional func agencyAlertsUpdated()
@@ -56,70 +57,64 @@ public class AgencyAlertsStore: NSObject, RegionsServiceDelegate {
 
     /// Cancels all pending data operations.
     private func cancelAllOperations() {
-        agenciesOperation?.cancel()
-        regionalAlertsOperation?.cancel()
-        obacoOperation?.cancel()
         queue.cancelAllOperations()
     }
 
-    private var agenciesOperation: DecodableOperation<RESTAPIResponse<[AgencyWithCoverage]>>?
-
     private var agencies = [AgencyWithCoverage]()
 
+    public func update() async throws {
+        guard let apiService else { return }
+
+        if agencies.isEmpty {
+            agencies = try await apiService.getAgenciesWithCoverage().list
+        }
+
+        // Get agency alerts from OBA and Obaco.
+        let agencyAlerts = try await withThrowingTaskGroup(of: [AgencyAlert].self) { group -> [AgencyAlert] in
+            group.addTask {
+                try await self.fetchRegionalAlerts(service: apiService)
+            }
+
+            group.addTask {
+                try await self.fetchObacoAlerts()
+            }
+
+            var alerts: [AgencyAlert] = []
+            for try await value in group {
+                alerts.append(contentsOf: value)
+            }
+
+            return alerts
+        }
+
+        await storeAgencyAlerts(agencyAlerts)
+    }
+
+    /// Convenience wrapper for ``update()``. Errors are reported via ``AgencyAlertsDelegate``.
     public func checkForUpdates() {
-        guard let apiService = apiService else { return }
-
-        // Step 1: download a list of agencies, if needed.
-        if agencies.count == 0 {
-            let agenciesOp = apiService.getAgenciesWithCoverage()
-            agenciesOp.complete { [weak self] result in
-                guard let self = self else { return }
-
-                switch result {
-                case .failure(let error):
+        Task {
+            do {
+                try await update()
+            } catch {
+                await MainActor.run {
                     self.notifyDelegates(error: error)
-                case .success(let response):
-                    self.agencies = response.list
-                    self.fetchRegionalAlerts()
-                    self.fetchObacoAlerts()
                 }
             }
-            agenciesOperation = agenciesOp
-        }
-        else {
-            fetchRegionalAlerts()
-            fetchObacoAlerts()
         }
     }
 
     // MARK: - REST API
-
-    private var regionalAlertsOperation: MultiAgencyAlertsOperation?
-
-    private func fetchRegionalAlerts() {
-        guard let apiService = apiService else { return }
-
-        let op = apiService.getAlerts(agencies: agencies)
-        op.complete { [weak self] (alerts) in
-            guard let self = self else { return }
-            self.storeAgencyAlerts(alerts)
-        }
-        regionalAlertsOperation = op
+    private func fetchRegionalAlerts(service: RESTAPIService) async throws -> [AgencyAlert] {
+        return try await service.getAlerts(agencies: agencies)
     }
 
     // MARK: - Obaco
-
-    private var obacoOperation: AgencyAlertsOperation?
-
-    private func fetchObacoAlerts() {
-        guard let obacoService = obacoService else { return }
-
-        let op = obacoService.getAlerts(agencies: agencies)
-        op.complete { [weak self] (alerts) in
-            guard let self = self else { return }
-            self.storeAgencyAlerts(alerts)
+    private func fetchObacoAlerts() async throws -> [AgencyAlert] {
+        guard let obacoService else {
+            return []
         }
-        obacoOperation = op
+
+        return try await obacoService.getAlerts(agencies: agencies)
     }
 
     // MARK: - High Severity Alerts
@@ -171,6 +166,7 @@ public class AgencyAlertsStore: NSObject, RegionsServiceDelegate {
 
     private var alerts: Set<AgencyAlert> = []
 
+    @MainActor
     private func storeAgencyAlerts(_ agencyAlerts: [AgencyAlert]) {
         for alert in agencyAlerts {
             self.alerts.insert(alert)

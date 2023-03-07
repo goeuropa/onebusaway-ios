@@ -84,10 +84,6 @@ public class StopViewController: UIViewController,
     private static let defaultTimerReloadInterval: TimeInterval = 30.0
 
     // MARK: - Data
-
-    /// The data-loading operation for this controller.
-    var operation: DecodableOperation<RESTAPIResponse<StopArrivals>>?
-
     /// The stop displayed by this controller.
     var stop: Stop? {
         didSet {
@@ -163,7 +159,6 @@ public class StopViewController: UIViewController,
     deinit {
         reloadTimer.invalidate()
         enableIdleTimer()
-        operation?.cancel()
     }
 
     // MARK: - UIViewController Overrides
@@ -203,7 +198,9 @@ public class StopViewController: UIViewController,
             beginUserActivity()
         }
 
-        updateData()
+        Task {
+            await updateData()
+        }
     }
 
     public override func viewWillDisappear(_ animated: Bool) {
@@ -442,48 +439,39 @@ public class StopViewController: UIViewController,
     private var firstLoad = true
 
     /// Reloads data from the server and repopulates the UI once it finishes loading.
-    func updateData() {
-        operation?.cancel()
-
-        guard let apiService = application.restAPIService else { return }
+    func updateData() async {
+        guard let apiService = application.apiService else { return }
 
         title = Strings.updating
 
-        let op = apiService.getArrivalsAndDeparturesForStop(id: stopID, minutesBefore: minutesBefore, minutesAfter: minutesAfter)
-        op.complete { [weak self, unowned op] result in
-            guard let self = self else { return }
+        do {
+            let stopArrivals = try await apiService.getArrivalsAndDeparturesForStop(id: stopID, minutesBefore: minutesBefore, minutesAfter: minutesAfter).entry
 
-            let broken = self.bookmarkContext != nil && (op.statusCodeIsEffectively404 ?? false)
-
-            switch (broken, result) {
-            case (true, _):
-                self.isBrokenBookmark = true
-                self.listView.applyData()
-                self.dataLoadFeedbackGenerator.dataLoad(.failed)
-            case (_, .failure(let error)):
-                self.operationError = error
-                self.dataLoadFeedbackGenerator.dataLoad(.failed)
-            case (false, .success(let response)):
+            await MainActor.run {
                 self.operationError = nil
                 self.lastUpdated = Date()
-                self.stopArrivals = response.entry
+                self.stopArrivals = stopArrivals
                 self.refreshControl.endRefreshing()
                 self.updateTitle()
-
-                if response.entry.arrivalsAndDepartures.count == 0 {
+                if stopArrivals.arrivalsAndDepartures.count == 0 {
                     self.extendLoadMoreWindow()
                 }
 
                 if self.firstLoad {
                     self.firstLoad = false
-                }
-                else {
+                } else {
                     self.dataLoadFeedbackGenerator.dataLoad(.success)
                 }
             }
+        } catch APIError.requestNotFound {
+            self.isBrokenBookmark = self.bookmarkContext != nil
+            self.dataLoadFeedbackGenerator.dataLoad(.failed)
+        } catch {
+            self.operationError = error
+            self.dataLoadFeedbackGenerator.dataLoad(.failed)
         }
 
-        self.operation = op
+        self.listView.applyData()
     }
 
     /// Loads more departures for this `Stop` in cases where no `ArrivalDeparture` objects are being returned.
@@ -515,7 +503,9 @@ public class StopViewController: UIViewController,
         updateTitle()
 
         if timeIntervalSinceLastUpdate > StopViewController.defaultTimerReloadInterval {
-            updateData()
+            Task {
+                await updateData()
+            }
         }
     }
 
@@ -687,8 +677,7 @@ public class StopViewController: UIViewController,
 
         let arrDepItems = arrDeps.map { arrivalDepartureItem(for: $0) }
 
-        // Sometimes stopArrivals will respond with duplicate entries, so get rid of them.
-        var items = arrDepItems.uniqued
+        var items = arrDepItems
             .sorted(by: \.arrivalDepartureDate)
             .map { $0.typeErased }
         addWalkTimeRow(to: &items)
@@ -709,7 +698,7 @@ public class StopViewController: UIViewController,
     //           revisit this decision.
 
     func arrivalDeparture(forViewModel viewModel: ArrivalDepartureItem) -> ArrivalDeparture? {
-        return stopArrivals?.arrivalsAndDepartures.filter({ $0.id == viewModel.id }).first
+        return stopArrivals?.arrivalsAndDepartures.filter({ $0.id == viewModel.arrivalDepartureID }).first
     }
 
     // MARK: Actions
@@ -760,7 +749,7 @@ public class StopViewController: UIViewController,
     private func previewStopArrival(_ viewModel: ArrivalDepartureItem) -> UIViewController? {
         guard let arrivalDeparture = self.arrivalDeparture(forViewModel: viewModel) else { return nil }
         let vc = TripViewController(application: self.application, arrivalDeparture: arrivalDeparture)
-        self.previewingVC = (arrivalDeparture.id, vc)
+        self.previewingVC = (viewModel.id, vc)
         return vc
     }
 
@@ -917,7 +906,7 @@ public class StopViewController: UIViewController,
     /// The view controller currently being previewed (via context menu).
     /// The identifier is a string (ideally a `UUID`) used when the user commits the context menu to ensure
     /// that the `previewingVC` is actually the view controller that the user committed to.
-    var previewingVC: (identifier: String, vc: UIViewController)?
+    var previewingVC: (identifier: UUID, vc: UIViewController)?
     public func contextMenu(_ listView: OBAListView, for item: AnyOBAListViewItem) -> OBAListViewMenuActions? {
         if let arrDepItem = item.as(ArrivalDepartureItem.self) {
             return stopArrivalContextMenu(arrDepItem)
@@ -1037,7 +1026,9 @@ public class StopViewController: UIViewController,
         // from spamming the server with a ton of requests.
         DispatchQueue.main.debounce(interval: 1.0) { [weak self] in
             guard let self = self else { return }
-            self.updateData()
+            Task(priority: .userInitiated) {
+                await self.updateData()
+            }
         }
     }
 
@@ -1064,7 +1055,9 @@ public class StopViewController: UIViewController,
     /// Extends the `ArrivalDeparture` time window visualized by this view controller and reloads data.
     private func loadMore(minutes: UInt) {
         minutesAfter += minutes
-        updateData()
+        Task {
+            await updateData()
+        }
     }
 
     @objc private func loadMoreDepartures() {

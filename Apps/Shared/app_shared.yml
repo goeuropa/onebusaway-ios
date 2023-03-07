@@ -8,14 +8,14 @@ settings:
   base:
     CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED: true
     CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER: false
-    MARKETING_VERSION: 22.3.0
+    MARKETING_VERSION: 23.2.0
 
 options:
   minimumXcodeGenVersion: 2.17
   generateEmptyDirectories: true
   groupSortPosition: top
   deploymentTarget:
-    iOS: "14.5"
+    iOS: "15.0"
 
 ############
 # App
@@ -43,7 +43,6 @@ targets:
           - fb
           - twitter
           - comgooglemaps
-        NSLocationAlwaysAndWhenInUseUsageDescription: See where you are in relation to transit, and help you navigate more easily.
         NSLocationWhenInUseUsageDescription: See where you are in relation to transit, and help you navigate more easily.
         NSLocationTemporaryUsageDescriptionDictionary:
           MapStatusView: See where you are in relation to transit, and help you navigate more easily.
@@ -90,10 +89,10 @@ packages:
         exactVersion: 3.7.4
     Eureka:
         url: https://github.com/xmartlabs/Eureka.git
-        exactVersion: 5.3.6
+        exactVersion: 5.4.0
     FloatingPanel:
         url: https://github.com/SCENEE/FloatingPanel.git
-        exactVersion: 1.7.6
+        exactVersion: 2.6.0
     Hyperconnectivity:
         url: https://github.com/rwbutler/Hyperconnectivity.git
         exactVersion: 1.1.0
