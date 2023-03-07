@@ -58,41 +58,19 @@ class TripDetailsModelOperationTests: OBATestCase {
         expect(tripDetails.serviceAlerts.count) == 0
     }
 
-    func testLoading_vehicleDetails_success() {
+    func testLoading_vehicleDetails_success() async throws {
         let data = Fixtures.loadData(file: "trip_details_1_18196913.json")
         dataLoader.mock(URLString: vehicleTripAPIPath, with: data)
 
-        let op = restService.getVehicleTrip(vehicleID: vehicleID)
-
-        waitUntil { done in
-            op.complete { result in
-                switch result {
-                case .failure:
-                    fatalError()
-                case .success(let response):
-                    self.checkExpectations(response.entry)
-                    done()
-                }
-            }
-        }
+        let trip = try await restService.getVehicleTrip(vehicleID: vehicleID).entry
+        self.checkExpectations(trip)
     }
 
-    func testLoading_tripDetails_success() {
+    func testLoading_tripDetails_success() async throws {
         let data = Fixtures.loadData(file: "trip_details_1_18196913.json")
         dataLoader.mock(URLString: tripDetailsAPIPath, with: data)
 
-        let op = restService.getTrip(tripID: tripID, vehicleID: "12345", serviceDate: Date())
-
-        waitUntil { done in
-            op.complete { result in
-                switch result {
-                case .failure:
-                    fatalError()
-                case .success(let response):
-                    self.checkExpectations(response.entry)
-                    done()
-                }
-            }
-        }
+        let trip = try await restService.getTrip(tripID: tripID, vehicleID: "12345", serviceDate: Date()).entry
+        self.checkExpectations(trip)
     }
 }

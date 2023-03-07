@@ -14,7 +14,7 @@ import OBAKitCore
 protocol MapPanelDelegate: NSObjectProtocol {
     func mapPanelController(_ controller: MapFloatingPanelController, didSelectStop stopID: Stop.ID)
     func mapPanelControllerDisplaySearch(_ controller: MapFloatingPanelController)
-    func mapPanelController(_ controller: MapFloatingPanelController, moveTo position: FloatingPanelPosition, animated: Bool)
+    func mapPanelController(_ controller: MapFloatingPanelController, moveTo state: FloatingPanelState, animated: Bool)
 }
 
 /// This is the view controller that powers the drawer on the `MapViewController`.
@@ -124,7 +124,10 @@ class MapFloatingPanelController: VisualEffectViewController,
 
         searchBar.resignFirstResponder()
         mapPanelDelegate?.mapPanelController(self, moveTo: .half, animated: true)
-        application.searchManager.search(request: request)
+
+        Task {
+            await application.searchManager.search(request: request)
+        }
     }
 
     func searchInteractor(_ searchInteractor: SearchInteractor, showStop stop: Stop) {
@@ -205,7 +208,7 @@ class MapFloatingPanelController: VisualEffectViewController,
         if stops.count > 0 {
             let rows = stops.map { stop -> StopViewModel in
                 let onSelect: OBAListViewAction<StopViewModel> = { [unowned self] viewModel in
-                    self.mapPanelDelegate?.mapPanelController(self, didSelectStop: viewModel.id)
+                    self.mapPanelDelegate?.mapPanelController(self, didSelectStop: viewModel.stopID)
                 }
 
                 return StopViewModel(withStop: stop, onSelect: onSelect, onDelete: nil)
@@ -231,7 +234,7 @@ class MapFloatingPanelController: VisualEffectViewController,
         guard let stopViewModel = item.as(StopViewModel.self) else { return nil }
 
         let previewProvider: OBAListViewMenuActions.PreviewProvider = { [unowned self] () -> UIViewController? in
-            let stopVC = StopViewController(application: self.application, stopID: stopViewModel.id)
+            let stopVC = StopViewController(application: self.application, stopID: stopViewModel.stopID)
             self.currentPreviewingViewController = stopVC
             return stopVC
         }

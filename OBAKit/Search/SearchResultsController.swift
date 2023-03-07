@@ -101,25 +101,25 @@ public class SearchResultsController: UIViewController, AppContext, OBAListViewD
     }
 
     private func row(for agencyVehicle: AgencyVehicle) -> AnyOBAListViewItem? {
-        guard let vehicleID = agencyVehicle.vehicleID, application.restAPIService != nil else { return nil }
+        guard let vehicleID = agencyVehicle.vehicleID, application.apiService != nil else { return nil }
         return OBAListRowView.SubtitleViewModel(title: vehicleID, subtitle: agencyVehicle.agencyName, accessoryType: .none) { _ in
             self.didSelectAgencyVehicle(vehicleID: vehicleID)
         }.typeErased
     }
 
     private func didSelectAgencyVehicle(vehicleID: String) {
-        guard let apiService = application.restAPIService else { return }
-        let op = apiService.getVehicle(vehicleID)
-        op.complete { [weak self] result in
-            guard let self = self else { return }
+        guard let apiService = application.apiService else { return }
 
-            switch result {
-            case .failure(let error):
+        Task(priority: .userInitiated) {
+            do {
+                let vehicle = try await apiService.getVehicle(vehicleID: vehicleID).entry
+                await MainActor.run {
+                    let response = SearchResponse(response: self.searchResponse, substituteResult: vehicle)
+                    self.application.mapRegionManager.searchResponse = response
+                    self.delegate?.dismissModalController(self)
+                }
+            } catch {
                 self.application.displayError(error)
-            case .success(let response):
-                let response = SearchResponse(response: self.searchResponse, substituteResult: response.entry)
-                self.application.mapRegionManager.searchResponse = response
-                self.delegate?.dismissModalController(self)
             }
         }
     }

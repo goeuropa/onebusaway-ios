@@ -71,34 +71,43 @@ public class RecentStopsViewController: UIViewController,
     }
 
     func onSelectAlarm(_ viewModel: AlarmViewModel) {
-        guard let apiService = self.application.restAPIService else { return }
+        Task(priority: .userInitiated) {
+            await self.showDeepLink(deepLink: viewModel.deepLink)
+        }
+    }
 
-        ProgressHUD.show()
+    func showDeepLink(deepLink: ArrivalDepartureDeepLink) async {
+        guard let apiService = self.application.apiService else { return }
+        await MainActor.run {
+            ProgressHUD.show()
+        }
 
-        let deepLink = viewModel.deepLink
-        let op = apiService.getTripArrivalDepartureAtStop(
-            stopID: deepLink.stopID,
-            tripID: deepLink.tripID,
-            serviceDate: deepLink.serviceDate,
-            vehicleID: deepLink.vehicleID,
-            stopSequence: deepLink.stopSequence)
+        defer {
+            Task { @MainActor in
+                ProgressHUD.dismiss()
+            }
+        }
 
-        op.complete { [weak self] result in
-            ProgressHUD.dismiss()
+        do {
+            let response = try await apiService.getTripArrivalDepartureAtStop(
+                stopID: deepLink.stopID,
+                tripID: deepLink.tripID,
+                serviceDate: deepLink.serviceDate,
+                vehicleID: deepLink.vehicleID,
+                stopSequence: deepLink.stopSequence)
 
-            guard let self = self else { return }
-
-            switch result {
-            case .failure(let error):
-                self.application.displayError(error)
-            case .success(let response):
+            await MainActor.run {
                 self.application.viewRouter.navigateTo(arrivalDeparture: response.entry, from: self)
             }
+        } catch {
+            self.application.displayError(error)
         }
     }
 
     func onDeleteAlarm(_ viewModel: AlarmViewModel) {
-        self.application.obacoService?.deleteAlarm(url: viewModel.alarm.url)
+        Task {
+            try? await self.application.obacoService?.deleteAlarm(url: viewModel.alarm.url)
+        }
         self.application.userDataStore.delete(alarm: viewModel.alarm)
         self.listView.applyData(animated: true)
     }
@@ -131,7 +140,7 @@ public class RecentStopsViewController: UIViewController,
 
         let rows = stops.map { stop -> StopViewModel in
             let onSelect: OBAListViewAction<StopViewModel> = { [unowned self] viewModel in
-                self.application.viewRouter.navigateTo(stopID: viewModel.id, from: self)
+                self.application.viewRouter.navigateTo(stopID: viewModel.stopID, from: self)
             }
 
             let onDelete: OBAListViewAction<StopViewModel> = { [unowned self] _ in
@@ -140,7 +149,7 @@ public class RecentStopsViewController: UIViewController,
             }
 
             return StopViewModel(withStop: stop, onSelect: onSelect, onDelete: onDelete)
-        }.uniqued
+        }
 
         let title = application.userDataStore.alarms.count > 0 ? Strings.recentStops : nil
         return OBAListViewSection(id: "recent_stops", title: title, contents: rows)
@@ -171,7 +180,7 @@ public class RecentStopsViewController: UIViewController,
         guard let stopViewModel = item.as(StopViewModel.self) else { return nil }
 
         let previewProvider: OBAListViewMenuActions.PreviewProvider = { [unowned self] () -> UIViewController? in
-            let stopVC = StopViewController(application: self.application, stopID: stopViewModel.id)
+            let stopVC = StopViewController(application: self.application, stopID: stopViewModel.stopID)
             self.currentPreviewingViewController = stopVC
             return stopVC
         }
