@@ -16,6 +16,7 @@ import OBAKitCore
 ///
 /// `MapViewController` is the average user's primary means of interacting with OneBusAway data.
 class MapViewController: UIViewController,
+    AppContext,
     FloatingPanelControllerDelegate,
     LocationServiceDelegate,
     MapRegionDelegate,
@@ -127,6 +128,8 @@ class MapViewController: UIViewController,
             statusOverlay.leadingAnchor.constraint(equalTo: floatingPanel.surfaceView.leadingAnchor, constant: ThemeMetrics.padding),
             statusOverlay.trailingAnchor.constraint(equalTo: floatingPanel.surfaceView.trailingAnchor, constant: -ThemeMetrics.padding)
         ])
+        
+        loadRoute()
     }
 
     public override func viewWillAppear(_ animated: Bool) {
@@ -263,6 +266,22 @@ class MapViewController: UIViewController,
             }
             else {
                 weatherButton.isHidden = true
+            }
+        }
+    }
+    
+    private func loadRoute() {
+        guard let apiService = application.apiService else { return }
+        Task {
+            do {
+                let response = try await apiService.getStopsForRoute(routeID: "33174_Route1")
+                Logger.info(String(describing: response))
+                await MainActor.run {
+                    let routeStopController = RouteStopsViewController(application: application, stopsForRoute: response.list, delegate: self)
+                    showSemiModalPanel(childController: routeStopController)
+                }
+            } catch {
+                Logger.error(error.localizedDescription)
             }
         }
     }
