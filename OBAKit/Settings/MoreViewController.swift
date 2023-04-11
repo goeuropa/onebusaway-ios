@@ -175,15 +175,6 @@ public class MoreViewController: UIViewController,
                     guard let url = Bundle.main.privacyPolicyURL else { return }
                     let safari = SFSafariViewController(url: url)
                     self.application.viewRouter.present(safari, from: self)
-                }),
-
-            OBAListRowView.DefaultViewModel(
-                title: OBALoc(
-                    "more_controller.weather_credits_row",
-                    value: "Weather forecasts powered by Dark Sky",
-                    comment: "Weather forecast attribution"),
-                onSelectAction: { _ in
-                    self.application.open(URL(string: "https://darksky.net/poweredby/")!, options: [:], completionHandler: nil)
                 })
         ])
     }
@@ -273,7 +264,10 @@ public class MoreViewController: UIViewController,
         controller.dismiss(animated: true, completion: nil)
 
         if let error = error {
-            AlertPresenter.show(error: error, presentingController: self)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await AlertPresenter.show(error: error, presentingController: self)
+            }
         }
     }
 
@@ -314,7 +308,10 @@ public class MoreViewController: UIViewController,
     }
 
     public func farePayments(_ farePayments: FarePayments, present error: Error) {
-        AlertPresenter.show(error: error, presentingController: self)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await AlertPresenter.show(error: error, presentingController: self)
+        }
     }
 
     // MARK: - Regions Service Delegate
