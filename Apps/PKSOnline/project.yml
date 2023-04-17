@@ -52,7 +52,7 @@ targets:
                 NSExceptionAllowsInsecureHTTPLoads: true
             }
           }
-        NSHumanReadableCopyright: © Open Transit Software Foundation
+        NSHumanReadableCopyright: © goEuropa i PKS Poznan
         NSUserActivityTypes:
           - pl.pkspoznan.pksonline.iphone.user_activity.stop
           - pl.pkspoznan.pksonline.iphone.user_activity.trip
@@ -61,9 +61,9 @@ targets:
           AppGroup: group.pl.pkspoznan.pksonline.iphone
           BundledRegionsFileName: regions.json
           ExtensionURLScheme: oba
-          PrivacyPolicyURL: https://onebusaway.org/privacy/
+          PrivacyPolicyURL: https://pksonline.pl/polityka/polityka_aplikacja.html
           PushNotificationAPIKey: d5d0d28a-6091-46cd-9627-0ce01ffa9f9e
-          RESTServerAPIKey: pl.pkspoznan.pksonline.iphone
+          RESTServerAPIKey: org.onebusaway.iphone
           RegionsServerBaseAddress: https://www.pksonline.pl/
           RegionsServerAPIPath: /regions-v3.json
     settings:
@@ -84,7 +84,7 @@ targets:
           BundledRegionsFileName: regions.json
           DeepLinkServerBaseAddress: https://onebusaway.co
           ExtensionURLScheme: pksonline
-          RESTServerAPIKey: pl.pkspoznan.obata.iphone
+          RESTServerAPIKey: org.onebusaway.iphone
           RegionsServerBaseAddress: https://www.pksonline.pl/
           RegionsServerAPIPath: /regions-v3.json
     settings:
