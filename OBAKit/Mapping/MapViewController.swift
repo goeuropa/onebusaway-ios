@@ -274,11 +274,11 @@ class MapViewController: UIViewController,
         guard let apiService = application.apiService else { return }
         Task {
             do {
-                let response = try await apiService.getStopsForRoute(routeID: "33174_Route1")
-                Logger.info(String(describing: response))
+                let response_stops = try await apiService.getStopsForRoute(routeID: "33174_Route1")
+                let response_av = try await apiService.getArrivalsAndDeparturesForStop(id: response_stops.list.stops.first!.id, minutesBefore: 10, minutesAfter: 1000)
                 await MainActor.run {
-                    let routeStopController = RouteStopsViewController(application: application, stopsForRoute: response.list, delegate: self)
-                    showSemiModalPanel(childController: routeStopController)
+                    let vc = TripViewController(application: application, arrivalDeparture: response_av.list.arrivalsAndDepartures.first!)
+                    application.viewRouter.navigate(to: vc, from: self)
                 }
             } catch {
                 Logger.error(error.localizedDescription)
