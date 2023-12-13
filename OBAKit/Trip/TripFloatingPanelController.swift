@@ -30,7 +30,7 @@ class TripFloatingPanelController: UIViewController,
 
     var tripConvertible: TripConvertible? {
         didSet {
-            if isLoadedAndOnScreen, let arrivalDeparture = stopArrivalView.arrivalDeparture {
+            if isLoadedAndOnScreen, let arrivalDeparture = tripConvertible?.arrivalDeparture {
                 stopArrivalView.arrivalDeparture = arrivalDeparture
             }
         }
@@ -130,7 +130,7 @@ class TripFloatingPanelController: UIViewController,
             self.separatorView.isHidden = false
             self.stopArrivalView.normalInfoStack.forEach { $0.isHidden = isAccessibility }
             self.stopArrivalView.accessibilityInfoStack.forEach { $0.isHidden = !isAccessibility }
-        case .hidden: fallthrough
+        case .hidden: break
         default: break
         }
     }
