@@ -15,6 +15,7 @@ import OBAKitCore
 import SafariServices
 import MapKit
 import SwiftUI
+import StripeApplePay
 
 // MARK: - Protocols
 
@@ -67,6 +68,13 @@ public class Application: CoreApplication, PushServiceDelegate {
     private let config: AppConfig
 
     // MARK: - Public Properties
+
+    lazy var donationsManager = DonationsManager(
+        bundle: applicationBundle,
+        userDefaults: userDefaults,
+        obacoService: obacoService,
+        analytics: analytics
+    )
 
     /// Responsible for figuring out how to navigate between view controllers.
     @MainActor
@@ -267,6 +275,26 @@ public class Application: CoreApplication, PushServiceDelegate {
         }
     }
 
+    private var presentDonationUIOnActive = false
+    private var donationPromptID: String? = nil
+
+    public func pushService(_ pushService: PushService, receivedDonationPrompt id: String?) {
+        guard let topViewController else {
+            presentDonationUIOnActive = true
+            donationPromptID = id
+            return
+        }
+
+        presentDonationUI(topViewController, id: id)
+    }
+
+    private func presentDonationUI(_ presentingController: UIViewController, id: String?) {
+        analytics?.reportEvent?(.userAction, label: AnalyticsLabels.donationPushNotificationTapped, value: id)
+
+        let learnMoreView = donationsManager.buildLearnMoreView(presentingController: presentingController, donationPushNotificationID: id)
+        presentingController.present(UIHostingController(rootView: learnMoreView), animated: true)
+    }
+
     // MARK: - Alerts Store
 
     private var alertBulletin: AgencyAlertBulletin?
@@ -306,10 +334,12 @@ public class Application: CoreApplication, PushServiceDelegate {
 
     /// Provides access the topmost view controller in the app, if one exists.
     private var topViewController: UIViewController? {
-        delegate?.uiApplication?.windows.first?.topViewController
+        delegate?.uiApplication?.keyWindowFromScene?.topViewController
     }
 
     @objc public func application(_ application: UIApplication, didFinishLaunching options: [AnyHashable: Any]) {
+        donationsManager.refreshStripePublishableKey()
+
         application.shortcutItems = nil
 
         configurePushNotifications(launchOptions: options)
@@ -325,6 +355,12 @@ public class Application: CoreApplication, PushServiceDelegate {
 
         configureConnectivity()
         alertsStore.checkForUpdates()
+
+        if presentDonationUIOnActive, let topViewController {
+            presentDonationUI(topViewController, id: donationPromptID)
+            presentDonationUIOnActive = false
+            donationPromptID = nil
+        }
     }
 
     @objc public func applicationWillResignActive(_ application: UIApplication) {
@@ -380,6 +416,10 @@ public class Application: CoreApplication, PushServiceDelegate {
 
     @MainActor
     @objc public func application(_ app: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
+        if StripeAPI.handleURLCallback(with: url) {
+            return true
+        }
+
         guard let scheme = Bundle.main.extensionURLScheme else {
             return false
         }
