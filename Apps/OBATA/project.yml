@@ -52,24 +52,25 @@ targets:
                 NSExceptionAllowsInsecureHTTPLoads: true
             }
           }
-        NSHumanReadableCopyright: © Open Transit Software Foundation
+        NSHumanReadableCopyright: © goEuropa
         NSUserActivityTypes:
           - pl.goeuropa.obata.iphone.user_activity.stop
           - pl.goeuropa.obata.iphone.user_activity.trip
         OBAKitConfig:
-          AppDevelopersEmailAddress: oba@transportationamerica.com
+          AppDevelopersEmailAddress: info@goeuropa.eu
           AppGroup: group.pl.goeuropa.obata.iphone
           BundledRegionsFileName: regions.json
+          DeepLinkServerBaseAddress: https://data.tracktrolley.com
           ExtensionURLScheme: obata
           PrivacyPolicyURL: https://onebusaway.org/privacy/
           PushNotificationAPIKey: d5d0d28a-6091-46cd-9627-0ce01ffa9f9e
-          RESTServerAPIKey: pl.goeuropa.obata.iphone
+          RESTServerAPIKey: org.onebusaway.iphone
           RegionsServerBaseAddress: https://data.tracktrolley.com
           RegionsServerAPIPath: /regions-v3.json
     settings:
       base:
         DEVELOPMENT_TEAM: 85APG5FQFE
-        PRODUCT_BUNDLE_IDENTIFIER: pl.goeuropa.obata.iphone
+        PRODUCT_BUNDLE_IDENTIFIER: pl.goeuropa.obata
   TodayView:
     sources: ["Apps/OBATA/Assets.xcassets"]
     entitlements:
@@ -82,14 +83,14 @@ targets:
         OBAKitConfig:
           AppGroup: group.pl.goeuropa.obata.iphone
           BundledRegionsFileName: regions.json
-          DeepLinkServerBaseAddress: https://onebusaway.co
+          DeepLinkServerBaseAddress: https://data.tracktrolley.com
           ExtensionURLScheme: obata
-          RESTServerAPIKey: pl.goeuropa.obata.iphone
+          RESTServerAPIKey: org.onebusaway.iphone
           RegionsServerBaseAddress: https://data.tracktrolley.com
           RegionsServerAPIPath: /regions-v3.json
     settings:
       base:
-        DEVELOPMENT_TEAM: 85APG5FQFE
+        DEVELOPMENT_TEAM: 485APG5FQFE
         PRODUCT_BUNDLE_IDENTIFIER: pl.goeuropa.obata.iphone.TodayView
 
 include:
