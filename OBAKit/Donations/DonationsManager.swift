@@ -7,8 +7,14 @@
 
 import Foundation
 import OBAKitCore
-import StripeApplePay
 import SwiftUI
+
+public enum DonationsUserDefaultsKeys: String, RawRepresentable {
+    case forceStripeTestModeDefaultsKey = "forceStripeTestMode"
+}
+
+#if canImport(Stripe)
+import StripeApplePay
 
 /// Manages the visibility of donation requests.
 public class DonationsManager {
@@ -17,7 +23,6 @@ public class DonationsManager {
     /// - Parameters:
     ///   - bundle: The application bundle. Usually, `Bundle.main`
     ///   - userDefaults: The user defaults object.
-    ///   - obacoService: The Obaco API service.
     ///   - analytics: The Analytics object.
     public init(
         bundle: Bundle,
@@ -27,27 +32,24 @@ public class DonationsManager {
     ) {
         self.bundle = bundle
         self.userDefaults = userDefaults
-        self.obacoService = obacoService
         self.analytics = analytics
 
         self.userDefaults.register(
-            defaults: [DonationsManager.forceStripeTestModeDefaultsKey: false]
+            defaults: [DonationsUserDefaultsKeys.forceStripeTestModeDefaultsKey.rawValue: false]
         )
     }
 
     // MARK: - Data
 
     private let bundle: Bundle
-    private let obacoService: ObacoAPIService?
+    var obacoService: ObacoAPIService?
     private let analytics: Analytics?
-
 
     // MARK: - User Defaults
 
     private let userDefaults: UserDefaults
     private static let donationRequestDismissedDateKey = "donationRequestDismissedDateKey"
     private static let donationRequestReminderDateKey = "donationRequestReminderDateKey"
-    public static let forceStripeTestModeDefaultsKey = "forceStripeTestMode"
 
     // MARK: - Dismiss Donations Request
 
@@ -106,7 +108,7 @@ public class DonationsManager {
 #if DEBUG
         return true
 #else
-        return userDefaults.bool(forKey: DonationsManager.forceStripeTestModeDefaultsKey)
+        return userDefaults.bool(forKey: DonationsUserDefaultsKeys.forceStripeTestModeDefaultsKey.rawValue)
 #endif
     }
 
@@ -164,3 +166,27 @@ public class DonationsManager {
         .environmentObject(AnalyticsModel(analytics))
     }
 }
+#else
+public class DonationsManager {
+    public init(
+        bundle: Bundle,
+        userDefaults: UserDefaults,
+        obacoService: ObacoAPIService?,
+        analytics: Analytics?
+    ) {}
+
+    public var donationsEnabled: Bool {
+        false
+    }
+
+    public var shouldRequestDonations: Bool {
+        false
+    }
+
+    public func dismissDonationsRequests() {}
+
+    public func remindUserLater() {}
+
+    public func refreshStripePublishableKey() {}
+}
+#endif

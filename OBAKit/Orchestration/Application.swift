@@ -15,7 +15,9 @@ import OBAKitCore
 import SafariServices
 import MapKit
 import SwiftUI
+#if canImport(Stripe)
 import StripeApplePay
+#endif
 
 // MARK: - Protocols
 
@@ -276,7 +278,7 @@ public class Application: CoreApplication, PushServiceDelegate {
     }
 
     private var presentDonationUIOnActive = false
-    private var donationPromptID: String? = nil
+    private var donationPromptID: String?
 
     public func pushService(_ pushService: PushService, receivedDonationPrompt id: String?) {
         guard let topViewController else {
@@ -289,10 +291,12 @@ public class Application: CoreApplication, PushServiceDelegate {
     }
 
     private func presentDonationUI(_ presentingController: UIViewController, id: String?) {
+#if canImport(Stripe)
         analytics?.reportEvent?(.userAction, label: AnalyticsLabels.donationPushNotificationTapped, value: id)
 
         let learnMoreView = donationsManager.buildLearnMoreView(presentingController: presentingController, donationPushNotificationID: id)
         presentingController.present(UIHostingController(rootView: learnMoreView), animated: true)
+#endif
     }
 
     // MARK: - Alerts Store
@@ -338,8 +342,6 @@ public class Application: CoreApplication, PushServiceDelegate {
     }
 
     @objc public func application(_ application: UIApplication, didFinishLaunching options: [AnyHashable: Any]) {
-        donationsManager.refreshStripePublishableKey()
-
         application.shortcutItems = nil
 
         configurePushNotifications(launchOptions: options)
@@ -416,9 +418,11 @@ public class Application: CoreApplication, PushServiceDelegate {
 
     @MainActor
     @objc public func application(_ app: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
+#if canImport(Stripe)
         if StripeAPI.handleURLCallback(with: url) {
             return true
         }
+#endif
 
         guard let scheme = Bundle.main.extensionURLScheme else {
             return false
@@ -434,6 +438,15 @@ public class Application: CoreApplication, PushServiceDelegate {
 
         viewRouter.navigateTo(stopID: stopData.stopID, from: topViewController)
         return true
+    }
+
+    override public func apiServicesRefreshed() {
+        super.apiServicesRefreshed()
+
+#if canImport(Stripe)
+        donationsManager.obacoService = obacoService
+        donationsManager.refreshStripePublishableKey()
+#endif
     }
 
     // MARK: - Appearance and Themes
@@ -458,6 +471,7 @@ public class Application: CoreApplication, PushServiceDelegate {
     }
 
     // MARK: - Regions Management
+
     public func regionsService(_ service: RegionsService, changedAutomaticRegionSelection value: Bool) {
         let label = value ? AnalyticsLabels.setRegionAutomatically : AnalyticsLabels.setRegionManually
         analytics?.reportEvent?(.userAction, label: label, value: nil)
