@@ -10,16 +10,11 @@
 #import "AppDelegate.h"
 @import OBAKitCore;
 @import OBAKit;
-@import OneSignal;
-#import <FirebaseCrashlytics/FirebaseCrashlytics.h>
-#import "OBAFirebaseAnalytics.h"
-#import "App-Swift.h"
 
 @interface AppDelegate ()<OBAApplicationDelegate>
 @property(nonatomic,strong) OBAApplication *app;
 @property(nonatomic,strong) NSUserDefaults *userDefaults;
 @property(nonatomic,strong) OBAClassicApplicationRootController *rootController;
-@property(nonatomic,strong) OBAFirebaseAnalytics *analyticsClient;
 @end
 
 @implementation AppDelegate
@@ -46,14 +41,7 @@
 //        NSDictionary *plist = [NSPropertyListSerialization propertyListWithData:data options:0 format:nil error:nil];
 //        [_userDefaults registerDefaults:plist];
 
-        _analyticsClient = [[OBAFirebaseAnalytics alloc] initWithUserDefaults:_userDefaults];
-
-        OBAAppConfig *appConfig = [[OBAAppConfig alloc] initWithAppBundle:NSBundle.mainBundle userDefaults:_userDefaults analytics:_analyticsClient];
-
-        NSString *pushKey = NSBundle.mainBundle.infoDictionary[@"OBAKitConfig"][@"PushNotificationAPIKey"];
-        OBAOneSignalPushService *pushService = [[OBAOneSignalPushService alloc] initWithAPIKey:pushKey];
-        appConfig.pushServiceProvider = pushService;
-
+        OBAAppConfig *appConfig = [[OBAAppConfig alloc] initWithAppBundle:NSBundle.mainBundle userDefaults:_userDefaults analytics:nil];
         _app = [[OBAApplication alloc] initWithConfig:appConfig];
         _app.delegate = self;
     }
@@ -68,8 +56,6 @@
     // This method will call -applicationReloadRootInterface:, which creates the
     // application's UI and attaches it to the window, so no need to do that here.
     [self.app application:application didFinishLaunching:launchOptions];
-
-    [self.analyticsClient configureWithUserID:self.app.userUUID];
 
     return YES;
 }
@@ -135,7 +121,7 @@
 #pragma mark - Push Notifications
 
 - (BOOL)isRegisteredForRemoteNotifications {
-    return [OneSignal getDeviceState].notificationPermissionStatus == OSNotificationPermissionAuthorized;
+    return NO;
 }
 
 @end
