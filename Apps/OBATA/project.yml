@@ -1,0 +1,105 @@
+############
+# KiedyBus
+############
+
+options:
+  bundleIdPrefix: pl.goeuropa.obata
+
+targets:
+  App:
+    sources:
+      - path: Apps/OBATA
+        name: App
+        group: OBATA
+      - path: Apps/Shared/CommonClient
+        name: Common
+        group: OBATA
+    entitlements:
+      path: Apps/OBATA/OBATA.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.pl.goeuropa.obata.iphone
+    info:
+      path: Apps/KiedyBus/Info.plist
+      properties:
+        CFBundleDisplayName: OBATA
+        CFBundleURLTypes: [{CFBundleTypeRole: "Editor", CFBundleURLIconFile: "", CFBundleURLName: "obata", CFBundleURLSchemes: ["obata"]}]
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: false
+          NSExceptionDomains:
+            goeuropa.eu:
+              NSTemporaryExceptionAllowsInsecureHTTPLoads: true
+              NSIncludesSubdomains: true
+            iplaner.pl:
+              NSTemporaryExceptionAllowsInsecureHTTPLoads: true
+              NSIncludesSubdomains: true
+            kiedybus.pl:
+              NSTemporaryExceptionAllowsInsecureHTTPLoads: true
+              NSIncludesSubdomains: true
+        NSHumanReadableCopyright: © goEuropa
+        NSLocationAlwaysAndWhenInUseUsageDescription: Show your location on the map
+        NSLocationWhenInUseUsageDescription: Show your location on the map
+        NSUserActivityTypes:
+          - pl.goeuropa.obata.iphone.user_activity.stop
+          - pl.goeuropa.obata.iphone.user_activity.trip
+        OBAKitConfig:
+          AppDevelopersEmailAddress: info@goeuropa.eu
+          AppGroup: group.pl.goeuropa.obata.iphone
+          BundledRegionsFileName: regions.json
+          ExtensionURLScheme: obata
+          PrivacyPolicyURL: https://www.tracktrolley.com
+          RESTServerAPIKey: web
+          RegionsServerBaseAddress: https://data.tracktrolley.com
+          RegionsServerAPIPath: /regions-obamain.json
+    settings:
+      base:
+        DEVELOPMENT_TEAM: 85APG5FQFE
+        PRODUCT_BUNDLE_IDENTIFIER: pl.goeuropa.obata.iphone
+  TodayView:
+    sources: ["Apps/OBATA/Assets.xcassets"]
+    entitlements:
+      properties:
+        com.apple.security.application-groups:
+          - group.pl.goeuropa.obata.iphone
+    info:
+      properties:
+        CFBundleDisplayName: OBATA
+        OBAKitConfig:
+          AppGroup: group.pl.goeuropa.obata.iphone
+          BundledRegionsFileName: regions.json
+          ExtensionURLScheme: obata
+          RESTServerAPIKey: web
+          RegionsServerBaseAddress: https://data.tracktrolley.com
+          RegionsServerAPIPath: /regions-obamain.json
+    settings:
+      base:
+        DEVELOPMENT_TEAM: 85APG5FQFE
+        PRODUCT_BUNDLE_IDENTIFIER: pl.goeuropa.obata.iphone.TodayView
+  OBAWidget:
+    sources: ["Apps/OBATA/Assets.xcassets"]
+    entitlements:
+      properties:
+        com.apple.security.application-groups:
+          - group.pl.goeuropa.obata.iphone
+    info:
+      properties:
+        CFBundleDisplayName: OBATA
+        OBAKitConfig:
+          AppGroup: group.pl.goeuropa.obata.iphone
+          BundledRegionsFileName: regions.json
+          ExtensionURLScheme: obata
+          RESTServerAPIKey: pl.goeuropa.obata.iphone
+          RegionsServerBaseAddress: https://data.tracktrolley.com
+          RegionsServerAPIPath: /regions-obamain.json
+    settings:
+      base:
+        DEVELOPMENT_TEAM: 85APG5FQFE
+        PRODUCT_BUNDLE_IDENTIFIER: pl.goeuropaobata.iphone.OBAWidget
+include:
+  - path: Apps/Shared/app_shared.yml
+  - path: OBAKitCore/project.yml
+  - path: OBAKit/project.yml
+  - path: OBAKitTests/project.yml
+  - path: OBAKitUITests/project.yml
+  - path: TodayView/project.yml
+  - path: OBAWidget/project.yml
