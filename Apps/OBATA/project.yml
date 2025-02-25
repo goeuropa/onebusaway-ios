@@ -94,7 +94,7 @@ targets:
     settings:
       base:
         DEVELOPMENT_TEAM: 85APG5FQFE
-        PRODUCT_BUNDLE_IDENTIFIER: pl.goeuropaobata.iphone.OBAWidget
+        PRODUCT_BUNDLE_IDENTIFIER: pl.goeuropa.obata.iphone.OBAWidget
 include:
   - path: Apps/Shared/app_shared.yml
   - path: OBAKitCore/project.yml

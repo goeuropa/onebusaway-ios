@@ -14,7 +14,7 @@
         "supportsObaRealtimeApis": true, 
         "contactEmail": "oba@tracktrolley.com", 
         "enrollParticipantsInStudy": true, 
-        "obaBaseUrl": "https://obamain.tracktrolley.com/?key=org.onebusaway.iphone", 
+        "obaBaseUrl": "https://obamain.tracktrolley.com/?key=web", 
         "id": 3, 
         "regionName": "Tracktrolley", 
         "obaVersionInfo": "2.0.0-SNAPSHOT|2|0|0|SNAPSHOT|", 
