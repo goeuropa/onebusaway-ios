@@ -20,7 +20,7 @@ targets:
         com.apple.security.application-groups:
           - group.pl.goeuropa.obata.iphone
     info:
-      path: Apps/KiedyBus/Info.plist
+      path: Apps/OBATA/Info.plist
       properties:
         CFBundleDisplayName: OBATA
         CFBundleURLTypes: [{CFBundleTypeRole: "Editor", CFBundleURLIconFile: "", CFBundleURLName: "obata", CFBundleURLSchemes: ["obata"]}]
