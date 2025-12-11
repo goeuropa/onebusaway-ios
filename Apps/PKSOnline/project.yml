@@ -1,0 +1,87 @@
+############
+# OneBusAway
+############
+
+options:
+  bundleIdPrefix: pl.pkspoznan.pksonline
+
+targets:
+  App:
+    sources:
+      - path: Apps/PKSOnline
+        name: App
+        group: PKSOnline
+      - path: Apps/Shared/CommonClient
+        name: Common
+        group: PKSOnline
+    entitlements:
+      path: Apps/PKSOnline/PKSOnline.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.pl.pkspoznan.pksonline.iphone
+        com.apple.developer.associated-domains:
+          - applinks:onebusaway.co
+          - applinks:www.onebusaway.co
+          - applinks:alerts.onebusaway.org
+    info:
+      path: Apps/PKSOnline/Info.plist
+      properties:
+        CFBundleDisplayName: PKSOnline
+        CFBundleURLTypes: [{CFBundleTypeRole: "Editor", CFBundleURLIconFile: "", CFBundleURLName: "pksonline", CFBundleURLSchemes: ["pksonline"]}]
+        LSApplicationQueriesSchemes:
+          - fb
+          - twitter
+          - comgooglemaps
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: false
+          NSExceptionDomains: {
+            "onebusaway.co": {
+                NSIncludesSubdomains: true,
+                NSExceptionAllowsInsecureHTTPLoads: true
+            }
+          }
+        NSHumanReadableCopyright: © goEuropa i PKS Poznan
+        NSUserActivityTypes:
+          - pl.pkspoznan.pksonline.iphone.user_activity.stop
+          - pl.pkspoznan.pksonline.iphone.user_activity.trip
+        OBAKitConfig:
+          AppDevelopersEmailAddress: it@pks.poznan.pl
+          AppGroup: group.pl.pkspoznan.pksonline.iphone
+          BundledRegionsFileName: regions.json
+          ExtensionURLScheme: oba
+          PrivacyPolicyURL: https://pksonline.pl/polityka/polityka_aplikacja.html
+          RESTServerAPIKey: org.onebusaway.iphone
+          RegionsServerBaseAddress: https://www.pksonline.pl/
+          RegionsServerAPIPath: /regions-v3.json
+    settings:
+      base:
+        DEVELOPMENT_TEAM: F6YL2VS3DH
+        PRODUCT_BUNDLE_IDENTIFIER: pl.pkspoznan.pksonline.iphone
+  TodayView:
+    sources: ["Apps/PKSOnline/Assets.xcassets"]
+    entitlements:
+      properties:
+        com.apple.security.application-groups:
+          - group.pl.pkspoznan.pksonline.iphone
+    info:
+      properties:
+        CFBundleDisplayName: PKSOnline
+        OBAKitConfig:
+          AppGroup: group.pl.pkspoznan.pksonline.iphone
+          BundledRegionsFileName: regions.json
+          ExtensionURLScheme: pksonline
+          RESTServerAPIKey: org.onebusaway.iphone
+          RegionsServerBaseAddress: https://www.pksonline.pl/
+          RegionsServerAPIPath: /regions-v3.json
+    settings:
+      base:
+        DEVELOPMENT_TEAM: F6YL2VS3DH
+        PRODUCT_BUNDLE_IDENTIFIER: pl.pkspoznan.pksonline.iphone.TodayView
+
+include:
+  - path: Apps/Shared/app_shared.yml
+  - path: OBAKitCore/project.yml
+  - path: OBAKit/project.yml
+  - path: OBAKitTests/project.yml
+  - path: OBAKitUITests/project.yml
+  - path: TodayView/project.yml
