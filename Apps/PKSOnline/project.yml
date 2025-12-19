@@ -46,7 +46,11 @@ targets:
                 NSExceptionAllowsInsecureHTTPLoads: true
             }
           }
+<<<<<<< HEAD
         NSHumanReadableCopyright: © PKS Poznan i goEuropa
+=======
+        NSHumanReadableCopyright: © PKS Poznań & goEuropa
+>>>>>>> 0fec0a59b2ae01812c644667de6ec3c133234773
         NSUserActivityTypes:
           - pl.pkspoznan.pksonline.iphone.user_activity.stop
           - pl.pkspoznan.pksonline.iphone.user_activity.trip
@@ -55,7 +59,11 @@ targets:
           AppGroup: group.pl.pkspoznan.pksonline.iphone
           BundledRegionsFileName: regions.json
           Donations:
+<<<<<<< HEAD
             Enabled: false
+=======
+            Enabled: true
+>>>>>>> 0fec0a59b2ae01812c644667de6ec3c133234773
             DonationManagementPortal: "https://onebusaway.co/manage-donations"
           ExtensionURLScheme: pksonline
           PrivacyPolicyURL: https://pksonline.pl/polityka/polityka_aplikacja.html
