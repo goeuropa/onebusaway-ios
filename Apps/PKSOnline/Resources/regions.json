@@ -5,22 +5,22 @@
   "data": {
     "list": [
 {
-        "siriBaseUrl": null, 
         "supportsEmbeddedSocial": false, 
-        "supportsObaRealtimeApis": true, 
         "contactEmail": "app@pks.poznan.pl", 
-        "enrollParticipantsInStudy": true, 
-        "obaBaseUrl": "https://pksonline.pl:8443/oba-api/?key=web", 
+        "enrollParticipantsInStudy": false, 
+        "obaBaseUrl": "https://apioba.pksonline.pl/",
+        "siriBaseUrl": "https://apioba.pksonline.pl/siri/", 
         "id": 0, 
         "regionName": "PKS Poznan", 
         "obaVersionInfo": "2.0.0-SNAPSHOT|2|0|0|SNAPSHOT|", 
         "travelBehaviorDataCollectionEnabled": false, 
-        "supportsObaDiscoveryApis": true, 
+        "supportsObaDiscoveryApis": true,
+        "supportsObaRealtimeApis": true,
+        "supportsSiriRealtimeApis": true,
         "supportsOtpBikeshare": false, 
-        "otpContactEmail": null, 
-        "otpBaseUrl": null, 
+        "otpContactEmail": "app@pks.poznan.pl", 
+        "otpBaseUrl": "https://otp.pksonline.pl", 
         "paymentWarningBody": null, 
-        "supportsSiriRealtimeApis": false, 
         "twitterUrl": null, 
         "paymentAndroidAppId": null, 
         "paymentiOSAppStoreIdentifier": null, 
@@ -39,7 +39,7 @@
         ], 
         "facebookUrl": "null", 
         "stopInfoUrl": null, 
-        "experimental": true
+        "experimental": false
       }
     ]
   }

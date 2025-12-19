@@ -1,5 +1,5 @@
 ############
-# OneBusAway
+# PKSOnline
 ############
 
 options:
@@ -23,6 +23,8 @@ targets:
           - applinks:onebusaway.co
           - applinks:www.onebusaway.co
           - applinks:alerts.onebusaway.org
+        com.apple.developer.in-app-payments:
+          - merchant.pl.pkspoznan.pksonline.iphone
     info:
       path: Apps/PKSOnline/Info.plist
       properties:
@@ -32,6 +34,10 @@ targets:
           - fb
           - twitter
           - comgooglemaps
+          - fb313213768708402HART
+          - org.sdmts.riderapp.compassmobile.payments
+          - org.sdmts.pronto
+          - co.bytemark.tgt
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: false
           NSExceptionDomains: {
@@ -40,7 +46,7 @@ targets:
                 NSExceptionAllowsInsecureHTTPLoads: true
             }
           }
-        NSHumanReadableCopyright: © goEuropa i PKS Poznan
+        NSHumanReadableCopyright: © PKS Poznan i goEuropa
         NSUserActivityTypes:
           - pl.pkspoznan.pksonline.iphone.user_activity.stop
           - pl.pkspoznan.pksonline.iphone.user_activity.trip
@@ -48,16 +54,20 @@ targets:
           AppDevelopersEmailAddress: it@pks.poznan.pl
           AppGroup: group.pl.pkspoznan.pksonline.iphone
           BundledRegionsFileName: regions.json
-          ExtensionURLScheme: oba
+          Donations:
+            Enabled: false
+            DonationManagementPortal: "https://onebusaway.co/manage-donations"
+          ExtensionURLScheme: pksonline
           PrivacyPolicyURL: https://pksonline.pl/polityka/polityka_aplikacja.html
+          PushNotificationAPIKey: d5d0d28a-6091-46cd-9627-0ce01ffa9f9e
           RESTServerAPIKey: org.onebusaway.iphone
           RegionsServerBaseAddress: https://www.pksonline.pl/
-          RegionsServerAPIPath: /regions-v3.json
+          RegionsServerAPIPath: /regions-v4.json
     settings:
       base:
         DEVELOPMENT_TEAM: F6YL2VS3DH
         PRODUCT_BUNDLE_IDENTIFIER: pl.pkspoznan.pksonline.iphone
-  TodayView:
+  OBAWidget:
     sources: ["Apps/PKSOnline/Assets.xcassets"]
     entitlements:
       properties:
@@ -72,16 +82,16 @@ targets:
           ExtensionURLScheme: pksonline
           RESTServerAPIKey: org.onebusaway.iphone
           RegionsServerBaseAddress: https://www.pksonline.pl/
-          RegionsServerAPIPath: /regions-v3.json
+          RegionsServerAPIPath: /regions-v4.json
     settings:
       base:
         DEVELOPMENT_TEAM: F6YL2VS3DH
-        PRODUCT_BUNDLE_IDENTIFIER: pl.pkspoznan.pksonline.iphone.TodayView
-
+        PRODUCT_BUNDLE_IDENTIFIER: pl.pkspoznan.pksonline.iphone.OBAWidget
 include:
   - path: Apps/Shared/app_shared.yml
+  - path: Apps/Shared/analytics_fx_config.yml
+  - path: Apps/Shared/push_config.yml
   - path: OBAKitCore/project.yml
   - path: OBAKit/project.yml
   - path: OBAKitTests/project.yml
-  - path: OBAKitUITests/project.yml
-  - path: TodayView/project.yml
+  - path: OBAWidget/project.yml
