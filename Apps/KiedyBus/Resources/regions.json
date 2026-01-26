@@ -27,15 +27,43 @@
         "stopInfoUrl": null,
         "active": true,
         "facebookUrl": "",
-        "obaBaseUrl": "https://pksonline.pl:8443/oba-api?key=web",
+        "obaBaseUrl": "https://apioba.pksonline.pl/",
         "id": 1,
         "experimental": false,
         "regionName": "PKS Poznań"
       },
+  {
+        "siriBaseUrl": "",
+        "supportsEmbeddedSocial": true,
+        "obaVersionInfo": "2.0.0-SNAPSHOT|2|0|0|SNAPSHOT|",
+        "supportsSiriRealtimeApis": false,
+        "language": "pl_PL",
+        "supportsObaDiscoveryApis": true,
+        "twitterUrl": "",
+        "supportsObaRealtimeApis": true,
+        "bounds": [
+          {
+            "lat": 50.26434811777667,
+            "latSpan": 0.5424609999999994,
+            "lon": 19.023544526777385,
+            "lonSpan": 0.576357999999999
+          }
+        ],
+        "otpBaseUrl": "",
+        "contactEmail": "info@goeuropa.eu",
+        "otpContactEmail": "",
+        "stopInfoUrl": null,
+        "active": true,
+        "facebookUrl": "",
+        "obaBaseUrl": "https://obagzmapi.iplaner.pl",
+        "id": 2,
+        "experimental": false,
+        "regionName": "GZM Katowice"
+      },
 {
         "siriBaseUrl": "",
         "supportsEmbeddedSocial": true,
-        "obaVersionInfo": "1.1.11-SNAPSHOT|1|1|11|SNAPSHOT|6950d86123a7a9e5f12065bcbec0c516f35d86d9",
+        "obaVersionInfo": "2.0.0-SNAPSHOT|2|0|0|SNAPSHOT|",
         "supportsSiriRealtimeApis": false,
         "language": "pl_PL",
         "supportsObaDiscoveryApis": true,
@@ -63,7 +91,7 @@
         {
         "siriBaseUrl": "",
         "supportsEmbeddedSocial": true,
-        "obaVersionInfo": "1.1.11-SNAPSHOT|1|1|11|SNAPSHOT|6950d86123a7a9e5f12065bcbec0c516f35d86d9",
+        "obaVersionInfo": "2.0.0-SNAPSHOT|2|0|0|SNAPSHOT|",
         "supportsSiriRealtimeApis": false,
         "language": "pl_PL",
         "supportsObaDiscoveryApis": true,
@@ -107,7 +135,8 @@
         ],
         "otpBaseUrl": "",
         "contactEmail": "info@goeuropa.eu",
-        "otpContactEmail": "",
+        "otpBaseUrl":  "https://otp.iplaner.pl/otp",
+        "otpContactEmail": "info@goeuropa.eu",
         "stopInfoUrl": null,
         "active": true,
         "facebookUrl": "",
@@ -115,8 +144,35 @@
         "id": 5,
         "experimental": false,
         "regionName": "ZTM Poznań"
+      },
+{
+        "siriBaseUrl": "",
+        "supportsEmbeddedSocial": true,
+        "obaVersionInfo": "2.5.13-otsf|2|5|13|otsf|d41d8cd98f00b204e9800998ecf8427e",
+        "supportsSiriRealtimeApis": false,
+        "language": "pl_PL",
+        "supportsObaDiscoveryApis": true,
+        "twitterUrl": "",
+        "supportsObaRealtimeApis": true,
+        "bounds": [
+          {
+            "lat": 51.11,
+            "latSpan": 0.5424609999999994,
+            "lon": 17.03,
+            "lonSpan": 0.576357999999999
+          }
+        ],
+        "otpBaseUrl": "",
+        "contactEmail": "info@goeuropa.eu",
+        "otpContactEmail": "",
+        "stopInfoUrl": null,
+        "active": true,
+        "facebookUrl": "",
+        "obaBaseUrl": "https://obawroclawapi.iplaner.pl",
+        "id": 6,
+        "experimental": false,
+        "regionName": "MPK Wrocław"
       }
     ]
   }
 }
-
