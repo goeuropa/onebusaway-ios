@@ -8,18 +8,8 @@
 //
 
 import Foundation
-import Combine
 import SwiftUI
 import OBAKitCore
-
-// MARK: - Time Period Grouping
-
-/// Represents a group of departure times for a specific time period (AM or PM)
-struct TimePeriodGroup: Identifiable {
-    let id: String
-    let label: String
-    let times: [[Date?]]
-}
 
 /// View model that manages schedule data for a specific route
 @MainActor
@@ -123,79 +113,11 @@ class ScheduleForRouteViewModel: ObservableObject {
         return sorted.map { $0.times }
     }
 
-    /// Returns departure times grouped by time period (AM/PM)
-    /// Each group contains trips where the actual trip start time is in that period
-    var departureTimesByPeriod: [TimePeriodGroup] {
-        guard let direction = currentDirection,
-              let scheduleDate = scheduleData?.scheduleDate else {
-            return []
-        }
-        let calendar = Calendar.current
-        var amTrips: [[Date?]] = []
-        var pmTrips: [[Date?]] = []
-
-        let tripsWithStartTimes: [(times: [Date?], startTime: Date?)] = departureTimes.enumerated().map { index, times in
-            let trip = direction.tripsWithStopTimes[index]
-            return (times, actualStartTime(for: trip, scheduleDate: scheduleDate))
-        }
-        let sorted = tripsWithStartTimes.sorted { trip1, trip2 in
-            switch (trip1.startTime, trip2.startTime) {
-            case (let t1?, let t2?):
-                return t1 < t2
-            case (nil, _):
-                return false
-            case (_, nil):
-                return true
-            }
-        }
-        for (times, startTime) in sorted {
-            guard let startTime = startTime else {
-                pmTrips.append(times)
-                continue
-            }
-
-            let hour = calendar.component(.hour, from: startTime)
-            if hour < 12 {
-                amTrips.append(times)
-            } else {
-                pmTrips.append(times)
-            }
-        }
-
-        var groups: [TimePeriodGroup] = []
-
-        if !amTrips.isEmpty {
-            groups.append(TimePeriodGroup(
-                id: "AM",
-                label: OBALoc("schedule_view.am_period", value: "AM", comment: "Morning time period label"),
-                times: amTrips
-            ))
-        }
-
-        if !pmTrips.isEmpty {
-            groups.append(TimePeriodGroup(
-                id: "PM",
-                label: OBALoc("schedule_view.pm_period", value: "PM", comment: "Afternoon/evening time period label"),
-                times: pmTrips
-            ))
-        }
-
-        return groups
-    }
-
-    /// 24h format: Same data structure as 12h (without AM/PM grouping)
+    /// Returns departure times for display in 24-hour format
+    /// All trips shown in one continuous list without AM/PM grouping
     var departureTimesDisplay: [[Date?]] {
         return sortedDepartureTimes
     }
-
-    var uses12HourClock: Bool {
-        Locale.current.hourCycle == .oneToTwelve ||
-        Locale.current.hourCycle == .zeroToEleven
-    }
-
-    // MARK: - Private Properties
-
-    private var cancellables = Set<AnyCancellable>()
 
     /// Calculates the actual start time for a trip by finding the earliest departure across all stops.
     /// This is used for sorting trips chronologically, since some trips may not serve the first stop.
@@ -211,9 +133,7 @@ class ScheduleForRouteViewModel: ObservableObject {
 
     private lazy var timeFormatter: DateFormatter = {
         let formatter = DateFormatter()
-        formatter.dateStyle = .none
-        formatter.timeStyle = .short
-        formatter.locale = .current
+        formatter.dateFormat = "HH:mm"
         formatter.timeZone = TimeZone.current
         return formatter
     }()
@@ -233,17 +153,6 @@ class ScheduleForRouteViewModel: ObservableObject {
         self.routeID = routeID
         self.application = application
         self.selectedDate = initialDate
-
-        // Observe date changes and refetch
-        $selectedDate
-            .dropFirst()
-            .removeDuplicates { Calendar.current.isDate($0, inSameDayAs: $1) }
-            .sink { [weak self] _ in
-                Task { [weak self] in
-                    await self?.fetchSchedule()
-                }
-            }
-            .store(in: &cancellables)
     }
 
     // MARK: - Public Methods
@@ -262,6 +171,22 @@ class ScheduleForRouteViewModel: ObservableObject {
         do {
             let response = try await apiService.getScheduleForRoute(routeID: routeID, date: selectedDate)
             scheduleData = response.entry
+        } catch let apiError as APIError {
+            if case .requestNotFound = apiError {
+                if application.currentRegion?.supportsScheduleForRoute == false {
+                    self.error = UnstructuredError(
+                        OBALoc(
+                            "schedule_view.feature_not_supported",
+                            value: "The timetable feature is not available for this region. The transit agency's server does not support this feature.",
+                            comment: "Error message shown when the schedule-for-route API endpoint is not available on the server."
+                        )
+                    )
+                } else {
+                    self.error = apiError // Let the generic error show for actual 404s
+                }
+            } else {
+                self.error = apiError
+            }
         } catch {
             self.error = error
         }

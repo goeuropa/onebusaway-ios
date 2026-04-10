@@ -47,11 +47,18 @@ open class CoreApplication: NSObject,
     @objc public let locationService: LocationService
 
     /// Responsible for managing `Region`s and determining the correct `Region` for the user.
-    @objc public lazy var regionsService = RegionsService(apiService: regionsAPIService, locationService: locationService, userDefaults: userDefaults, bundledRegionsFilePath: self.config.bundledRegionsFilePath, apiPath: self.config.regionsAPIPath)
+    @objc public lazy var regionsService = RegionsService(apiService: regionsAPIService, locationService: locationService, userDefaults: userDefaults, bundledRegionsFilePath: self.config.bundledRegionsFilePath, apiPath: self.config.regionsAPIPath, fixedRegionName: self.config.fixedRegionName, fixedRegionOBABaseURL: self.config.fixedRegionOBABaseURL)
 
     /// Helper property that returns `regionsService.currentRegion`.
     @objc public var currentRegion: Region? {
         return regionsService.currentRegion
+    }
+
+    /// The display name of the current region, suitable for use in user-facing error messages.
+    ///
+    /// Returns `nil` when no region is selected.
+    public var currentRegionName: String? {
+        return currentRegion?.name
     }
 
     /// Provides access to the OneBusAway REST API
@@ -90,7 +97,7 @@ open class CoreApplication: NSObject,
         refreshServices()
 
         /// Updates the app launch count
-        userDataStore.increaseAppLaunchCount()
+        userDataStore.incrementAppLaunchCount()
     }
 
     /// This function reloads the REST API, Obaco Services, and Survey Services.
@@ -98,6 +105,7 @@ open class CoreApplication: NSObject,
         refreshRESTAPIService()
         refreshObacoService()
         refreshSurveysService()
+        purgeStaleStopCache()
         apiServicesRefreshed()
     }
 
@@ -115,6 +123,38 @@ open class CoreApplication: NSObject,
 
     public lazy var alertsStore = AgencyAlertsStore(userDefaults: userDefaults, regionsService: regionsService)
 
+    // MARK: - Stop Cache
+
+    /// The SQLite database for caching transit stops.
+    /// Initialized lazily; if database creation fails, the app falls back to direct API calls.
+    public private(set) lazy var stopCacheDatabase: StopCacheDatabase? = {
+        do {
+            return try StopCacheDatabase()
+        } catch {
+            Logger.error("Failed to initialize stop cache database: \(error)")
+            return nil
+        }
+    }()
+
+    /// Repository for reading/writing cached stops.
+    public private(set) lazy var stopCacheRepository: StopCacheRepository? = {
+        guard let database = stopCacheDatabase else { return nil }
+        return StopCacheRepository(database: database)
+    }()
+
+    /// Purges cached stops older than 30 days for the current region.
+    /// Called during `refreshServices()` (app launch and region change).
+    private func purgeStaleStopCache() {
+        guard let repository = stopCacheRepository,
+              let regionId = currentRegion?.regionIdentifier else {
+            return
+        }
+        Task.detached(priority: .utility) {
+            let thirtyDaysAgo = Date().addingTimeInterval(-30 * 24 * 60 * 60)
+            repository.deleteStopsOlderThan(thirtyDaysAgo, regionId: regionId)
+        }
+    }
+
     // MARK: - LocationServiceDelegate
 
     public func locationService(_ service: LocationService, authorizationStatusChanged status: CLAuthorizationStatus) {
@@ -130,7 +170,7 @@ open class CoreApplication: NSObject,
             return
         }
 
-        self.apiService = RESTAPIService(APIServiceConfiguration(baseURL: region.OBABaseURL, apiKey: config.apiKey, uuid: userUUID, appVersion: config.appVersion, regionIdentifier: region.regionIdentifier))
+        self.apiService = RESTAPIService(APIServiceConfiguration(baseURL: region.OBABaseURL, apiKey: config.apiKey, uuid: userUUID, appVersion: config.appVersion, regionIdentifier: region.regionIdentifier, surveyBaseURL: region.sidecarBaseURL))
     }
 
     // MARK: - Obaco
@@ -224,6 +264,7 @@ open class CoreApplication: NSObject,
 
     // MARK: - Error Handling
 
+    /// Displays an error to the user. Subclasses should override to provide UI.
     @MainActor
     open func displayError(_ error: Error) async {
         Logger.error("Error: \(error.localizedDescription)")
@@ -231,30 +272,12 @@ open class CoreApplication: NSObject,
 
     // MARK: - Surveys
 
-    private var surveyServiceAPI: SurveyAPIService?
+    public private(set) lazy var surveyService = SurveyService(apiService: apiService, userDataStore: userDefaultsStore)
 
-    public lazy var surveyService: SurveyServiceProtocol = SurveyService(apiService: surveyServiceAPI, surveyStore: userDefaultsStore)
-
-    public lazy var surveyStateManager: SurveyStateProtocol = SurveyStateManager(surveyStore: userDefaultsStore)
-
-    /// Recreates the Survey API service based on the current region and user survey UUID.
-    /// This should be called when the region refresh/changes.
+    /// Recreates the survey service when the API service changes (region refresh/change).
     private func refreshSurveysService() {
-        guard let region = regionsService.currentRegion, let sidecarBaseURL = region.sidecarBaseURL else {
-            surveyServiceAPI = nil
-            return
+        Task { @MainActor in
+            self.surveyService = SurveyService(apiService: self.apiService, userDataStore: self.userDefaultsStore)
         }
-
-        let surveyUUID = userDefaultsStore.userSurveyId
-
-        let configuration = APIServiceConfiguration(
-            baseURL: sidecarBaseURL,
-            uuid: surveyUUID,
-            regionIdentifier: region.regionIdentifier
-        )
-
-        surveyServiceAPI = SurveyAPIService(configuration)
-
-        surveyService = SurveyService(apiService: surveyServiceAPI, surveyStore: userDefaultsStore)
     }
 }

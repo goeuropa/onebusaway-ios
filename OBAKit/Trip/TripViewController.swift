@@ -47,6 +47,11 @@ class TripViewController: UIViewController,
         fatalError("init(coder:) has not been implemented")
     }
 
+    deinit {
+        refreshTimer?.invalidate()
+        loadDataTask?.cancel()
+    }
+
     private func registerTraitChangeCallback() {
         let sizeTraits: [UITrait] = [UITraitVerticalSizeClass.self, UITraitHorizontalSizeClass.self, UITraitPreferredContentSizeCategory.self]
         registerForTraitChanges(sizeTraits) { (self: Self, _) in
@@ -95,6 +100,7 @@ class TripViewController: UIViewController,
 
         disableIdleTimer()
         beginUserActivity()
+        startRefreshTimer()
 
         setContentScrollView(tripDetailsController.listView, for: .bottom)
     }
@@ -107,6 +113,8 @@ class TripViewController: UIViewController,
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         enableIdleTimer()
+        refreshTimer?.invalidate()
+        refreshTimer = nil
     }
 
     // MARK: - NSUserActivity
@@ -262,12 +270,17 @@ class TripViewController: UIViewController,
     private var currentTripStatus: TripStatus? {
         didSet {
             guard let currentTripStatus = currentTripStatus else {
-                vehicleAnnotation = nil
+                removeVehicleAnnotation()
                 return
             }
 
             if let vehicleAnnotation = vehicleAnnotation {
                 vehicleAnnotation.tripStatus = currentTripStatus
+                // Update the annotation view's heading and real-time state since
+                // the annotation property didSet on the view won't re-fire.
+                if let vehicleAnnotationView = vehicleAnnotationView as? PulsingVehicleAnnotationView {
+                    vehicleAnnotationView.applyTripStatus(currentTripStatus)
+                }
             }
             else {
                 vehicleAnnotation = VehicleAnnotation(tripStatus: currentTripStatus)
@@ -278,12 +291,23 @@ class TripViewController: UIViewController,
         }
     }
 
+    /// Removes the vehicle annotation from the map and clears the reference.
+    private func removeVehicleAnnotation() {
+        if let annotation = vehicleAnnotation {
+            mapView.removeAnnotation(annotation)
+        }
+        vehicleAnnotation = nil
+        vehicleAnnotationView = nil
+    }
+
     private func loadTripConvertible(isProgrammatic: Bool) async throws {
         guard let apiService = application.apiService else {
+            Logger.error("API service unavailable in loadTripConvertible")
             return
         }
 
         guard let arrivalDeparture = tripConvertible.arrivalDeparture else {
+            Logger.warn("No arrivalDeparture available for trip convertible refresh")
             return
         }
 
@@ -303,6 +327,7 @@ class TripViewController: UIViewController,
 
     private func loadTripDetails(isProgrammatic: Bool) async throws {
         guard let apiService = application.apiService else {
+            Logger.error("API service unavailable in loadTripDetails")
             return
         }
 
@@ -366,43 +391,73 @@ class TripViewController: UIViewController,
         loadData(isProgrammatic: false)
     }
 
+    // MARK: - Refresh Timer
+
+    /// Interval between automatic vehicle position refreshes.
+    /// Matches CurrentTripViewController's refresh interval.
+    private static let refreshInterval: TimeInterval = 20.0
+
+    private var refreshTimer: Timer?
+
+    private func startRefreshTimer() {
+        refreshTimer?.invalidate()
+        refreshTimer = Timer.scheduledTimer(
+            withTimeInterval: Self.refreshInterval,
+            repeats: true
+        ) { [weak self] _ in
+            guard let self else { return }
+            // Skip refresh when VoiceOver is active to avoid
+            // disrupting screen reader users mid-navigation.
+            guard !UIAccessibility.isVoiceOverRunning else { return }
+            self.loadData(isProgrammatic: true)
+        }
+    }
+
     private var loadDataTask: Task<Void, Never>?
     private func loadData(isProgrammatic: Bool) {
         if let loadDataTask {
             loadDataTask.cancel()
         }
 
-        loadDataTask = Task {
+        loadDataTask = Task { [weak self] in
+            guard let self else { return }
             self.navigationItem.rightBarButtonItem = self.activityIndicatorButton
 
             do {
                 try await withThrowingTaskGroup(of: Void.self) { group in
-                    group.addTask {
+                    group.addTask { [weak self] in
+                        guard let self else { return }
                         try await self.loadTripDetails(isProgrammatic: isProgrammatic)
                     }
 
-                    group.addTask {
+                    group.addTask { [weak self] in
+                        guard let self else { return }
                         try await self.loadTripConvertible(isProgrammatic: isProgrammatic)
                     }
 
-                    group.addTask {
+                    group.addTask { [weak self] in
+                        guard let self else { return }
                         try await self.loadMapPolyline(isProgrammatic: isProgrammatic)
                     }
 
                     try await group.waitForAll()
                 }
 
-                await MainActor.run {
-                    self.dataLoadFeedbackGenerator.dataLoad(.success)
+                await MainActor.run { [weak self] in
+                    self?.dataLoadFeedbackGenerator.dataLoad(.success)
                 }
+            } catch is CancellationError {
+                return
             } catch {
                 await self.application.displayError(error)
-                await MainActor.run {
-                    self.dataLoadFeedbackGenerator.dataLoad(.failed)
+                await MainActor.run { [weak self] in
+                    self?.dataLoadFeedbackGenerator.dataLoad(.failed)
                 }
             }
 
-            self.navigationItem.rightBarButtonItem = self.reloadButton
+            await MainActor.run { [weak self] in
+                self?.navigationItem.rightBarButtonItem = self?.reloadButton
+            }
         }
     }
 
@@ -458,7 +513,14 @@ class TripViewController: UIViewController,
 
     public func mapView(_ mapView: MKMapView, annotationView view: MKAnnotationView, calloutAccessoryControlTapped control: UIControl) {
         guard let stopTime = view.annotation as? TripStopTime else { return }
-        application.viewRouter.navigateTo(stop: stopTime.stop, from: self)
+
+        var transferContext: TransferContext?
+        if let arrivalDeparture = tripConvertible.arrivalDeparture,
+           stopTime.stopID != arrivalDeparture.stopID {
+            transferContext = .from(arrivalDeparture: arrivalDeparture, arrivalDate: stopTime.arrivalDate)
+        }
+
+        application.viewRouter.navigateTo(stop: stopTime.stop, from: self, transferContext: transferContext)
     }
 
     // TODO FIXME: DRY up with MapRegionManager

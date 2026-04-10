@@ -28,8 +28,8 @@ class ManageBookmarksViewController: FormViewController {
 
     // MARK: - UIViewController
 
-    override func viewWillAppear(_ animated: Bool) {
-        super.viewWillAppear(animated)
+    override func viewDidLoad() {
+        super.viewDidLoad()
         loadForm()
         tableView.setEditing(true, animated: false)
     }
@@ -45,6 +45,18 @@ class ManageBookmarksViewController: FormViewController {
         }
     }
 
+    /// Rebuilds the form from the current userDataStore on the next run loop iteration.
+    /// Deferral avoids index-out-of-bounds inside Eureka during child controller transitions.
+    /// See: https://github.com/OneBusAway/onebusaway-ios/issues/922
+    func reloadFormFromStore() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            UIView.performWithoutAnimation {
+                self.loadForm()
+            }
+        }
+    }
+
     // MARK: - TableView Delegate Overrides
 
     override func tableView(_ tableView: UITableView, moveRowAt sourceIndexPath: IndexPath, to destinationIndexPath: IndexPath) {
@@ -53,8 +65,11 @@ class ManageBookmarksViewController: FormViewController {
         }
 
         let destinationGroup = groupForBookmarkIndexPath(destinationIndexPath)
-
         application.userDataStore.add(bookmark, to: destinationGroup, index: destinationIndexPath.row)
+
+        // Defer refresh to avoid index-out-of-bounds during Eureka's internal animation.
+        // See: https://github.com/OneBusAway/onebusaway-ios/issues/922
+        reloadFormFromStore()
     }
 
     override func tableView(_ tableView: UITableView, commit editingStyle: UITableViewCell.EditingStyle, forRowAt indexPath: IndexPath) {
@@ -98,8 +113,13 @@ class ManageBookmarksViewController: FormViewController {
 
     private func bookmarkForBookmarkIndexPath(_ indexPath: IndexPath) -> Bookmark? {
         let section = bookmarksSections[indexPath.section]
-        let row = section.allRows[indexPath.row] as! NameRow // swiftlint:disable:this force_cast
-        guard let id = UUID(optionalUUIDString: row.tag) else { return nil }
+        guard let row = section.allRows[indexPath.row] as? NameRow else {
+            Logger.warn("bookmarkForBookmarkIndexPath: Expected NameRow at \(indexPath)")
+            return nil
+        }
+        guard let id = UUID(optionalUUIDString: row.tag) else {
+            return nil
+        }
 
         return application.userDataStore.findBookmark(id: id)
     }
@@ -123,6 +143,8 @@ class ManageBookmarksViewController: FormViewController {
                 $0 <<< NameRow {
                     $0.tag = bm.id.uuidString
                     $0.value = bm.name
+                }.onChange { [weak self] row in
+                    self?.saveBookmarkNameChange(row: row)
                 }
             }
         }
@@ -139,7 +161,73 @@ class ManageBookmarksViewController: FormViewController {
                 $0 <<< NameRow {
                     $0.tag = bm.id.uuidString
                     $0.value = bm.name
+                }.onChange { [weak self] row in
+                    self?.saveBookmarkNameChange(row: row)
                 }
+            }
+        }
+    }
+
+    // MARK: - Bookmark Name Updates
+
+    /// Derives the original transit-provided name for a bookmark
+    /// (e.g., "57 - Downtown Seattle Via SR-99" for a trip bookmark,
+    /// or the formatted stop title for a stop bookmark).
+    private func originalTransitName(for bookmark: Bookmark) -> String {
+        if bookmark.isTripBookmark,
+           let routeShortName = bookmark.routeShortName,
+           let tripHeadsign = bookmark.tripHeadsign {
+            return "\(routeShortName) - \(tripHeadsign)"
+        }
+        return Formatters.formattedTitle(stop: bookmark.stop)
+    }
+
+    /// Persists a non-empty name change as the user types.
+    /// Empty names are deferred to `restoreEmptyBookmarkNames()` at dismissal,
+    /// so the user can freely clear the field before typing a new name.
+    private func saveBookmarkNameChange(row: NameRow) {
+        guard
+            let bookmarkID = UUID(optionalUUIDString: row.tag),
+            let newName = row.value,
+            !newName.trimmingCharacters(in: .whitespaces).isEmpty,
+            let bookmark = application.userDataStore.findBookmark(id: bookmarkID)
+        else {
+            return
+        }
+
+        bookmark.name = newName
+
+        // Look up current group from bookmark's groupID
+        let currentGroup = bookmark.groupID.flatMap {
+            application.userDataStore.findGroup(id: $0)
+        }
+
+        application.userDataStore.add(bookmark, to: currentGroup)
+    }
+
+    /// Called when the user closes the screen. Any bookmark whose name field
+    /// was left empty gets its original transit-derived name restored.
+    func restoreEmptyBookmarkNames() {
+        for section in bookmarksSections {
+            for row in section.allRows {
+                guard let nameRow = row as? NameRow else { continue }
+                let trimmed = nameRow.value?.trimmingCharacters(in: .whitespaces) ?? ""
+                guard trimmed.isEmpty else { continue }
+
+                guard
+                    let bookmarkID = UUID(optionalUUIDString: nameRow.tag),
+                    let bookmark = application.userDataStore.findBookmark(id: bookmarkID)
+                else {
+                    continue
+                }
+
+                let restored = originalTransitName(for: bookmark)
+                bookmark.name = restored
+
+                let currentGroup = bookmark.groupID.flatMap {
+                    application.userDataStore.findGroup(id: $0)
+                }
+                application.userDataStore.add(bookmark, to: currentGroup)
             }
         }
     }

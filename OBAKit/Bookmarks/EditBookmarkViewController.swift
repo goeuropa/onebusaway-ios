@@ -57,6 +57,11 @@ class EditBookmarkViewController: FormViewController, AddGroupAlertDelegate {
         loadForm()
     }
 
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        refreshGroupSelection()
+    }
+
     // MARK: - Data Helpers
 
     /// Determines the selected bookmark group from the form.
@@ -178,6 +183,21 @@ class EditBookmarkViewController: FormViewController, AddGroupAlertDelegate {
         addRow(for: group, to: selectedBookmarkGroupSection)
     }
 
+    // MARK: - Group Selection
+    private func refreshGroupSelection() {
+        guard let existingBookmark = bookmark else { return }
+        let currentGroupID = application.userDataStore.bookmarkGroups
+            .first { group in
+                application.userDataStore.bookmarksInGroup(group).contains { $0.id == existingBookmark.id }
+            }?
+            .id.uuidString ?? ""
+        for row in selectedBookmarkGroupSection.allRows {
+            guard let checkRow = row as? ListCheckRow<String> else { continue }
+            checkRow.value = (checkRow.selectableValue == currentGroupID) ? checkRow.selectableValue : nil
+            checkRow.updateCell()
+        }
+    }
+
     // MARK: - Actions
 
     @objc private func close() {
@@ -185,10 +205,16 @@ class EditBookmarkViewController: FormViewController, AddGroupAlertDelegate {
     }
 
     @objc private func save() {
-        guard
-            let name = form.values()[bookmarkNameTag] as? String,
-            let region = application.currentRegion
-        else { return }
+        guard let region = application.currentRegion else { return }
+
+        // If the user cleared the name, restore the original transit-derived name.
+        let rawName = form.values()[bookmarkNameTag] as? String
+        let name: String
+        if let rawName, !rawName.trimmingCharacters(in: .whitespaces).isEmpty {
+            name = rawName
+        } else {
+            name = dataObjectName
+        }
 
         let addMode = self.bookmark == nil
 

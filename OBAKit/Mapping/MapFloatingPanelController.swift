@@ -32,7 +32,6 @@ class MapFloatingPanelController: VisualEffectViewController,
     OBAListViewContextMenuDelegate,
     NearbyStopsListDataSource,
     NearbyStopsListDelegate,
-    SearchListViewControllerDelegate,
     UISearchBarDelegate,
     UIPopoverPresentationControllerDelegate {
 
@@ -49,6 +48,8 @@ class MapFloatingPanelController: VisualEffectViewController,
         application.alertsStore.recentHighSeverityAlerts
     }
 
+    private var resetFudgeFactorWorkItem: DispatchWorkItem?
+
     private(set) var stops = [Stop]() {
         didSet {
             nearbyStopsListViewController.updateList()
@@ -56,7 +57,7 @@ class MapFloatingPanelController: VisualEffectViewController,
     }
 
     // Search
-    private var searchListViewController: SearchListViewController!
+    private var searchListViewController: UIHostingController<SearchListView>!
     var searchBarText: String = ""
 
     // MARK: - Init/Deinit
@@ -73,6 +74,7 @@ class MapFloatingPanelController: VisualEffectViewController,
     }
 
     deinit {
+        resetFudgeFactorWorkItem?.cancel()
         mapRegionManager.removeDelegate(self)
         application.regionsService.removeDelegate(self)
         application.alertsStore.removeDelegate(self)
@@ -167,9 +169,33 @@ class MapFloatingPanelController: VisualEffectViewController,
         nearbyStopsListViewController.dataSource = self
         nearbyStopsListViewController.delegate = self
 
-        searchListViewController = SearchListViewController()
+        nearbyStopsListViewController.onExpandSearchTapped = { [weak self] in
+            guard let self else { return }
+
+            self.resetFudgeFactorWorkItem?.cancel()
+
+            self.mapRegionManager.preferredLoadDataRegionFudgeFactor = 3.0
+
+            // Force a data reload by simulating a region change event.
+            self.mapRegionManager.mapView(self.mapRegionManager.mapView, regionDidChangeAnimated: false)
+
+            // Create a new work item to reset the value
+            let workItem = DispatchWorkItem { [weak self] in
+                // This ensures that the next time the user pans the map normally,
+                // the app goes back to its standard, efficient search radius.
+                self?.mapRegionManager.preferredLoadDataRegionFudgeFactor =
+                    UIAccessibility.isVoiceOverRunning ? 1.5 : MapRegionManager.DefaultLoadDataRegionFudgeFactor
+            }
+
+            self.resetFudgeFactorWorkItem = workItem
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: workItem)
+        }
+
+        let searchListView = UIHostingController(rootView: SearchListView(searchInteractor: searchInteractor))
+        searchListViewController = searchListView
         searchListViewController.view.translatesAutoresizingMaskIntoConstraints = false
-        searchListViewController.delegate = self
+        searchListViewController.view.backgroundColor = .clear
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -267,15 +293,11 @@ class MapFloatingPanelController: VisualEffectViewController,
         mapPanelDelegate?.mapPanelController(self, didSelectStop: stop.id)
     }
 
-    func searchInteractorNewResultsAvailable(_ searchInteractor: SearchInteractor) {
-        searchListViewController.updateSearch()
-    }
-
     func searchInteractorClearRecentSearches(_ searchInteractor: SearchInteractor) {
         let alertController = UIAlertController.deletionAlert(title: Strings.clearRecentSearchesConfirmation) { [weak self] _ in
             guard let self = self else { return }
             self.application.userDataStore.deleteAllRecentMapItems()
-            self.searchListViewController.updateSearch()
+            self.searchInteractor.searchModeObjects(text: searchBarText)
         }
 
         present(alertController, animated: true, completion: nil)
@@ -287,7 +309,7 @@ class MapFloatingPanelController: VisualEffectViewController,
 
     public func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {
         searchBarText = searchText
-        searchListViewController.updateSearch()
+        searchInteractor.searchModeObjects(text: searchBarText)
     }
 
     public func searchBarTextDidBeginEditing(_ searchBar: UISearchBar) {

@@ -8,7 +8,6 @@
 //
 
 import Foundation
-import Combine
 import SwiftUI
 import OBAKitCore
 
@@ -45,9 +44,48 @@ class ScheduleForStopViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Private Properties
+    // MARK: - Stop-Focused Schedule
 
-    private var cancellables = Set<AnyCancellable>()
+    /// A single departure for the selected stop and route
+    struct ScheduledDeparture: Identifiable, Hashable {
+        // Use a composite ID to prevent duplicates (Trip ID + Time)
+        var id: String {
+            "\(tripID)-\(time.timeIntervalSince1970)"
+        }
+        let tripID: String
+        let time: Date
+        let headsign: String
+    }
+
+    /// All departures at this stop for the currently selected route and date
+    var departuresForSelectedRoute: [ScheduledDeparture] {
+        guard
+            let scheduleData = scheduleData,
+            let routeID = selectedRouteID,
+            let routeSchedule = scheduleData.stopRouteSchedules.first(where: { $0.routeID == routeID })
+        else {
+            return []
+        }
+
+        var departures: [ScheduledDeparture] = []
+
+        for directionSchedule in routeSchedule.stopRouteDirectionSchedules {
+            let directionHeadsign = directionSchedule.tripHeadsign
+
+            for stopTime in directionSchedule.scheduleStopTimes {
+                let headsign = stopTime.stopHeadsign.isEmpty ? directionHeadsign : stopTime.stopHeadsign
+
+                let departure = ScheduledDeparture(
+                    tripID: stopTime.tripID,
+                    time: stopTime.departureDate,
+                    headsign: headsign
+                )
+                departures.append(departure)
+            }
+        }
+
+        return departures.sorted { $0.time < $1.time }
+    }
 
     // MARK: - Initialization
 
@@ -55,17 +93,6 @@ class ScheduleForStopViewModel: ObservableObject {
         self.stopID = stopID
         self.application = application
         self.selectedDate = initialDate
-
-        // Observe date changes and refetch
-        $selectedDate
-            .dropFirst()
-            .removeDuplicates { Calendar.current.isDate($0, inSameDayAs: $1) }
-            .sink { [weak self] _ in
-                Task { [weak self] in
-                    await self?.fetchSchedule()
-                }
-            }
-            .store(in: &cancellables)
     }
 
     // MARK: - Public Methods
@@ -85,9 +112,12 @@ class ScheduleForStopViewModel: ObservableObject {
             let response = try await apiService.getScheduleForStop(stopID: stopID, date: selectedDate)
             scheduleData = response.entry
 
-            // Auto-select the first route if none is selected
-            if selectedRouteID == nil, let firstRoute = scheduleData?.stopRouteSchedules.first {
-                selectedRouteID = firstRoute.routeID
+            // Validation - If the previously selected route doesn't exist on this new date, switch to the first available one.
+            if let routeID = selectedRouteID,
+               !(response.entry.stopRouteSchedules.contains(where: { $0.routeID == routeID })) {
+                selectedRouteID = response.entry.stopRouteSchedules.first?.routeID
+            } else if selectedRouteID == nil {
+                selectedRouteID = response.entry.stopRouteSchedules.first?.routeID
             }
         } catch {
             self.error = error

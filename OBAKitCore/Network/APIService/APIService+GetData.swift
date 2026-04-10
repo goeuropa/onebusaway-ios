@@ -83,8 +83,13 @@ extension APIService {
 
         do {
             return try decoder.decode(T.self, from: data)
+        } catch let error as DecodingError {
+            let message = DecodingErrorReporter.message(from: error)
+            logger.error("Decoder failed for \(url, privacy: .public): \(message, privacy: .public)")
+            DecodingErrorReporter.report(error: error, url: url, httpMethod: "GET")
+            throw error
         } catch {
-            logger.error("Decoder failed for \(url, privacy: .public): \(error, privacy: .public)")
+            logger.error("Decoder failed for \(url, privacy: .public): \(error.localizedDescription, privacy: .public)")
             throw error
         }
     }
