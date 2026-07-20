@@ -10,6 +10,8 @@
 import Foundation
 import MapKit
 
+// swiftlint:disable file_length
+
 @objc(OBASelectedTab) public enum SelectedTab: Int {
     case map, recentStops, bookmarks, vehicles, settings
 }
@@ -208,7 +210,14 @@ public protocol UserDataStore: NSObjectProtocol {
     /// - Parameter userIdentifier: The user's UUID
     func markSurveyForLater(surveyId: Int, userIdentifier: String)
 
-    /// Checks if a survey should be shown again based on app launch count
+    /// Checks whether a survey has been deferred via "show later".
+    /// - Parameter surveyId: The ID of the survey to check
+    /// - Parameter userIdentifier: The user's UUID
+    /// - Returns: True if the survey is currently marked for later.
+    func isSurveyMarkedForLater(surveyId: Int, userIdentifier: String) -> Bool
+
+    /// Checks if a deferred ("show later") survey is due to be shown again,
+    /// based on the number of app launches since it was deferred.
     /// - Parameter surveyId: The ID of the survey to check
     /// - Parameter userIdentifier: The user's UUID
     /// - Returns: True if the survey should be shown again
@@ -282,6 +291,20 @@ public protocol UserDataStore: NSObjectProtocol {
     ///   - agencyIDs: All agency IDs to update.
     func setAllAgenciesEnabledForVehicleFeed(_ enabled: Bool, agencyIDs: [String])
 
+    // MARK: - Walking Speed
+
+    /// The user's preferred walking speed in meters per second.
+    var walkingSpeedMetersPerSecond: Double { get set }
+
+    /// The source of the walking speed value (manual preset or HealthKit).
+    var walkingSpeedSource: WalkingSpeedSource { get set }
+
+    // MARK: - Alarm Lead Time
+
+    /// The user's preferred alarm lead time in minutes for one-tap alarms on
+    /// the Stop page. Adjustable per-alarm afterward. Defaults to 5.
+    var defaultAlarmLeadTimeMinutes: Int { get set }
+
 }
 
 // MARK: - Survey Tracking Data Models
@@ -290,26 +313,24 @@ public protocol UserDataStore: NSObjectProtocol {
 public struct CompletedSurvey: Codable, Hashable {
     public let surveyId: Int
     public let userIdentifier: String
-    public let completedAt: Date
 
-    public init(surveyId: Int, userIdentifier: String, completedAt: Date = Date()) {
+    public init(surveyId: Int, userIdentifier: String) {
         self.surveyId = surveyId
         self.userIdentifier = userIdentifier
-        self.completedAt = completedAt
     }
 }
 
-/// Represents a survey marked for later viewing
+/// Represents a survey marked for later viewing. `appLaunchCountWhenMarked`
+/// records the launch count at deferral so the survey can be re-shown a fixed
+/// number of launches later (see `shouldShowSurveyLater`).
 public struct SurveyForLater: Codable, Hashable {
     public let surveyId: Int
     public let userIdentifier: String
-    public let markedAt: Date
     public let appLaunchCountWhenMarked: Int
 
-    public init(surveyId: Int, userIdentifier: String, markedAt: Date = Date(), appLaunchCountWhenMarked: Int) {
+    public init(surveyId: Int, userIdentifier: String, appLaunchCountWhenMarked: Int) {
         self.surveyId = surveyId
         self.userIdentifier = userIdentifier
-        self.markedAt = markedAt
         self.appLaunchCountWhenMarked = appLaunchCountWhenMarked
     }
 }
@@ -327,6 +348,26 @@ public protocol StopPreferencesStore: NSObjectProtocol {
     /// - Parameter stopID: The ID of the `Stop` for which `StopPreferences` will be retrieved.
     /// - Parameter region: The `Region` in which `stop` exists.
     func preferences(stopID: StopID, region: Region) -> StopPreferences
+
+    /// `true` when preferences have been explicitly saved for this `Stop`.
+    ///
+    /// `preferences(stopID:region:)` always returns a value, so its result can't
+    /// distinguish "the user chose the defaults" from "the user never chose
+    /// anything" — callers that need that distinction (e.g. seeding a stop with a
+    /// last-used sort mode only when it is untouched) ask here instead.
+    /// - Parameter stopID: The ID of the `Stop` to check.
+    /// - Parameter region: The `Region` in which `stop` exists.
+    func hasPreferences(stopID: StopID, region: Region) -> Bool
+}
+
+// MARK: - UserDataStore Defaults
+
+/// Canonical defaults for `UserDefaultsStore` configuration. Shared with OBAKit's UI
+/// so registered defaults and UI defaults remain synchronized.
+public enum UserDataStoreDefaults {
+    /// Default lead time in minutes for one-tap alarms on the Stop page.
+    /// Referenced by OBAKit's `AlarmLeadTime.defaultMinutes`.
+    public static let alarmLeadTimeMinutes = 5
 }
 
 // MARK: - UserDefaultsStore
@@ -356,12 +397,20 @@ public class UserDefaultsStore: NSObject, UserDataStore, StopPreferencesStore {
         static let isSurveyEnabled = "UserDataStore.isSurveyEnabled"
         static let nextSurveyReminderDate = "UserDataStore.nextSurveyReminderDate"
         static let alwaysShowSurveysOnStops = "UserDataStore.alwaysShowSurveysOnStops"
+        static let walkingSpeedMetersPerSecond = "UserDataStore.walkingSpeedMetersPerSecond"
+        static let walkingSpeedSource = "UserDataStore.walkingSpeedSource"
+        static let defaultAlarmLeadTimeMinutes = "UserDataStore.defaultAlarmLeadTimeMinutes"
     }
 
     public init(userDefaults: UserDefaults) {
         self.userDefaults = userDefaults
 
-        self.userDefaults.register(defaults: [UserDefaultsKeys.debugMode: false])
+        self.userDefaults.register(defaults: [
+            UserDefaultsKeys.debugMode: false,
+            UserDefaultsKeys.walkingSpeedMetersPerSecond: WalkingSpeed.defaultMetersPerSecond,
+            UserDefaultsKeys.walkingSpeedSource: WalkingSpeedSource.manual.rawValue,
+            UserDefaultsKeys.defaultAlarmLeadTimeMinutes: UserDataStoreDefaults.alarmLeadTimeMinutes
+        ])
     }
 
     // MARK: - Debug Mode
@@ -720,7 +769,15 @@ public class UserDefaultsStore: NSObject, UserDataStore, StopPreferencesStore {
     }
 
     public func delete(alarm: Alarm) {
-        alarms.removeAll { $0 == alarm }
+        // Match on `url` — the stable server-side identifier for the alarm. Full
+        // `Alarm` equality is now date-precision-safe (see Alarm.isEqual), but `url`
+        // is still the right notion of identity here: two alarms with the same URL
+        // are the same alarm regardless of any other field drift.
+        let matches = alarms.filter { $0.url == alarm.url }
+        if matches.count > 1 {
+            Logger.warn("delete(alarm:) found \(matches.count) alarms sharing url \(alarm.url) — removing all.")
+        }
+        alarms.removeAll { $0.url == alarm.url }
     }
 
     // MARK: - Proximity Alerts
@@ -797,6 +854,10 @@ public class UserDefaultsStore: NSObject, UserDataStore, StopPreferencesStore {
         surveysForLater.append(surveyForLater)
 
         self.surveysForLater = surveysForLater
+    }
+
+    public func isSurveyMarkedForLater(surveyId: Int, userIdentifier: String) -> Bool {
+        return surveysForLater.contains { $0.surveyId == surveyId && $0.userIdentifier == userIdentifier }
     }
 
     public func shouldShowSurveyLater(surveyId: Int, userIdentifier: String) -> Bool {
@@ -892,6 +953,10 @@ public class UserDefaultsStore: NSObject, UserDataStore, StopPreferencesStore {
         let prefs = stopPreferences
         let key = stopPreferencesKey(id: stopID, region: region)
         return prefs[key] ?? StopPreferences()
+    }
+
+    public func hasPreferences(stopID: StopID, region: Region) -> Bool {
+        stopPreferences[stopPreferencesKey(id: stopID, region: region)] != nil
     }
 
     private func stopPreferencesKey(id: String, region: Region) -> String {
@@ -1001,6 +1066,39 @@ public class UserDefaultsStore: NSObject, UserDataStore, StopPreferencesStore {
             disabledVehicleFeedAgencyIDs = []
         } else {
             disabledVehicleFeedAgencyIDs = Set(agencyIDs)
+        }
+    }
+
+    // MARK: - Walking Speed
+
+    public var walkingSpeedMetersPerSecond: Double {
+        get {
+            let stored = userDefaults.double(forKey: UserDefaultsKeys.walkingSpeedMetersPerSecond)
+            return min(max(stored, WalkingSpeed.validRange.lowerBound), WalkingSpeed.validRange.upperBound)
+        }
+        set {
+            let clamped = min(max(newValue, WalkingSpeed.validRange.lowerBound), WalkingSpeed.validRange.upperBound)
+            userDefaults.set(clamped, forKey: UserDefaultsKeys.walkingSpeedMetersPerSecond)
+        }
+    }
+
+    public var walkingSpeedSource: WalkingSpeedSource {
+        get {
+            WalkingSpeedSource(rawValue: userDefaults.integer(forKey: UserDefaultsKeys.walkingSpeedSource)) ?? .manual
+        }
+        set {
+            userDefaults.set(newValue.rawValue, forKey: UserDefaultsKeys.walkingSpeedSource)
+        }
+    }
+
+    // MARK: - Alarm Lead Time
+
+    public var defaultAlarmLeadTimeMinutes: Int {
+        get {
+            userDefaults.integer(forKey: UserDefaultsKeys.defaultAlarmLeadTimeMinutes)
+        }
+        set {
+            userDefaults.set(newValue, forKey: UserDefaultsKeys.defaultAlarmLeadTimeMinutes)
         }
     }
 

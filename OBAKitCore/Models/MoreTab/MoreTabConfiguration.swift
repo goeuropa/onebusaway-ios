@@ -10,7 +10,7 @@
 import Foundation
 
 /// Represents a customizable link item in the More tab.
-public struct MoreTabLinkItem {
+public struct MoreTabLinkItem: Sendable {
     public let title: String
     public let url: URL
 
@@ -29,7 +29,7 @@ public struct MoreTabLinkItem {
 }
 
 /// Configuration for the More tab, read from OBAKitConfig.MoreTab in Info.plist.
-public struct MoreTabConfiguration {
+public struct MoreTabConfiguration: Sendable {
 
     /// Custom support text shown in header. nil = use default localized string.
     public let headerSupportText: String?
@@ -47,10 +47,12 @@ public struct MoreTabConfiguration {
     public let customLinks: [MoreTabLinkItem]
 
     /// Default configuration matching current hardcoded behavior.
+    /// `translateURL` defaults to nil, which hides the "Translate the App" row;
+    /// white-label apps can opt in by setting `TranslateURL` in their config.
     public static let `default` = MoreTabConfiguration(
         headerSupportText: nil,
         showHelpOutSection: true,
-        translateURL: URL(string: "https://www.transifex.com/open-transit-software-foundation/onebusaway-ios/"),
+        translateURL: nil,
         developURL: URL(string: "https://github.com/oneBusAway/onebusaway-ios"),
         customLinks: []
     )
