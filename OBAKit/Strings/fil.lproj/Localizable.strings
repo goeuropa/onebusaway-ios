@@ -933,23 +933,17 @@
 /* Settings > Accessibility section > Haptic feedback on reload */
 "settings_controller.accessibility_section.enable_reload_haptic" = "Haptic feedback kapag nag-reload";
 
+/* Settings > Accessibility section > Toggle that renders stop page route badges as a thin color bar beside plain text instead of a colored square */
+"settings_controller.accessibility_section.reduce_stop_colors" = "Bawasan ang mga kulay sa pahina ng hintuan";
+
 /* Settings > Accessibility section > Show route labels on the map */
 "settings_controller.accessibility_section.show_stop_annotation_labels" = "Ipakita ang mga label ng ruta sa mapa";
 
 /* Settings > Accessibility section title */
 "settings_controller.accessibility_section.title" = "Accessibility";
 
-/* Settings > Alerts section > default minutes-before for one-tap departure alarms */
-"settings_controller.alerts_section.default_alarm_lead_time" = "Default na lead time ng paalala";
-
-/* Settings > Alerts section > Display test alerts */
+/* Settings > Debug section > Display test alerts */
 "settings_controller.alerts_section.display_test_alerts" = "Ipakita ang mga test alert";
-
-/* Lead-time segment label. %d is minutes. */
-"settings_controller.alerts_section.lead_time_fmt" = "%d min";
-
-/* Settings > Alerts section title */
-"settings_controller.alerts_section.title" = "Mga Alerto ng Ahensya";
 
 /* Settings > Debug section > Refresh regions on every launch */
 "settings_controller.debug_section.always_refresh_regions" = "I-refresh ang mga rehiyon sa bawat paglunsad";

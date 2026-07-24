@@ -201,6 +201,21 @@ class UserDefaultsStoreTests: OBATestCase {
         expect(newStore.debugMode).to(beTrue())
     }
 
+    // MARK: - Stop UI Reduced Colors
+
+    func test_stopUIReducedColors_defaultValue() {
+        expect(self.userDefaultsStore.stopUIReducedColors).to(beFalse())
+    }
+
+    func test_stopUIReducedColors_setValue_persistsUnderTheAppStorageKey() {
+        userDefaultsStore.stopUIReducedColors = true
+        expect(self.userDefaultsStore.stopUIReducedColors).to(beTrue())
+        // The @AppStorage readers and the Eureka form must see the same key,
+        // and it must stay dot-free or KVO observation silently stops firing.
+        expect(UserDefaultsStore.stopUIReducedColorsKey) == "stopUIReducedColors"
+        expect(self.userDefaultsStore.userDefaults.bool(forKey: UserDefaultsStore.stopUIReducedColorsKey)).to(beTrue())
+    }
+
     // MARK: - Survey Properties
 
     func test_surveyUserIdentifier_generatesUUID() {
@@ -309,14 +324,17 @@ class UserDefaultsStoreTests: OBATestCase {
 
     // MARK: - Default Alarm Lead Time
 
-    func test_defaultAlarmLeadTime_defaultValueAndRoundTrip() {
-        expect(self.userDefaultsStore.defaultAlarmLeadTimeMinutes) == 5
-
-        userDefaultsStore.defaultAlarmLeadTimeMinutes = 10
+    func test_defaultAlarmLeadTime_is10Minutes() {
         expect(self.userDefaultsStore.defaultAlarmLeadTimeMinutes) == 10
+    }
+
+    func test_defaultAlarmLeadTime_ignoresAndClearsLegacyStoredValue() {
+        userDefaults.set(2, forKey: "UserDataStore.defaultAlarmLeadTimeMinutes")
 
         let newStore = UserDefaultsStore(userDefaults: userDefaults)
+
         expect(newStore.defaultAlarmLeadTimeMinutes) == 10
+        expect(self.userDefaults.object(forKey: "UserDataStore.defaultAlarmLeadTimeMinutes")).to(beNil())
     }
 
 }

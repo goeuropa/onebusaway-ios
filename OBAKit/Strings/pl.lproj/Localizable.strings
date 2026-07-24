@@ -933,23 +933,17 @@
 /* Settings > Accessibility section > Haptic feedback on reload */
 "settings_controller.accessibility_section.enable_reload_haptic" = "Haptyczna informacja zwrotna po przeładowaniu";
 
+/* Settings > Accessibility section > Toggle that renders stop page route badges as a thin color bar beside plain text instead of a colored square */
+"settings_controller.accessibility_section.reduce_stop_colors" = "Zmniejsz liczbę kolorów na stronie przystanku";
+
 /* Settings > Accessibility section > Show route labels on the map */
 "settings_controller.accessibility_section.show_stop_annotation_labels" = "Pokaż etykiety tras na mapie";
 
 /* Settings > Accessibility section title */
 "settings_controller.accessibility_section.title" = "Dostępność";
 
-/* Settings > Alerts section > default minutes-before for one-tap departure alarms */
-"settings_controller.alerts_section.default_alarm_lead_time" = "Domyślne wyprzedzenie alarmu";
-
-/* Settings > Alerts section > Display test alerts */
+/* Settings > Debug section > Display test alerts */
 "settings_controller.alerts_section.display_test_alerts" = "Wyświetl testowe alerty";
-
-/* Lead-time segment label. %d is minutes. */
-"settings_controller.alerts_section.lead_time_fmt" = "%d min";
-
-/* Settings > Alerts section title */
-"settings_controller.alerts_section.title" = "Alerty przewoźnika";
 
 /* Settings > Debug section > Refresh regions on every launch */
 "settings_controller.debug_section.always_refresh_regions" = "Odśwież regiony przy każdym uruchomieniu";

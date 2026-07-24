@@ -36,6 +36,11 @@ public protocol UserDataStore: NSObjectProtocol {
 
     var debugMode: Bool { get set }
 
+    /// Whether the stop page renders route badges in reduced-color form
+    /// (thin route-color bar + label-colored text). Surfaced in
+    /// Settings > Accessibility.
+    var stopUIReducedColors: Bool { get set }
+
     // MARK: - Bookmark Groups
 
     /// Retrieves a list of `BookmarkGroup` objects.
@@ -301,9 +306,9 @@ public protocol UserDataStore: NSObjectProtocol {
 
     // MARK: - Alarm Lead Time
 
-    /// The user's preferred alarm lead time in minutes for one-tap alarms on
-    /// the Stop page. Adjustable per-alarm afterward. Defaults to 5.
-    var defaultAlarmLeadTimeMinutes: Int { get set }
+    /// The alarm lead time in minutes for one-tap alarms on the Stop page.
+    /// Adjustable per-alarm afterward.
+    var defaultAlarmLeadTimeMinutes: Int { get }
 
 }
 
@@ -367,7 +372,7 @@ public protocol StopPreferencesStore: NSObjectProtocol {
 public enum UserDataStoreDefaults {
     /// Default lead time in minutes for one-tap alarms on the Stop page.
     /// Referenced by OBAKit's `AlarmLeadTime.defaultMinutes`.
-    public static let alarmLeadTimeMinutes = 5
+    public static let alarmLeadTimeMinutes = 10
 }
 
 // MARK: - UserDefaultsStore
@@ -400,17 +405,30 @@ public class UserDefaultsStore: NSObject, UserDataStore, StopPreferencesStore {
         static let walkingSpeedMetersPerSecond = "UserDataStore.walkingSpeedMetersPerSecond"
         static let walkingSpeedSource = "UserDataStore.walkingSpeedSource"
         static let defaultAlarmLeadTimeMinutes = "UserDataStore.defaultAlarmLeadTimeMinutes"
+        static let stopUIReducedColors = UserDefaultsStore.stopUIReducedColorsKey
     }
+
+    /// The defaults key backing `stopUIReducedColors`, public so the stop
+    /// page's `@AppStorage` readers and the Settings form reference the same
+    /// string. Deliberately dot-free, unlike its `UserDataStore.`-prefixed
+    /// neighbors: `@AppStorage` observes the key via KVO, which treats dots
+    /// as key-path separators and silently never fires. See
+    /// docs/superpowers/specs/2026-07-20-stop-ui-accessibility-design.md §3.
+    public static let stopUIReducedColorsKey = "stopUIReducedColors"
 
     public init(userDefaults: UserDefaults) {
         self.userDefaults = userDefaults
 
         self.userDefaults.register(defaults: [
             UserDefaultsKeys.debugMode: false,
+            UserDefaultsKeys.stopUIReducedColors: false,
             UserDefaultsKeys.walkingSpeedMetersPerSecond: WalkingSpeed.defaultMetersPerSecond,
-            UserDefaultsKeys.walkingSpeedSource: WalkingSpeedSource.manual.rawValue,
-            UserDefaultsKeys.defaultAlarmLeadTimeMinutes: UserDataStoreDefaults.alarmLeadTimeMinutes
+            UserDefaultsKeys.walkingSpeedSource: WalkingSpeedSource.manual.rawValue
         ])
+
+        // The alarm lead time used to be user-configurable; the setting has been removed
+        // and everyone gets `UserDataStoreDefaults.alarmLeadTimeMinutes` now.
+        self.userDefaults.removeObject(forKey: UserDefaultsKeys.defaultAlarmLeadTimeMinutes)
     }
 
     // MARK: - Debug Mode
@@ -421,6 +439,17 @@ public class UserDefaultsStore: NSObject, UserDataStore, StopPreferencesStore {
         }
         set {
             userDefaults.set(newValue, forKey: UserDefaultsKeys.debugMode)
+        }
+    }
+
+    // MARK: - Stop UI Reduced Colors
+
+    public var stopUIReducedColors: Bool {
+        get {
+            return userDefaults.bool(forKey: UserDefaultsKeys.stopUIReducedColors)
+        }
+        set {
+            userDefaults.set(newValue, forKey: UserDefaultsKeys.stopUIReducedColors)
         }
     }
 
@@ -1094,12 +1123,7 @@ public class UserDefaultsStore: NSObject, UserDataStore, StopPreferencesStore {
     // MARK: - Alarm Lead Time
 
     public var defaultAlarmLeadTimeMinutes: Int {
-        get {
-            userDefaults.integer(forKey: UserDefaultsKeys.defaultAlarmLeadTimeMinutes)
-        }
-        set {
-            userDefaults.set(newValue, forKey: UserDefaultsKeys.defaultAlarmLeadTimeMinutes)
-        }
+        UserDataStoreDefaults.alarmLeadTimeMinutes
     }
 
     // MARK: - Private Helpers

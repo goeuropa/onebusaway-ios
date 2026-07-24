@@ -933,23 +933,17 @@
 /* Settings > Accessibility section > Haptic feedback on reload */
 "settings_controller.accessibility_section.enable_reload_haptic" = "Phản hồi rung khi tải lại";
 
+/* Settings > Accessibility section > Toggle that renders stop page route badges as a thin color bar beside plain text instead of a colored square */
+"settings_controller.accessibility_section.reduce_stop_colors" = "Giảm màu sắc trên trang điểm dừng";
+
 /* Settings > Accessibility section > Show route labels on the map */
 "settings_controller.accessibility_section.show_stop_annotation_labels" = "Hiển thị nhãn tuyến trên bản đồ";
 
 /* Settings > Accessibility section title */
 "settings_controller.accessibility_section.title" = "Trợ năng";
 
-/* Settings > Alerts section > default minutes-before for one-tap departure alarms */
-"settings_controller.alerts_section.default_alarm_lead_time" = "Thời gian nhắc trước mặc định";
-
-/* Settings > Alerts section > Display test alerts */
+/* Settings > Debug section > Display test alerts */
 "settings_controller.alerts_section.display_test_alerts" = "Hiển thị cảnh báo thử nghiệm";
-
-/* Lead-time segment label. %d is minutes. */
-"settings_controller.alerts_section.lead_time_fmt" = "%d phút";
-
-/* Settings > Alerts section title */
-"settings_controller.alerts_section.title" = "Cảnh báo từ đơn vị vận tải";
 
 /* Settings > Debug section > Refresh regions on every launch */
 "settings_controller.debug_section.always_refresh_regions" = "Làm mới khu vực mỗi lần khởi chạy";

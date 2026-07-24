@@ -933,23 +933,17 @@
 /* Settings > Accessibility section > Haptic feedback on reload */
 "settings_controller.accessibility_section.enable_reload_haptic" = "새로고침 시 햅틱 피드백";
 
+/* Settings > Accessibility section > Toggle that renders stop page route badges as a thin color bar beside plain text instead of a colored square */
+"settings_controller.accessibility_section.reduce_stop_colors" = "정류장 페이지에서 색상 줄이기";
+
 /* Settings > Accessibility section > Show route labels on the map */
 "settings_controller.accessibility_section.show_stop_annotation_labels" = "지도에 노선 레이블 표시";
 
 /* Settings > Accessibility section title */
 "settings_controller.accessibility_section.title" = "손쉬운 사용";
 
-/* Settings > Alerts section > default minutes-before for one-tap departure alarms */
-"settings_controller.alerts_section.default_alarm_lead_time" = "기본 미리 알림 시간";
-
-/* Settings > Alerts section > Display test alerts */
+/* Settings > Debug section > Display test alerts */
 "settings_controller.alerts_section.display_test_alerts" = "테스트 알림 표시";
-
-/* Lead-time segment label. %d is minutes. */
-"settings_controller.alerts_section.lead_time_fmt" = "%d분";
-
-/* Settings > Alerts section title */
-"settings_controller.alerts_section.title" = "운영 기관 알림";
 
 /* Settings > Debug section > Refresh regions on every launch */
 "settings_controller.debug_section.always_refresh_regions" = "실행할 때마다 지역 새로고침";
