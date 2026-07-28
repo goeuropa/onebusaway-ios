@@ -11,6 +11,9 @@ targets:
       - path: Apps/OneBusAway
         name: App
         group: OneBusAway
+        # gpx files are simulated-location fixtures for schemes, not app
+        # resources; keep them out of the bundle.
+        excludes: ["gpx_files"]
       - path: Apps/Shared/CommonClient
         name: Common
         group: OneBusAway
@@ -60,6 +63,7 @@ targets:
         OBAKitConfig:
           AppDevelopersEmailAddress: iphone-app@onebusaway.org
           AppGroup: group.org.onebusaway.iphone
+          AppStoreID: "329380089"
           BundledRegionsFileName: regions.json
           Donations:
             Enabled: true
