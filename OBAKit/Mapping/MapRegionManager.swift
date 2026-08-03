@@ -76,6 +76,9 @@ public class MapRegionManager: NSObject,
 
     private var regionChangeRequestTimer: Timer?
 
+    /// Debounced request task for SwiftUI hosts driving `scheduleStopsRequest(in:)`.
+    private var pendingStopsRequestTask: Task<Void, Never>?
+
     private var userLocationAnnotationView: PulsingAnnotationView? {
         didSet {
             updateUserHeadingDisplay()
@@ -87,7 +90,8 @@ public class MapRegionManager: NSObject,
         mapView.mapType = .mutedStandard
         mapView.showsUserLocation = true
         mapView.isRotateEnabled = false
-        mapView.selectableMapFeatures = [.physicalFeatures, .pointsOfInterest]
+        // `pointOfInterestFilter` / `selectableMapFeatures` are applied in
+        // `applyPointsOfInterestVisibility()` once UserDefaults is registered.
 
         return mapView
     }()
@@ -145,6 +149,38 @@ public class MapRegionManager: NSObject,
     }
     private let mapViewShowsHeadingKey = "mapRegionManager.mapViewShowsHeadingKey"
 
+    /// Whether Apple MapKit Points of Interest (restaurants, shops, etc.) appear
+    /// on the browse map. Riders complained about clutter; this is the Map sheet
+    /// / Settings preference that turns them off (#1246).
+    ///
+    /// `true` by default — matches MapKit's stock appearance.
+    public var mapViewShowsPointsOfInterest: Bool {
+        get { application.userDefaults.bool(forKey: Self.mapViewShowsPointsOfInterestKey) }
+        set {
+            guard mapViewShowsPointsOfInterest != newValue else { return }
+            application.userDefaults.set(newValue, forKey: Self.mapViewShowsPointsOfInterestKey)
+            applyPointsOfInterestVisibility()
+            NotificationCenter.default.post(name: .mapPointsOfInterestVisibilityDidChange, object: nil)
+        }
+    }
+
+    /// UserDefaults key for ``mapViewShowsPointsOfInterest``. Public so Settings
+    /// and tests can address the same store the Map sheet writes.
+    public static let mapViewShowsPointsOfInterestKey = "mapRegionManager.mapViewShowsPointsOfInterest"
+
+    /// Applies the current POI preference to `mapView`. Also drops
+    /// `.pointsOfInterest` from `selectableMapFeatures` when hidden so riders
+    /// can't still tap ghosts that aren't drawn.
+    func applyPointsOfInterestVisibility() {
+        if mapViewShowsPointsOfInterest {
+            mapView.pointOfInterestFilter = .includingAll
+            mapView.selectableMapFeatures = [.physicalFeatures, .pointsOfInterest]
+        } else {
+            mapView.pointOfInterestFilter = .excludingAll
+            mapView.selectableMapFeatures = [.physicalFeatures]
+        }
+    }
+
     /// Provides storage for the last visible map rect of the map view.
     ///
     /// In the event that this value is unavailable, the getter will try to offer up an alternative,
@@ -200,6 +236,7 @@ public class MapRegionManager: NSObject,
             mapViewShowsHeadingKey: true,
             mapViewMapTypeKey: MKMapType.mutedStandard.rawValue,
             MapRegionManager.mapViewShowsStopAnnotationLabelsDefaultsKey: true,
+            MapRegionManager.mapViewShowsPointsOfInterestKey: true,
         ])
 
         super.init()
@@ -211,6 +248,7 @@ public class MapRegionManager: NSObject,
         mapView.showsScale = mapViewShowsScale
         mapView.showsTraffic = mapViewShowsTraffic
         mapView.mapType = userSelectedMapType
+        applyPointsOfInterestVisibility()
 
         registerAnnotationViews(mapView: mapView)
 
@@ -228,6 +266,7 @@ public class MapRegionManager: NSObject,
         application.locationService.removeDelegate(self)
         application.regionsService.removeDelegate(self)
         regionChangeRequestTimer?.invalidate()
+        pendingStopsRequestTask?.cancel()
 
         // Cancel all ongoing geocoding operations
         for geocoder in activeGeocoders.values {
@@ -248,78 +287,169 @@ public class MapRegionManager: NSObject,
         mapView.registerAnnotationView(StopAnnotationView.self)
         mapView.registerAnnotationView(PulsingAnnotationView.self)
         mapView.registerAnnotationView(PulsingVehicleAnnotationView.self)
+        mapView.registerAnnotationView(RentalAnnotationView.self)
+        mapView.registerAnnotationView(RentalClusterAnnotationView.self)
         mapView.register(UserPinAnnotationView.self, forAnnotationViewWithReuseIdentifier: "UserDroppedPin")
     }
 
-    // MARK: - Data Loading
+    // MARK: - Map Layers
 
-    func requestDataForMapRegion() async {
-        guard let apiService = application.apiService else {
-            return
-        }
+    /// Registered toggleable data layers, in Map sheet order.
+    public private(set) var mapLayers: [MapLayer] = []
 
-        await MainActor.run {
-            notifyDelegatesDataLoadingStarted()
-        }
+    /// The UserDefaults key persisting a layer's on/off state.
+    public static func mapLayerDefaultsKey(id: String) -> String {
+        "mapLayer.\(id).enabled"
+    }
 
-        defer {
-            Task { @MainActor in
-                notifyDelegatesDataLoadingFinished()
-            }
-        }
+    /// Registers a layer, registers its persistence default, and activates it when
+    /// its persisted state says on. Layers appear in the Map sheet in registration
+    /// order within their group.
+    public func registerMapLayer(_ layer: MapLayer) {
+        guard !mapLayers.contains(where: { $0.id == layer.id }) else { return }
 
-        var mapRegion = mapView.region
-        mapRegion.span.latitudeDelta *= preferredLoadDataRegionFudgeFactor
-        mapRegion.span.longitudeDelta *= preferredLoadDataRegionFudgeFactor
+        application.userDefaults.register(defaults: [
+            Self.mapLayerDefaultsKey(id: layer.id): layer.isEnabledByDefault
+        ])
+        mapLayers.append(layer)
 
-        do {
-            let stops = try await apiService.getStops(region: mapRegion).list
-
-            await MainActor.run {
-                // Some UI code is dependent on this being changed on Main.
-                self.stops = stops
-            }
-
-            // Save to cache in the background for offline use.
-            // See: https://github.com/OneBusAway/onebusaway-ios/issues/62
-            if let regionId = application.currentRegion?.regionIdentifier,
-               let repository = application.stopCacheRepository {
-                repository.saveStops(stops, regionId: regionId)
-            }
-        } catch {
-            // Don't attempt cache fallback for cancelled tasks (e.g., user navigated away).
-            if error is CancellationError { return }
-
-            Logger.error("API stop request failed, attempting cache fallback: \(error)")
-
-            // On API failure, try serving from cache before showing error
-            if let regionId = application.currentRegion?.regionIdentifier,
-               let repository = application.stopCacheRepository {
-                let minLat = mapRegion.center.latitude - mapRegion.span.latitudeDelta / 2.0
-                let maxLat = mapRegion.center.latitude + mapRegion.span.latitudeDelta / 2.0
-                let minLon = mapRegion.center.longitude - mapRegion.span.longitudeDelta / 2.0
-                let maxLon = mapRegion.center.longitude + mapRegion.span.longitudeDelta / 2.0
-
-                let cachedStops = repository.stopsInRegion(
-                    minLat: minLat, maxLat: maxLat,
-                    minLon: minLon, maxLon: maxLon,
-                    regionId: regionId
-                )
-
-                if !cachedStops.isEmpty {
-                    await MainActor.run {
-                        self.stops = cachedStops
-                    }
-                    return
-                }
-            }
-            await self.application.displayError(error)
+        if isMapLayerEnabled(id: layer.id) {
+            layer.activate()
+            forwardViewport(to: layer)
         }
     }
 
-    @objc func requestDataForMapRegion(_ timer: Timer) {
-        Task(priority: .utility) {
-            await requestDataForMapRegion()
+    /// Deactivates and removes a layer (e.g. when the region changes to one that
+    /// doesn't support it). The persisted preference is kept.
+    public func removeMapLayer(id: String) {
+        guard let index = mapLayers.firstIndex(where: { $0.id == id }) else { return }
+        let layer = mapLayers.remove(at: index)
+        if isMapLayerEnabled(id: id) {
+            layer.deactivate()
+        }
+    }
+
+    public func mapLayer(id: String) -> MapLayer? {
+        mapLayers.first { $0.id == id }
+    }
+
+    public func isMapLayerEnabled(id: String) -> Bool {
+        application.userDefaults.bool(forKey: Self.mapLayerDefaultsKey(id: id))
+    }
+
+    public func setMapLayerEnabled(_ enabled: Bool, id: String) {
+        guard isMapLayerEnabled(id: id) != enabled else { return }
+        application.userDefaults.set(enabled, forKey: Self.mapLayerDefaultsKey(id: id))
+
+        if let layer = mapLayer(id: id) {
+            if enabled {
+                layer.activate()
+                forwardViewport(to: layer)
+            } else {
+                layer.deactivate()
+            }
+        }
+
+        NotificationCenter.default.post(name: .mapLayerEnabledStateDidChange, object: id)
+        application.analytics?.reportEvent(
+            pageURL: "app://localhost/map",
+            label: AnalyticsLabels.mapLayerToggled,
+            value: "\(id):\(enabled ? "on" : "off")"
+        )
+    }
+
+    /// The UserDefaults key persisting the shared rental minimum-range threshold.
+    static let rentalMinimumRangeDefaultsKey = "mapLayer.rentals.minimumRangeMeters"
+
+    /// The minimum-range filter shared by the Bikes and Scooters layers — one
+    /// threshold, not one per layer.
+    ///
+    /// It lives here beside the per-layer enablement so `mapLayersDifferFromDefaults`
+    /// and `resetMapLayersToDefaults()` cover it, which is what makes the Map
+    /// sheet's Reset button honest. No `register(defaults:)` is needed: an unset
+    /// key reads as 0, which is exactly `.any`.
+    var rentalRangeFilter: RentalRangeFilter {
+        get {
+            RentalRangeFilter(
+                minimumRangeMeters: application.userDefaults.integer(forKey: Self.rentalMinimumRangeDefaultsKey)
+            )
+        }
+        set {
+            guard rentalRangeFilter != newValue else { return }
+            application.userDefaults.set(newValue.minimumRangeMeters, forKey: Self.rentalMinimumRangeDefaultsKey)
+
+            NotificationCenter.default.post(name: .rentalRangeFilterDidChange, object: nil)
+            application.analytics?.reportEvent(
+                pageURL: "app://localhost/map",
+                label: AnalyticsLabels.rentalRangeFilterChanged,
+                value: String(newValue.minimumRangeMeters)
+            )
+        }
+    }
+
+    /// The number of enabled, non-hidden layers — the basemap button's badge.
+    public var enabledMapLayerCount: Int {
+        mapLayers.filter { $0.availability != .unsupported && isMapLayerEnabled(id: $0.id) }.count
+    }
+
+    /// True when any layer's on/off state differs from its default, the rental
+    /// range filter is active *and visible*, or Points of Interest are hidden —
+    /// drives the Map sheet's Reset affordance. The filter row only renders when
+    /// a `.otherModes` layer is registered (rental layers are region-gated), so a
+    /// non-zero filter left over from another region must not offer a Reset that
+    /// changes nothing on screen.
+    public var mapLayersDifferFromDefaults: Bool {
+        if !mapViewShowsPointsOfInterest { return true }
+        if rentalRangeFilter != .any, mapLayers.contains(where: { $0.group == .otherModes }) { return true }
+        return mapLayers.contains { isMapLayerEnabled(id: $0.id) != $0.isEnabledByDefault }
+    }
+
+    /// Restores every registered layer to its default on/off state, clears the
+    /// rental range filter, and shows Points of Interest again.
+    public func resetMapLayersToDefaults() {
+        for layer in mapLayers {
+            setMapLayerEnabled(layer.isEnabledByDefault, id: layer.id)
+        }
+        rentalRangeFilter = .any
+        mapViewShowsPointsOfInterest = true
+    }
+
+    /// Whether stop annotations should render. True when no stops layer is
+    /// registered — the layer row is additive; its absence must not hide stops.
+    var isStopsLayerEnabled: Bool {
+        guard mapLayer(id: StopsMapLayer.layerID) != nil else { return true }
+        return isMapLayerEnabled(id: StopsMapLayer.layerID)
+    }
+
+    /// Called by `StopsMapLayer` when its toggle flips; re-renders stop annotations.
+    func stopsLayerVisibilityDidChange() {
+        if isStopsLayerEnabled {
+            displayUniqueStopAnnotations()
+        } else {
+            removeStopAnnotationsPreservingSelection()
+        }
+    }
+
+    /// Removes stop annotations for the layer toggle, but never a stop the rider is
+    /// actively looking at: a searched or selected stop is explicit user intent and
+    /// outranks the browse-layer preference (bookmarks get the same exemption).
+    private func removeStopAnnotationsPreservingSelection() {
+        let selectedStopIDs = Set(mapView.selectedAnnotations.compactMap { ($0 as? Stop)?.id })
+        let stopsToRemove = mapView.annotations.compactMap { $0 as? Stop }.filter { !selectedStopIDs.contains($0.id) }
+        mapView.removeAnnotations(stopsToRemove)
+    }
+
+    /// Feeds the current viewport to a layer, applying its zoom window: outside
+    /// the window the layer receives nil and removes its annotations.
+    private func forwardViewport(to layer: MapLayer) {
+        let visibleRect = mapView.visibleMapRect
+        let insideWindow = layer.zoomWindow.contains(visibleHeight: visibleRect.height)
+        layer.viewportDidChange(insideWindow ? visibleRect : nil)
+    }
+
+    private func updateMapLayers() {
+        for layer in mapLayers where isMapLayerEnabled(id: layer.id) {
+            forwardViewport(to: layer)
         }
     }
 
@@ -414,18 +544,24 @@ public class MapRegionManager: NSObject,
         }
     }
 
-    public private(set) var stops = [Stop]() {
-        didSet {
-            displayUniqueStopAnnotations()
-        }
+    public private(set) var stops = [Stop]()
+
+    /// UIKit publish: stores stops and diffs the manager's own `mapView`.
+    private func setStops(_ newStops: [Stop]) {
+        stops = newStops
+        displayUniqueStopAnnotations()
+    }
+
+    /// SwiftUI publish: stores stops and notifies delegates, skipping the
+    /// offscreen `mapView` diff SwiftUI hosts don't need.
+    private func publishStopsToDelegates(_ newStops: [Stop]) {
+        stops = newStops
+        notifyDelegatesStopsChanged()
     }
 
     private func displayUniqueStopAnnotations() {
-        var bookmarksHash = [StopID: Bookmark]()
         // When multiple bookmarks exist for the same stop, the last one in the bookmarks array takes precedence
-        for bm in bookmarks {
-            bookmarksHash[bm.stopID] = bm
-        }
+        let bookmarksHash = bookmarks.dedupedByStopID()
 
         let existingAnnotations = mapView.annotations
         let existingStopIDs = Set(existingAnnotations.compactMap { ($0 as? Stop)?.id })
@@ -482,11 +618,13 @@ public class MapRegionManager: NSObject,
         }
         mapView.addAnnotations(Array(bookmarksToAdd))
 
-        // Re-add Stop annotations for stops that no longer have bookmarks
-        let stopsToAdd = stops.filter {
+        // Re-add Stop annotations for stops that no longer have bookmarks.
+        // With the stops layer toggled off, nothing is added — bookmarks are
+        // user content and stay visible regardless.
+        let stopsToAdd = isStopsLayerEnabled ? stops.filter {
             !bookmarksHash.keys.contains($0.id) &&
             !existingStopIDs.contains($0.id)
-        }
+        } : []
         mapView.addAnnotations(stopsToAdd)
         refreshAnnotationViews(for: Array(affectedStopIDs))
         notifyDelegatesStopsChanged()
@@ -515,7 +653,16 @@ public class MapRegionManager: NSObject,
     }
     // MARK: - Zoom In Warning
 
-    private static let requiredHeightToShowStops = 40000.0
+    /// Above this visible-map-rect height (in map points), the map is considered
+    /// too zoomed-out to load or display stops. Both the UIKit region-change path
+    /// and SwiftUI hosts (via `MapPanelRootView`) gate stop loading on this value
+    /// so the two surfaces agree on when stops appear.
+    static let requiredHeightToShowStops = 40000.0
+
+    /// How long a camera settle is coalesced before stops are fetched. Shared by
+    /// the UIKit `regionChangeRequestTimer` and the SwiftUI `scheduleStopsRequest`
+    /// debounce so retuning one surface can't silently leave the other behind.
+    static let stopsRequestDebounceInterval: TimeInterval = 0.25
 
     /// Whether the zoom-in-for-stops warning should show for a map whose
     /// visible `MKMapRect` is `height` map points tall. Exposed so the SwiftUI
@@ -540,6 +687,15 @@ public class MapRegionManager: NSObject,
         mapView.removeAllAnnotations()
         mapView.removeOverlays(mapView.overlays)
         reloadStopAnnotations()
+        notifyMapLayersAnnotationsCleared()
+    }
+
+    /// `removeAllAnnotations` strips layer annotations behind the layers' backs;
+    /// tell them so their bookkeeping and the map agree again.
+    private func notifyMapLayersAnnotationsCleared() {
+        for layer in mapLayers where isMapLayerEnabled(id: layer.id) {
+            layer.mapAnnotationsWereCleared()
+        }
     }
 
     private func searchResponseOverridesStopLoading() -> Bool {
@@ -606,6 +762,7 @@ public class MapRegionManager: NSObject,
 
     private func displaySearchResult(stopsForRoute: StopsForRoute) {
         mapView.removeAllAnnotations()
+        notifyMapLayersAnnotationsCleared()
 
         mapView.addOverlays(stopsForRoute.polylines)
         mapView.addAnnotations(stopsForRoute.stops)
@@ -679,24 +836,36 @@ public class MapRegionManager: NSObject,
         }
     }
 
-    private let requiredHeightToShowExtraStopData = 7000.0
+    /// Above this visible-map-rect height (map points), stop pins are too
+    /// zoomed-out for their under-pin label. Shared with `MapPanelRootView`.
+    public static let requiredHeightToShowExtraStopData = 7000.0
+
+    /// Height half of the under-pin label gate. Callers combine it with the
+    /// standard-map-type and "show labels" default checks.
+    public static func shouldShowExtraStopData(forVisibleMapRectHeight height: Double) -> Bool {
+        height <= requiredHeightToShowExtraStopData
+    }
+
+    /// The full under-pin label gate (standard map + zoomed in + user default on),
+    /// shared so every map surface gates labels identically.
+    public static func shouldShowStopAnnotationLabels(
+        forVisibleMapRectHeight height: Double,
+        isStandardMapType: Bool,
+        showLabelsDefault: Bool
+    ) -> Bool {
+        isStandardMapType
+            && shouldShowExtraStopData(forVisibleMapRectHeight: height)
+            && showLabelsDefault
+    }
 
     var shouldHideExtraStopAnnotationData: Bool {
-        // only the standard map type shows extra data.
-        if mapView.mapType == .hybrid || mapView.mapType == .satellite {
-            return true
-        }
-
-        // only show the extra data below `requiredHeightToShowExtraStopData`
-        if mapView.visibleMapRect.height > requiredHeightToShowExtraStopData {
-            return true
-        }
-
-        // Finally, return the opposite of the appropriate user defaults value.
-        // This user defaults key is written in affirmative language and negated
-        // here because it's a lot easier for users to reason about a switch that
-        // says "show a thing" [true] or [false] versus "hide a thing" [true] or [false]
-        return !application.userDefaults.bool(forKey: MapRegionManager.mapViewShowsStopAnnotationLabelsDefaultsKey)
+        // Everything but hybrid/satellite (incl. muted standard) is "standard".
+        let isStandardMapType = !(mapView.mapType == .hybrid || mapView.mapType == .satellite)
+        return !MapRegionManager.shouldShowStopAnnotationLabels(
+            forVisibleMapRectHeight: mapView.visibleMapRect.height,
+            isStandardMapType: isStandardMapType,
+            showLabelsDefault: application.userDefaults.bool(forKey: MapRegionManager.mapViewShowsStopAnnotationLabelsDefaultsKey)
+        )
     }
 
     // MARK: - Map View Delegate
@@ -708,8 +877,19 @@ public class MapRegionManager: NSObject,
 
         updateZoomWarningOverlay(mapHeight: mapView.visibleMapRect.height)
 
+        // The zoom gate applies regardless of the layer toggle: `getStops` with a
+        // region-scale bounding box is exactly what the 40,000-height gate prevents.
         guard mapView.visibleMapRect.height <= MapRegionManager.requiredHeightToShowStops else {
             mapView.removeAnnotations(type: Stop.self)
+            return
+        }
+
+        guard isStopsLayerEnabled else {
+            removeStopAnnotationsPreservingSelection()
+            // Data still loads even when annotations are hidden: other surfaces
+            // (like the nearby stops list) read `stops` directly.
+            regionChangeRequestTimer?.invalidate()
+            regionChangeRequestTimer = Timer.scheduledTimer(timeInterval: Self.stopsRequestDebounceInterval, target: self, selector: #selector(requestDataForMapRegion(_:)), userInfo: nil, repeats: false)
             return
         }
 
@@ -722,7 +902,7 @@ public class MapRegionManager: NSObject,
 
         regionChangeRequestTimer?.invalidate()
 
-        regionChangeRequestTimer = Timer.scheduledTimer(timeInterval: 0.25, target: self, selector: #selector(requestDataForMapRegion(_:)), userInfo: nil, repeats: false)
+        regionChangeRequestTimer = Timer.scheduledTimer(timeInterval: Self.stopsRequestDebounceInterval, target: self, selector: #selector(requestDataForMapRegion(_:)), userInfo: nil, repeats: false)
     }
 
     private var isHidingRegions: Bool? {
@@ -745,6 +925,7 @@ public class MapRegionManager: NSObject,
 
         reloadRegionAnnotations()
         reloadStopAnnotations()
+        updateMapLayers()
     }
 
     public func mapView(_ mapView: MKMapView, didSelect annotation: any MKAnnotation) {
@@ -822,6 +1003,14 @@ public class MapRegionManager: NSObject,
     }
 
     public func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+        // Registered layers get first claim on their own annotation (and cluster)
+        // types; everything else falls through to the built-in annotation types.
+        for layer in mapLayers {
+            if let layerView = layer.annotationView(for: annotation, in: mapView) {
+                return layerView
+            }
+        }
+
         guard let reuseIdentifier = reuseIdentifier(for: annotation) else {
             return nil
         }
@@ -1116,6 +1305,259 @@ public class MapRegionManager: NSObject,
         // Set the annotation text
         annotation.title = titleComponents.isEmpty ? "Unknown Location" : titleComponents.joined(separator: ", ")
         annotation.subtitle = subtitleComponents.joined(separator: ", ")
+    }
+}
+
+// MARK: - Data Loading
+
+/// Stop fetching, caching, and publishing — the shared engine behind both the
+/// UIKit region-change path and the SwiftUI map panel's debounced settles.
+/// Split into an extension so the two surfaces' loading code reads as one
+/// unit rather than a slab in the middle of the UIKit map-view plumbing.
+extension MapRegionManager {
+
+    /// Loads stops for an explicitly provided region and stores them in `stops`.
+    ///
+    /// Takes the region as a parameter rather than reading `mapView.region`, so
+    /// callers that don't own this manager's `mapView` can drive it. Publishing
+    /// goes through `setStops(_:)`, which diffs this manager's own `mapView`
+    /// annotations — SwiftUI hosts want `scheduleStopsRequest(in:)` instead,
+    /// which debounces, serves the cache first, and skips that diff.
+    ///
+    /// Applies the same fudge factor, cache-save, and cache-fallback behavior as
+    /// the UIKit region-change path.
+    func requestStops(in region: MKCoordinateRegion) async {
+        let mapRegion = fudgedRegion(for: region, factor: preferredLoadDataRegionFudgeFactor)
+
+        do {
+            guard let stops = try await fetchStops(in: region) else { return }
+
+            await MainActor.run {
+                // Some UI code is dependent on this being changed on Main.
+                self.setStops(stops)
+            }
+
+            // Published before caching, so the pins aren't waiting on a SQLite write.
+            saveStopsToCache(stops)
+        } catch {
+            // A cancelled request isn't a failure. It arrives in more than one
+            // shape — Swift's `CancellationError`, or a URLSession
+            // `NSError`/`URLError` carrying `NSURLErrorCancelled` — so match
+            // `scheduleStopsRequest` and check both rather than a typed catch.
+            // Otherwise panning quickly across uncached area pops an error
+            // bulletin for a request the user themselves superseded.
+            if Task.isCancelled || error.isCancellation { return }
+
+            Logger.error("API stop request failed, attempting cache fallback: \(error)")
+
+            // On API failure, try serving from cache before showing error.
+            let cachedStops = cachedStops(in: mapRegion)
+            if !cachedStops.isEmpty {
+                await MainActor.run {
+                    self.setStops(cachedStops)
+                }
+                return
+            }
+            await self.application.displayError(error)
+        }
+    }
+
+    /// Reads cached stops for `mapRegion` (already fudge-factor expanded) from
+    /// `StopCacheRepository`, using a bounding-box query. Returns `[]` when the
+    /// repository or current region is unavailable, or nothing is cached.
+    ///
+    /// See: https://github.com/OneBusAway/onebusaway-ios/issues/62
+    private func cachedStops(in mapRegion: MKCoordinateRegion) -> [Stop] {
+        guard
+            let regionId = application.currentRegion?.regionIdentifier,
+            let repository = application.stopCacheRepository
+        else {
+            return []
+        }
+
+        let minLat = mapRegion.center.latitude - mapRegion.span.latitudeDelta / 2.0
+        let maxLat = mapRegion.center.latitude + mapRegion.span.latitudeDelta / 2.0
+        let minLon = mapRegion.center.longitude - mapRegion.span.longitudeDelta / 2.0
+        let maxLon = mapRegion.center.longitude + mapRegion.span.longitudeDelta / 2.0
+
+        return repository.stopsInRegion(
+            minLat: minLat, maxLat: maxLat,
+            minLon: minLon, maxLon: maxLon,
+            regionId: regionId
+        )
+    }
+
+    /// Persists `stops` to `StopCacheRepository` for offline use.
+    /// See: https://github.com/OneBusAway/onebusaway-ios/issues/62
+    private func saveStopsToCache(_ stops: [Stop]) {
+        if let regionId = application.currentRegion?.regionIdentifier,
+           let repository = application.stopCacheRepository {
+            repository.saveStops(stops, regionId: regionId)
+        }
+    }
+
+    /// Fetches stops, caches them, and returns the set so callers can publish it
+    /// directly when the cache can't (e.g. the database failed to open). Returns
+    /// `nil` when no API service is configured; rethrows network errors.
+    private func refreshStopCache(in region: MKCoordinateRegion) async throws -> [Stop]? {
+        guard let stops = try await fetchStops(in: region) else { return nil }
+        saveStopsToCache(stops)
+        return stops
+    }
+
+    /// Fetches stops for `region`, applying the shared fudge factor and bracketing
+    /// the call with the loading-started/finished delegate notifications.
+    ///
+    /// Neither caches nor publishes: `requestStops` publishes before writing to
+    /// SQLite so its pins don't wait on the write, while `refreshStopCache`
+    /// caches first and republishes from the cache band. Keeping that choice with
+    /// the callers is the only reason this is separate from `refreshStopCache`.
+    ///
+    /// Returns `nil` when no API service is configured — callers must be able to
+    /// tell "nothing was attempted" from "the fetch succeeded and this region
+    /// genuinely has no stops", because only the latter should be published.
+    private func fetchStops(in region: MKCoordinateRegion) async throws -> [Stop]? {
+        guard let apiService = application.apiService else { return nil }
+
+        await MainActor.run {
+            notifyDelegatesDataLoadingStarted()
+        }
+        defer {
+            Task { @MainActor in
+                notifyDelegatesDataLoadingFinished()
+            }
+        }
+
+        let mapRegion = fudgedRegion(for: region, factor: preferredLoadDataRegionFudgeFactor)
+        return try await apiService.getStops(region: mapRegion).list
+    }
+
+    /// Applies the network fudge-factor expansion to `region`, so the cache
+    /// read covers the same bounds the network fetches and saves.
+    private func fudgedRegion(for region: MKCoordinateRegion, factor: Double) -> MKCoordinateRegion {
+        var mapRegion = region
+        mapRegion.span.latitudeDelta *= factor
+        mapRegion.span.longitudeDelta *= factor
+        return mapRegion
+    }
+
+    /// Publishes cached stops for `region` immediately (instant revisits),
+    /// publishing only the latest region — neighborhood persistence lives in
+    /// `MapStopsObserver`. Returns `true` if it published a non-empty set; a
+    /// cache miss or cancelled task is a no-op that returns `false`.
+    @discardableResult
+    private func serveCachedStops(in region: MKCoordinateRegion) async -> Bool {
+        // Bail before the SQLite bounding-box query when the task is already
+        // cancelled — a settle superseded by a newer one shouldn't pay for a
+        // GRDB read whose result would be thrown away.
+        guard !Task.isCancelled else { return false }
+        let cachedStops = cachedStops(in: fudgedRegion(for: region, factor: preferredLoadDataRegionFudgeFactor))
+        guard !cachedStops.isEmpty, !Task.isCancelled else { return false }
+
+        await MainActor.run {
+            self.publishStopsToDelegates(cachedStops)
+        }
+        return true
+    }
+
+    /// UIKit entrypoint: loads stops for the manager's own `mapView` region.
+    func requestDataForMapRegion() async {
+        await requestStops(in: mapView.region)
+    }
+
+    @objc func requestDataForMapRegion(_ timer: Timer) {
+        Task(priority: .utility) {
+            await requestDataForMapRegion()
+        }
+    }
+
+    /// Debounced, fire-and-forget entrypoint for SwiftUI hosts. Coalesces rapid
+    /// camera settles (on the shared `stopsRequestDebounceInterval`, same as the
+    /// UIKit timer) and cancels any in-flight request before loading stops for
+    /// `region`.
+    func scheduleStopsRequest(in region: MKCoordinateRegion) {
+        // Mirror the guard at the top of the UIKit `reloadStopAnnotations`
+        // path: while a single search result is displayed, region stop-loading
+        // is suppressed so the search result isn't overwritten by a camera
+        // settle.
+        //
+        // Cancel rather than merely declining to schedule: a settle from just
+        // before the search may still be sitting in its debounce, and letting
+        // it land would publish the panned region's stops over the search
+        // result — the exact outcome this guard exists to prevent.
+        if searchResponseOverridesStopLoading() {
+            cancelScheduledStopsRequest()
+            return
+        }
+
+        pendingStopsRequestTask?.cancel()
+        pendingStopsRequestTask = Task { [weak self] in
+            guard let self else { return }
+
+            // Publish the band around this region immediately (before the
+            // debounce), so a settle over a recently-viewed area shows pins
+            // without waiting on the network.
+            let servedFromCache = await self.serveCachedStops(in: region)
+
+            try? await Task.sleep(for: .seconds(Self.stopsRequestDebounceInterval))
+            guard !Task.isCancelled else { return }
+
+            do {
+                // Refresh the cache, but don't publish the raw response —
+                // publishing the narrower network region between two band
+                // publishes flickers the band's outer pins.
+                // `nil` means no API service, so nothing was fetched and there is
+                // nothing to publish — bail rather than blanking a band that
+                // already has pins. An *empty* result is different: the fetch
+                // succeeded and this region really has no stops, so it must be
+                // published so `stops` stops describing the region we left.
+                guard let fetched = try await self.refreshStopCache(in: region) else { return }
+                guard !Task.isCancelled else { return }
+
+                if self.application.stopCacheRepository == nil {
+                    // No cache to round-trip through, so publish directly —
+                    // otherwise the map would show no pins at all.
+                    await MainActor.run { self.publishStopsToDelegates(fetched) }
+                } else {
+                    // Re-serve the band with the fresh stops: band → band, a
+                    // clean incremental add, never band → narrow → band.
+                    let republished = await self.serveCachedStops(in: region)
+
+                    // Cache reads can be empty after a successful fetch (e.g. cache write
+                    // failure or missing cache key). Fall back to the fetched stops so the
+                    // map isn't left blank, unless the request was cancelled by a newer one.
+                    if !republished, !Task.isCancelled {
+                        await MainActor.run { self.publishStopsToDelegates(fetched) }
+                    }
+                }
+            } catch {
+                // A cancelled request isn't a failure — it's the expected
+                // outcome of a newer camera settle superseding this one, and it
+                // arrives in several shapes (Swift `CancellationError`, or a
+                // URLSession `NSError`/`URLError` with `NSURLErrorCancelled`),
+                // so lean on `Error.isCancellation` plus `Task.isCancelled`
+                // rather than a typed catch. Surfacing it would pop a modal
+                // error bulletin every time the user pans across an uncached
+                // area twice in quick succession.
+                if Task.isCancelled || error.isCancellation {
+                    return
+                }
+                Logger.error("Map panel stop refresh failed: \(error)")
+                // Surface the error only when nothing is on-screen.
+                if !servedFromCache {
+                    await self.application.displayError(error)
+                }
+            }
+        }
+    }
+
+    /// Cancels any stops request scheduled via `scheduleStopsRequest(in:)` that
+    /// hasn't fired yet. Called by SwiftUI hosts when the camera settles zoomed
+    /// out past `requiredHeightToShowStops`, so a request debounced while zoomed
+    /// in doesn't land after the host has cleared its annotations.
+    func cancelScheduledStopsRequest() {
+        pendingStopsRequestTask?.cancel()
+        pendingStopsRequestTask = nil
     }
 }
 

@@ -55,6 +55,7 @@ class SettingsViewController: FormViewController {
             mapSectionShowsScale: application.mapRegionManager.mapViewShowsScale,
             mapSectionShowsTraffic: application.mapRegionManager.mapViewShowsTraffic,
             mapSectionShowsHeading: application.mapRegionManager.mapViewShowsHeading,
+            mapSectionShowsPointsOfInterest: application.mapRegionManager.mapViewShowsPointsOfInterest,
             FeatureFlags.useMapPanelExperienceKey: application.userDefaults.bool(forKey: FeatureFlags.useMapPanelExperienceKey),
             FeatureFlags.useNewStopPageKey: FeatureFlags.isNewStopPageEnabled(userDefaults: application.userDefaults),
             privacySectionReportingEnabled: application.analytics?.reportingEnabled() ?? false,
@@ -93,6 +94,10 @@ class SettingsViewController: FormViewController {
 
         if let heading = values[mapSectionShowsHeading] as? Bool {
             application.mapRegionManager.mapViewShowsHeading = heading
+        }
+
+        if let showsPOIs = values[mapSectionShowsPointsOfInterest] as? Bool {
+            application.mapRegionManager.mapViewShowsPointsOfInterest = showsPOIs
         }
 
         saveAccessibilityValues(values)
@@ -171,6 +176,7 @@ class SettingsViewController: FormViewController {
     private let mapSectionShowsScale = "mapSectionShowsScale"
     private let mapSectionShowsTraffic = "mapSectionShowsTraffic"
     private let mapSectionShowsHeading = "mapSectionShowsHeading"
+    private let mapSectionShowsPointsOfInterest = "mapSectionShowsPointsOfInterest"
 
     private lazy var mapSection: Section = {
         let section = Section(OBALoc("settings_controller.map_section.title", value: "Map", comment: "Settings > Map section title"))
@@ -188,6 +194,32 @@ class SettingsViewController: FormViewController {
         section <<< SwitchRow {
             $0.tag = mapSectionShowsHeading
             $0.title = OBALoc("settings_controller.map_section.shows_heading", value: "Show my current heading", comment: "Settings > Map section > Show my current heading")
+        }
+
+        // Mirrors the Map sheet's Points of Interest toggle (#1246). Same
+        // UserDefaults key; the Map sheet remains the canonical control.
+        section <<< SwitchRow {
+            $0.tag = mapSectionShowsPointsOfInterest
+            $0.title = OBALoc(
+                "settings_controller.map_section.shows_points_of_interest",
+                value: "Points of Interest",
+                comment: "Settings > Map section > Show Apple MapKit Points of Interest"
+            )
+        }
+
+        // Map layer switches mirror the Map sheet: same UserDefaults keys, written
+        // through MapRegionManager immediately. The Map sheet is canonical;
+        // Settings does not own this state.
+        for layer in application.mapRegionManager.mapLayers where layer.availability != .unsupported {
+            section <<< SwitchRow { [weak self] in
+                $0.tag = MapRegionManager.mapLayerDefaultsKey(id: layer.id)
+                $0.title = layer.title
+                $0.value = self?.application.mapRegionManager.isMapLayerEnabled(id: layer.id) ?? layer.isEnabledByDefault
+                $0.onChange { [weak self] row in
+                    guard let self, let value = row.value else { return }
+                    application.mapRegionManager.setMapLayerEnabled(value, id: layer.id)
+                }
+            }
         }
 
         return section
