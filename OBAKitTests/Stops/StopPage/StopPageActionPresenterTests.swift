@@ -1,0 +1,432 @@
+//
+//  StopPageActionPresenterTests.swift
+//  OBAKitTests
+//
+//  Copyright © Open Transit Software Foundation
+//  This source code is licensed under the Apache 2.0 license found in the
+//  LICENSE file in the root directory of this source tree.
+//
+
+import UIKit
+import CoreLocation
+import Testing
+@testable import OBAKit
+@testable import OBAKitCore
+
+/// The presenter owns every "leaves the Stop page" flow for both the pushed
+/// screen and the map sheet. These tests pin down which controller each flow
+/// presents, and — most importantly — that the presenter presents from the
+/// controller its provider resolves rather than no-oping.
+@MainActor
+@Suite(.serialized)
+final class StopPageActionPresenterTests: OBATestCase {
+
+    private var queue: OperationQueue!
+    private var window: UIWindow!
+
+    override init() async throws {
+        try await super.init()
+        queue = OperationQueue()
+        queue.maxConcurrentOperationCount = 1
+    }
+
+    isolated deinit {
+        queue.cancelAllOperations()
+    }
+
+    /// A presented controller only materializes when the presenter is in a
+    /// window, so every test roots one.
+    private func makeHost() -> UIViewController {
+        let host = UIViewController()
+        window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = host
+        window.isHidden = false
+        return host
+    }
+
+    private func makePresenter(host: UIViewController) -> (StopPageActionPresenter, Application) {
+        let dataLoader = MockDataLoader(testName: name)
+        stubScheduleForStop(dataLoader: dataLoader)
+        stubScheduleForRoute(dataLoader: dataLoader)
+        stubArrivalsAndDepartures(dataLoader: dataLoader)
+        stubStopsForLocation(dataLoader: dataLoader)
+        Fixtures.stubAllAgencyAlerts(dataLoader: dataLoader)
+        stubAllAgenciesWithCoverage(dataLoader: dataLoader)
+        let application = buildApplication(queue: queue, dataLoader: dataLoader)
+        let presenter = StopPageActionPresenter(
+            application: application,
+            presentingController: { host }
+        )
+        return (presenter, application)
+    }
+
+    private func stubAllAgenciesWithCoverage(dataLoader: MockDataLoader) {
+        let coverageData = Fixtures.loadData(file: "agencies_with_coverage.json")
+        dataLoader.mock(data: coverageData) { request in
+            guard let path = request.url?.path else { return false }
+            return path.hasSuffix("/agencies-with-coverage.json")
+        }
+    }
+
+    private func stubScheduleForStop(dataLoader: MockDataLoader) {
+        // Match any schedule-for-stop path and return fixture data (ignore query params and stop ID)
+        let scheduleData = Fixtures.loadData(file: "schedule-for-stop_1_75403.json")
+        dataLoader.mock(data: scheduleData) { request in
+            guard let path = request.url?.path else { return false }
+            return path.contains("/schedule-for-stop/") && path.hasSuffix(".json")
+        }
+    }
+
+    private func stubScheduleForRoute(dataLoader: MockDataLoader) {
+        let scheduleData = Fixtures.loadData(file: "schedule-for-route_1_100223.json")
+        dataLoader.mock(data: scheduleData) { request in
+            guard let path = request.url?.path else { return false }
+            return path.contains("/schedule-for-route/") && path.hasSuffix(".json")
+        }
+    }
+
+    /// `NearbyStopsViewController` fetches as soon as it loads, and
+    /// `MockDataLoader` fatal-errors on an unmocked URL — so the nearby-stops
+    /// tests have to stub this even though they only assert on presentation.
+    private func stubStopsForLocation(dataLoader: MockDataLoader) {
+        dataLoader.mock(
+            url: URL(string: "https://api.pugetsound.onebusaway.org/api/where/stops-for-location.json")!,
+            with: Fixtures.loadData(file: "stops_for_location_seattle.json")
+        )
+    }
+
+    private func stubArrivalsAndDepartures(dataLoader: MockDataLoader) {
+        // Use mock(url:with:) which ignores query parameters (only matches host + path)
+        dataLoader.mock(
+            url: URL(string: "https://api.pugetsound.onebusaway.org/api/where/arrivals-and-departures-for-stop/1_10914.json")!,
+            with: Fixtures.loadData(file: "arrivals-and-departures-for-stop-1_10914.json")
+        )
+    }
+
+    /// Helper to create a valid ArrivalDeparture with references resolved
+    private func makeDepartureWithRoute() throws -> ArrivalDeparture {
+        let stopArrivals = try Fixtures.loadRESTAPIPayload(
+            type: StopArrivals.self,
+            fileName: "arrivals-and-departures-for-stop-1_10914.json"
+        )
+        return try #require(stopArrivals.arrivalsAndDepartures.first)
+    }
+
+    /// `present` is asynchronous; poll briefly rather than assuming one runloop
+    /// turn is enough.
+    private func waitForPresentation(on controller: UIViewController) async -> UIViewController? {
+        for _ in 0..<20 {
+            if let presented = controller.presentedViewController { return presented }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return controller.presentedViewController
+    }
+
+    @Test func `Schedule for stop presents the schedule controller`() async {
+        let host = makeHost()
+        let (presenter, _) = makePresenter(host: host)
+
+        presenter.showScheduleForStop(stopID: "1_10914")
+
+        let presented = await waitForPresentation(on: host)
+        #expect(presented is ScheduleForStopViewController)
+    }
+
+    @Test func `Schedule for route presents route schedule when region supports it`() async throws {
+        let host = makeHost()
+        let (presenter, _) = makePresenter(host: host)
+        let departure = try makeDepartureWithRoute()
+
+        presenter.showScheduleForRoute(departure)
+
+        let presented = await waitForPresentation(on: host)
+        let scheduleVC = try #require(presented as? ScheduleForRouteViewController)
+        #expect(scheduleVC.routeID == departure.routeID)
+    }
+
+    @Test func `Schedule for route falls back to stop schedule when region does not support it`() async throws {
+        let host = makeHost()
+        let (presenter, app) = makePresenter(host: host)
+        let departure = try makeDepartureWithRoute()
+
+        let sanDiego: Region
+        if let existing = app.regionsService.find(id: 11) {
+            sanDiego = existing
+        } else {
+            let unsupportedRegionDict: [String: Any] = [
+                "regionName": "San Diego",
+                "id": 11,
+                "obaBaseUrl": "https://realtime.sdmts.com/api/",
+                "siriBaseUrl": "",
+                "bounds": [
+                    ["lat": 32.7, "lon": -117.1, "latSpan": 0.5, "lonSpan": 0.5]
+                ],
+                "language": "en_US",
+                "contactEmail": "test@example.com",
+                "supportsObaDiscoveryApis": true,
+                "supportsObaRealtimeApis": true,
+                "supportsSiriRealtimeApis": false,
+                "supportsEmbeddedSocial": false,
+                "supportsOtpBikeshare": false,
+                "active": true,
+                "experimental": false,
+                "obaVersionInfo": "2.0.0-SNAPSHOT|2|0|0|SNAPSHOT|abc"
+            ]
+            let unsupported = try Fixtures.dictionaryToModel(type: Region.self, dictionary: unsupportedRegionDict)
+            try await app.regionsService.add(customRegion: unsupported)
+            sanDiego = unsupported
+        }
+        app.regionsService.currentRegion = sanDiego
+
+        presenter.showScheduleForRoute(departure)
+
+        let presented = await waitForPresentation(on: host)
+        let scheduleVC = try #require(presented as? ScheduleForStopViewController)
+        #expect(scheduleVC.stopID == departure.stopID)
+        #expect(scheduleVC.routeID == departure.routeID)
+    }
+
+    @Test func `Stop level bookmark presents the add bookmark controller`() async throws {
+        let host = makeHost()
+        let (presenter, _) = makePresenter(host: host)
+        let stop = try #require(Fixtures.loadSomeStops().first)
+
+        presenter.showBookmarkEditor(for: nil, stop: stop, preloadedArrivals: nil)
+
+        let presented = await waitForPresentation(on: host)
+        let navigation = try #require(presented as? UINavigationController)
+        #expect(navigation.viewControllers.first is AddBookmarkViewController)
+    }
+
+    @Test func `Departure level bookmark presents the edit bookmark controller`() async throws {
+        let host = makeHost()
+        let (presenter, _) = makePresenter(host: host)
+        let departure = try makeDepartureWithRoute()
+
+        presenter.showBookmarkEditor(for: departure, stop: nil, preloadedArrivals: nil)
+
+        let presented = await waitForPresentation(on: host)
+        let navigation = try #require(presented as? UINavigationController)
+        #expect(navigation.viewControllers.first is EditBookmarkViewController)
+    }
+
+    @Test func `Report a problem presents the report controller`() async throws {
+        let host = makeHost()
+        let (presenter, _) = makePresenter(host: host)
+        let stop = try #require(Fixtures.loadSomeStops().first)
+
+        presenter.showReportProblem(stop: stop)
+
+        let presented = await waitForPresentation(on: host)
+        let navigation = try #require(presented as? UINavigationController)
+        #expect(navigation.viewControllers.first is ReportProblemViewController)
+    }
+
+    // MARK: - Proximity alert guidance
+
+    /// Each blocked reason has to reach the rider as its own alert. The step
+    /// resolver carries the location status precisely so these four can differ,
+    /// and a shared body would waste that — the whole point of asking before
+    /// offering the action is to say something the rider can act on.
+    @Test(arguments: [
+        ProximityAlertSettingsReason.locationWhenInUse,
+        .locationDenied,
+        .locationRestricted,
+        .notifications
+    ])
+    func `Every proximity alert settings reason presents its own alert`(reason: ProximityAlertSettingsReason) async throws {
+        let host = makeHost()
+        let (presenter, _) = makePresenter(host: host)
+
+        presenter.showProximityAlertSettingsAlert(reason: reason)
+
+        let presented = await waitForPresentation(on: host)
+        let alert = try #require(presented as? UIAlertController)
+        #expect(alert.title?.isEmpty == false)
+        #expect(alert.message?.isEmpty == false)
+        // Cancel plus Open Settings, the same shape the alarm guidance uses.
+        #expect(alert.actions.count == 2)
+        #expect(alert.actions.contains { $0.style == .cancel })
+    }
+
+    /// The restricted body deliberately promises nothing and names no app: a
+    /// device restriction may be one the rider cannot lift, so the copy that
+    /// tells them to go and change it would be a lie.
+    @Test func `The restricted location body makes no promise and names no app`() async throws {
+        let host = makeHost()
+        let (presenter, _) = makePresenter(host: host)
+
+        presenter.showProximityAlertSettingsAlert(reason: .locationRestricted)
+
+        let presented = await waitForPresentation(on: host)
+        let alert = try #require(presented as? UIAlertController)
+        let message = try #require(alert.message)
+        #expect(!message.contains(Bundle.main.appName))
+        // An unsubstituted specifier here would mean the copy took an argument
+        // the call site never passes.
+        #expect(!message.contains("%"))
+    }
+
+    /// The limit alert is informational: there is no screen listing a rider's
+    /// alerts, so there is nowhere for a second button to go. It must still name
+    /// the number, which is the only actionable thing in it.
+    @Test func `The region limit alert names the number and offers only dismissal`() async throws {
+        let host = makeHost()
+        let (presenter, _) = makePresenter(host: host)
+
+        presenter.showProximityAlertLimitAlert(limit: 20)
+
+        let presented = await waitForPresentation(on: host)
+        let alert = try #require(presented as? UIAlertController)
+        let message = try #require(alert.message)
+        #expect(message.contains("20"))
+        #expect(message.contains(Bundle.main.appName))
+        #expect(alert.actions.count == 1)
+    }
+
+    @Test func `External survey error presents an alert`() async {
+        let host = makeHost()
+        let (presenter, _) = makePresenter(host: host)
+
+        presenter.showExternalSurveyError()
+
+        let presented = await waitForPresentation(on: host)
+        #expect(presented is UIAlertController)
+    }
+
+    /// The reason the presenting-controller provider exists. UIKit ignores
+    /// `present` on a controller that already has a `presentedViewController`,
+    /// and in the sheet system the host always does — so a provider that
+    /// returns the topmost controller must be honoured, or the modal silently
+    /// never appears.
+    /// `pushOrPresent` is the reason the presenter exists in this shape. The
+    /// pushed Stop page sits in a navigation stack and pushes as it always has;
+    /// the map sheet's host has no stack at all, and `ViewRouter.navigate(to:from:)`
+    /// opens with `assert(fromController.navigationController != nil)` — so
+    /// routing a sheet flow through it traps in debug and silently does nothing
+    /// in release.
+    @Test func `Nearby stops presents modally when the host has no navigation stack`() async {
+        let host = makeHost()
+        let (presenter, _) = makePresenter(host: host)
+
+        presenter.showNearbyStops(coordinate: CLLocationCoordinate2D(latitude: 47.6, longitude: -122.3))
+
+        let presented = await waitForPresentation(on: host)
+        let navigation = try? #require(presented as? UINavigationController)
+        #expect(navigation?.viewControllers.first is NearbyStopsViewController)
+        // Presented modally, so it needs the Done button a pushed controller
+        // would get from the stack's back button.
+        #expect(navigation?.viewControllers.first?.navigationItem.leftBarButtonItem != nil)
+    }
+
+    /// The other side of the same fork: a host inside a navigation controller
+    /// pushes, and nothing is presented modally at all.
+    @Test func `Nearby stops pushes when the host is in a navigation stack`() async throws {
+        let root = UIViewController()
+        let navigation = UINavigationController(rootViewController: root)
+        window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = navigation
+        window.isHidden = false
+
+        let dataLoader = MockDataLoader(testName: name)
+        stubArrivalsAndDepartures(dataLoader: dataLoader)
+        stubStopsForLocation(dataLoader: dataLoader)
+        let application = buildApplication(queue: queue, dataLoader: dataLoader)
+        let presenter = StopPageActionPresenter(
+            application: application,
+            presentingController: { root }
+        )
+
+        presenter.showNearbyStops(coordinate: CLLocationCoordinate2D(latitude: 47.6, longitude: -122.3))
+
+        for _ in 0..<20 where navigation.viewControllers.count < 2 {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(navigation.viewControllers.count == 2)
+        #expect(navigation.viewControllers.last is NearbyStopsViewController)
+        #expect(root.presentedViewController == nil)
+    }
+
+    /// The map panel sets `onShowTripInSheet`, and a tapped departure has to
+    /// reach that sheet stack rather than being presented on top of the sheet
+    /// already on screen. This host has no navigation stack, so before the hook
+    /// existed the trip went up as a modal over the panel's map.
+    ///
+    /// Only this side of the fork is covered. Exercising the fallback would
+    /// present a live `TripPageViewController`, which reads
+    /// `TripConvertible.trip`. That is implicitly unwrapped and nil until the
+    /// departure's references load, so it traps on a decoded fixture.
+    @Test func `A departure opens in the sheet when the host offers one`() async throws {
+        let host = makeHost()
+        let (presenter, _) = makePresenter(host: host)
+        let departure = try makeDepartureWithRoute()
+
+        var openedTripIDs: [TripIdentifier] = []
+        presenter.onShowTripInSheet = { openedTripIDs.append($0.tripID) }
+
+        presenter.showTripPage(for: departure, originTitle: "Mercer St & 3rd Ave N")
+
+        #expect(openedTripIDs == [departure.tripID])
+        // The sheet host owns the presentation from here, so the presenter must
+        // not also put the page up itself.
+        #expect(await waitForPresentation(on: host) == nil)
+    }
+
+    @Test func `Presenting resolves the provider at call time not at init`() async {
+        let host = makeHost()
+        let dataLoader = MockDataLoader(testName: name)
+        stubScheduleForStop(dataLoader: dataLoader)
+        stubArrivalsAndDepartures(dataLoader: dataLoader)
+        let application = buildApplication(queue: queue, dataLoader: dataLoader)
+
+        // The provider starts pointing at `host`, then moves to a modal that
+        // gets presented afterwards — exactly the sheet-stack shape.
+        var target: UIViewController = host
+        let presenter = StopPageActionPresenter(
+            application: application,
+            presentingController: { target }
+        )
+
+        let modal = UIViewController()
+        host.present(modal, animated: false)
+        _ = await waitForPresentation(on: host)
+        target = modal
+
+        presenter.showScheduleForStop(stopID: "1_10914")
+
+        let presented = await waitForPresentation(on: modal)
+        #expect(presented is ScheduleForStopViewController)
+        #expect(host.presentedViewController === modal)
+    }
+
+    /// Map-panel mode leaves `viewRouter.rootController` nil. `canPresent` is
+    /// false so the rows stay hidden; calling `present` anyway must not crash.
+    @Test func `Trip planner from stop returns when rootController is nil`() async throws {
+        let host = makeHost()
+        let (presenter, application) = makePresenter(host: host)
+        #expect(application.viewRouter.rootController == nil)
+
+        let stop = try #require(Fixtures.loadSomeStops().first)
+        presenter.showTripPlanner(action: .directionsToStop, stop: stop)
+        presenter.showTripPlanner(action: .directionsFromStop, stop: stop)
+    }
+
+    // MARK: - Walk and bike pills (#1546)
+
+    /// With a trip planner, a pill asks before it leaves the stop page.
+    @Test(arguments: [StopDirectionsPill.walk, .bike])
+    func `A pill asks before opening the trip planner`(pill: StopDirectionsPill) async throws {
+        let host = makeHost()
+        let (presenter, _) = makePresenter(host: host)
+        let stop = try #require(Fixtures.loadSomeStops().first)
+
+        presenter.showDirections(.askThenPlanTrip(pill), stop: stop)
+
+        let alert = try #require(await waitForPresentation(on: host) as? UIAlertController)
+        #expect(alert.title == StopDirectionsPill.promptTitle)
+        #expect(alert.preferredStyle == .alert)
+        #expect(alert.actions.map(\.title) == [StopTripPlannerAction.directionsToHereTitle, Strings.cancel])
+        #expect(alert.actions.last?.style == .cancel)
+    }
+}

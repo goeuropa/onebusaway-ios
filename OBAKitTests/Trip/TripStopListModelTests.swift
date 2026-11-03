@@ -111,6 +111,21 @@ struct TripStopListModelTests {
         #expect(model.vehicleIndex == 2)
     }
 
+    /// #1425: UIKit's trip panel must call this entry point instead of
+    /// `firstIndex` on `closestStopID`, or loops keep marking the first visit.
+    @Test func `Vehicle stop index API matches make on a loop`() {
+        let stops = line(["A", "B", "A", "C"])
+        let index = TripStopListModel.vehicleStopIndex(
+            in: stops,
+            closestStopID: "A",
+            userStopID: "C",
+            userStopSequence: nil
+        )
+
+        #expect(index == 2)
+        #expect(make(stops, userStopID: "C", closestStopID: "A").vehicleIndex == index)
+    }
+
     @Test func `Without a rider's stop, the vehicle resolves to its first visit`() {
         let model = make(line(["A", "B", "A", "C"]), closestStopID: "A")
 
@@ -159,5 +174,347 @@ struct TripStopListModelTests {
         let last = model.rows[1]
         #expect(last.isUserStop)
         #expect(last.isTerminal)
+    }
+
+    // MARK: - Shared destination (#449)
+
+    @Test func `A shared destination resolves to its row`() {
+        let stops = line(["A", "B", "C", "D"])
+
+        let index = TripStopListModel.destinationStopIndex(
+            in: stops,
+            destinationStopID: "C",
+            boardingIndex: 0
+        )
+
+        #expect(index == 2)
+    }
+
+    @Test func `No shared destination marks no row`() {
+        let stops = line(["A", "B", "C"])
+
+        let index = TripStopListModel.destinationStopIndex(
+            in: stops,
+            destinationStopID: nil,
+            boardingIndex: 0
+        )
+
+        #expect(index == nil)
+    }
+
+    /// The link carries a stop ID and no sequence, so a loop that calls at the
+    /// destination both before and after boarding has two candidate rows. The
+    /// rider cannot step off before they get on, so the later one wins.
+    @Test func `On a loop, a shared destination resolves to the call after boarding`() {
+        let stops = line(["A", "B", "C", "B", "D"])
+
+        let index = TripStopListModel.destinationStopIndex(
+            in: stops,
+            destinationStopID: "B",
+            boardingIndex: 2
+        )
+
+        #expect(index == 3)
+    }
+
+    /// Same line, boarding earlier: now the first call at B is already ahead of
+    /// the rider, so that is the one they step off at.
+    @Test func `On a loop, an earlier boarding takes the earlier call`() {
+        let stops = line(["A", "B", "C", "B", "D"])
+
+        let index = TripStopListModel.destinationStopIndex(
+            in: stops,
+            destinationStopID: "B",
+            boardingIndex: 0
+        )
+
+        #expect(index == 1)
+    }
+
+    @Test func `A destination the trip never reaches after boarding marks no row`() {
+        let stops = line(["A", "B", "C"])
+
+        let index = TripStopListModel.destinationStopIndex(
+            in: stops,
+            destinationStopID: "A",
+            boardingIndex: 1
+        )
+
+        #expect(index == nil)
+    }
+
+    /// Boarding at the terminal leaves nothing after it to search, which must
+    /// come back empty rather than slicing past the end.
+    @Test func `Boarding at the last stop marks no destination`() {
+        let stops = line(["A", "B"])
+
+        let index = TripStopListModel.destinationStopIndex(
+            in: stops,
+            destinationStopID: "B",
+            boardingIndex: 1
+        )
+
+        #expect(index == nil)
+    }
+
+    @Test func `With no boarding row the whole trip is searched`() {
+        let stops = line(["A", "B", "C"])
+
+        let index = TripStopListModel.destinationStopIndex(
+            in: stops,
+            destinationStopID: "A",
+            boardingIndex: nil
+        )
+
+        #expect(index == 0)
+    }
+
+    // MARK: - The rider's rows (#449)
+
+    private func riderStops(
+        _ stops: [StopTimeStub],
+        userStopID: StopID,
+        userStopSequence: Int? = nil,
+        sharedDestinationStopID: StopID? = nil
+    ) -> TripStopListModel.RiderStops {
+        TripStopListModel.riderStops(
+            in: stops,
+            userStopID: userStopID,
+            userStopSequence: userStopSequence,
+            sharedDestinationStopID: sharedDestinationStopID
+        )
+    }
+
+    /// A trip that was never shared: the boarding stop is the rider's stop and
+    /// nothing else is marked.
+    @Test func `Without a shared destination only the boarding stop is marked`() {
+        let stops = riderStops(line(["A", "B", "C", "D"]), userStopID: "B", userStopSequence: 1)
+
+        #expect(stops.boardingIndex == 1)
+        #expect(stops.userStopIndex == 1)
+        #expect(stops.boardingMarkerIndex == nil)
+    }
+
+    @Test func `A shared destination takes the rider's marker and the boarding stop gets its own`() {
+        let stops = riderStops(line(["A", "B", "C", "D"]), userStopID: "B", userStopSequence: 1, sharedDestinationStopID: "D")
+
+        #expect(stops.boardingIndex == 1)
+        #expect(stops.userStopIndex == 3)
+        #expect(stops.boardingMarkerIndex == 1)
+    }
+
+    /// Nothing to mark as the exit, so the trip must read exactly as one that
+    /// was never shared — not as a boarding stop with no destination.
+    @Test func `A shared destination the trip never reaches leaves the boarding stop as the rider's stop`() {
+        let stops = riderStops(line(["A", "B", "C"]), userStopID: "B", userStopSequence: 1, sharedDestinationStopID: "A")
+
+        #expect(stops.boardingIndex == 1)
+        #expect(stops.userStopIndex == 1)
+        #expect(stops.boardingMarkerIndex == nil)
+    }
+
+    /// The sequence pins which visit the rider boards at; the exit is searched
+    /// for from there.
+    @Test func `On a loop the boarding marker follows the stop sequence`() {
+        let stops = riderStops(line(["A", "B", "C", "B", "D"]), userStopID: "B", userStopSequence: 3, sharedDestinationStopID: "D")
+
+        #expect(stops.boardingIndex == 3)
+        #expect(stops.userStopIndex == 4)
+        #expect(stops.boardingMarkerIndex == 3)
+    }
+
+    /// Riding a loop round to where it started. The two markers land on
+    /// different visits; no row is ever both.
+    @Test func `A destination that is the boarding stop resolves to its next call`() {
+        let stops = riderStops(line(["A", "B", "A"]), userStopID: "A", userStopSequence: 0, sharedDestinationStopID: "A")
+
+        #expect(stops.boardingIndex == 0)
+        #expect(stops.userStopIndex == 2)
+        #expect(stops.boardingMarkerIndex == 0)
+    }
+
+    /// A boarding stop the trip doesn't list has no row to mark. The destination
+    /// is still found, by searching the whole trip.
+    @Test func `An unknown boarding stop marks only the destination`() {
+        let stops = riderStops(line(["A", "B", "C"]), userStopID: "Z", sharedDestinationStopID: "C")
+
+        #expect(stops.boardingIndex == nil)
+        #expect(stops.userStopIndex == 2)
+        #expect(stops.boardingMarkerIndex == nil)
+    }
+
+    // MARK: - The ride the list fades around (#449)
+
+    @Test func `A shared trip's ride runs from boarding to the destination`() {
+        let stops = riderStops(line(["A", "B", "C", "D", "E"]), userStopID: "B", userStopSequence: 1, sharedDestinationStopID: "D")
+
+        #expect(stops.rideIndices == 1...3)
+    }
+
+    @Test func `A trip that was never shared has no ride`() {
+        let stops = riderStops(line(["A", "B", "C", "D"]), userStopID: "B", userStopSequence: 1)
+
+        #expect(stops.rideIndices == nil)
+    }
+
+    @Test func `A shared destination the trip never reaches leaves no ride`() {
+        let stops = riderStops(line(["A", "B", "C"]), userStopID: "B", userStopSequence: 1, sharedDestinationStopID: "A")
+
+        #expect(stops.rideIndices == nil)
+    }
+
+    /// The destination is found, but the ride has no known start, so nothing
+    /// is faded rather than guessing one.
+    @Test func `An unknown boarding stop leaves no ride`() {
+        let stops = riderStops(line(["A", "B", "C"]), userStopID: "Z", sharedDestinationStopID: "C")
+
+        #expect(stops.destinationIndex == 2)
+        #expect(stops.rideIndices == nil)
+    }
+
+    /// `riderStops` never produces this, but forming `3...1` would trap.
+    @Test func `A destination before boarding forms no ride`() {
+        let stops = TripStopListModel.RiderStops(boardingIndex: 3, destinationIndex: 1)
+
+        #expect(stops.rideIndices == nil)
+    }
+
+    // MARK: - The header's countdown (#449)
+
+    /// A trip that was never shared counts down to the boarding stop. A
+    /// destination prediction, were one to exist, has no row to belong to.
+    @Test func `Without a shared destination the header counts down to the boarding stop`() {
+        let stops = riderStops(line(["A", "B", "C", "D"]), userStopID: "B", userStopSequence: 1)
+
+        let countdown = stops.countdown(boardingMinutes: 8, destinationMinutes: 30)
+
+        #expect(countdown.stopIndex == 1)
+        #expect(countdown.minutes == 8)
+    }
+
+    @Test func `A shared destination's own prediction drives the countdown`() {
+        let stops = riderStops(line(["A", "B", "C", "D"]), userStopID: "B", userStopSequence: 1, sharedDestinationStopID: "D")
+
+        let countdown = stops.countdown(boardingMinutes: 8, destinationMinutes: 30)
+
+        #expect(countdown.stopIndex == 3)
+        #expect(countdown.minutes == 30)
+    }
+
+    /// Until the destination's prediction loads, the countdown stays with the
+    /// boarding stop, whose minutes the header then declines to show beside a
+    /// different row.
+    @Test func `Before the destination's prediction loads the countdown stays on the boarding stop`() {
+        let stops = riderStops(line(["A", "B", "C", "D"]), userStopID: "B", userStopSequence: 1, sharedDestinationStopID: "D")
+
+        let countdown = stops.countdown(boardingMinutes: 8, destinationMinutes: nil)
+
+        #expect(countdown.stopIndex == 1)
+        #expect(countdown.minutes == 8)
+    }
+
+    // MARK: - Collapsed runs (#1576)
+
+    /// Twelve stops, A through L, one minute apart.
+    private var long: [StopTimeStub] { line((0..<12).map { String(UnicodeScalar(65 + $0)!) }) }
+
+    /// What the list draws: a stop's ID, or a collapsed run as `[n]` (`[n+]` expanded).
+    private func shape(_ model: TripStopListModel, expanded: Set<String> = []) -> [String] {
+        model.items(expanded: expanded).map { item in
+            switch item {
+            case .stop(let row): row.stopID
+            case .group(let group, false): "[\(group.rows.count)]"
+            case .group(let group, true): "[\(group.rows.count)+]"
+            }
+        }
+    }
+
+    @Test func `Without a live vehicle nothing collapses`() {
+        let model = make(long, userStopID: "H")
+
+        #expect(model.groups.isEmpty)
+        #expect(shape(model) == long.map(\.stopID))
+    }
+
+    @Test func `Stops the vehicle has passed collapse into one run`() throws {
+        let model = make(long, closestStopID: "F")
+
+        #expect(shape(model) == ["[5]", "F", "G", "H", "I", "J", "K", "L"])
+        let group = try #require(model.groups.first)
+        #expect(group.kind == .passed)
+        #expect(group.rows.map(\.stopID) == ["A", "B", "C", "D", "E"])
+    }
+
+    /// A one-stop run would trade a stop for a row that says "1 stop".
+    @Test func `A single passed stop stays a stop`() {
+        let model = make(long, closestStopID: "B")
+
+        #expect(model.groups.isEmpty)
+        #expect(shape(model).prefix(2) == ["A", "B"])
+    }
+
+    @Test func `More than three stops between the vehicle and your stop collapse`() {
+        let model = make(long, userStopID: "H", closestStopID: "C")
+
+        #expect(shape(model) == ["[2]", "C", "[4]", "H", "I", "J", "K", "L"])
+        #expect(model.groups.map(\.kind) == [.passed, .approaching])
+        #expect(model.groups.last?.rows.map(\.stopID) == ["D", "E", "F", "G"])
+    }
+
+    @Test func `Three stops between the vehicle and your stop stay listed`() {
+        let model = make(long, userStopID: "G", closestStopID: "C")
+
+        #expect(shape(model) == ["[2]", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L"])
+    }
+
+    /// The vehicle's stop and your stop are never inside a run, even once the
+    /// vehicle has gone past you.
+    @Test func `Your stop stays visible when the vehicle has passed it`() {
+        let model = make(long, userStopID: "C", closestStopID: "H")
+
+        #expect(shape(model) == ["[2]", "C", "[4]", "H", "I", "J", "K", "L"])
+        #expect(model.groups.map(\.kind) == [.passed, .passed])
+        #expect(Set(model.groups.map(\.id)).count == 2)
+    }
+
+    @Test func `An expanded run lists its stops under the run`() throws {
+        let model = make(long, userStopID: "H", closestStopID: "C")
+        let passed = try #require(model.groups.first?.id)
+
+        #expect(shape(model, expanded: [passed]) == ["[2+]", "A", "B", "C", "[4]", "H", "I", "J", "K", "L"])
+    }
+
+    /// Expansion is remembered by id, so a run the rider opened has to keep its
+    /// id while the vehicle moves along and the run grows.
+    @Test func `A run keeps its id as the vehicle advances`() {
+        let before = make(long, userStopID: "K", closestStopID: "D")
+        let after = make(long, userStopID: "K", closestStopID: "E")
+
+        #expect(before.groups.map(\.id) == after.groups.map(\.id))
+    }
+
+    /// The run that ends at the vehicle is the same run as the vehicle passes
+    /// the rider's stop and splits it off, so it keeps its id.
+    @Test func `The run behind the vehicle keeps its id when it passes your stop`() {
+        let before = make(long, userStopID: "D", closestStopID: "D")
+        let after = make(long, userStopID: "D", closestStopID: "H")
+
+        #expect(before.groups.map(\.id) == after.groups.map(\.id).suffix(1))
+        #expect(shape(after, expanded: Set(before.groups.map(\.id))) == ["[3]", "D", "[3+]", "E", "F", "G", "H", "I", "J", "K", "L"])
+    }
+
+    @Test func `A run spans its first and last stops' times`() throws {
+        let model = make(long, closestStopID: "F")
+        let group = try #require(model.groups.first)
+
+        #expect(group.firstDate == Date(timeIntervalSince1970: 0))
+        #expect(group.lastDate == Date(timeIntervalSince1970: 4 * 60))
+    }
+
+    @Test func `Every item has a distinct id`() {
+        let model = make(long, userStopID: "H", closestStopID: "C")
+        let items = model.items(expanded: Set(model.groups.map(\.id)))
+
+        #expect(Set(items.map(\.id)).count == items.count)
     }
 }

@@ -148,6 +148,57 @@ final class FormattersTests: OBATestCase {
         #expect(formatters.deviationLabel(for: arrivalDeparture) == Strings.scheduledNotRealTime)
     }
 
+    /// The component overload exists for callers holding a view model rather than
+    /// the `ArrivalDeparture` it came from — `ArrivalDepartureItem` carries the
+    /// four values and not the model. Same gate, so `.unknown` must produce the
+    /// same string the model form does.
+    @Test func `Deviation label component form says scheduled for unknown status`() {
+        let formatters = Formatters(locale: usLocale, calendar: calendar, themeColors: ThemeColors())
+
+        let label = formatters.deviationLabel(
+            scheduleStatus: .unknown,
+            temporalState: .future,
+            arrivalDepartureStatus: .arriving,
+            scheduleDeviation: 0)
+
+        #expect(label == Strings.scheduledNotRealTime)
+    }
+
+    /// And with a real prediction it must fall through to the deviation phrase
+    /// rather than short-circuiting — otherwise the gate would swallow every case.
+    @Test func `Deviation label component form uses the deviation phrase when predicted`() {
+        let formatters = Formatters(locale: usLocale, calendar: calendar, themeColors: ThemeColors())
+
+        let label = formatters.deviationLabel(
+            scheduleStatus: .delayed,
+            temporalState: .future,
+            arrivalDepartureStatus: .arriving,
+            scheduleDeviation: 2)
+
+        #expect(label == "arrives 2 min late")
+    }
+
+    /// The two forms are one implementation, so they must agree on the same trip.
+    /// A drift here is exactly what the third hand-rolled copy in
+    /// `StopArrivalItem` used to allow.
+    @Test func `Deviation label forms agree on the same trip`() throws {
+        let formatters = Formatters(locale: usLocale, calendar: calendar, themeColors: ThemeColors())
+        let arrivalDeparture = try Fixtures.arrivalDeparture(
+            predictedArrival: 1_700_000_120,
+            predictedDeparture: 1_700_000_120
+        )
+
+        let fromModel = formatters.deviationLabel(for: arrivalDeparture)
+        let fromComponents = formatters.deviationLabel(
+            scheduleStatus: arrivalDeparture.scheduleStatus,
+            temporalState: arrivalDeparture.temporalState,
+            arrivalDepartureStatus: arrivalDeparture.arrivalDepartureStatus,
+            scheduleDeviation: arrivalDeparture.deviationFromScheduleInMinutes)
+
+        #expect(fromModel == fromComponents)
+        #expect(fromModel == "arrives 2 min late")
+    }
+
     /// A payload can carry predicted timestamps while declaring
     /// `predicted: false`; the gate is the flag, not the fields — the same rule
     /// `DepartureTimeDisplay` applies before striking through a time.
@@ -160,5 +211,231 @@ final class FormattersTests: OBATestCase {
         )
 
         #expect(formatters.deviationLabel(for: arrivalDeparture) == Strings.scheduledNotRealTime)
+    }
+
+    // MARK: - Arrival vs departure caption (#447)
+
+    @Test func `Caption is Arrives for a vehicle arriving at this stop`() {
+        let formatters = Formatters(locale: usLocale, calendar: calendar, themeColors: ThemeColors())
+        #expect(formatters.arrivalDepartureCaption(for: .arriving, temporalState: .future) == "Arrives")
+    }
+
+    @Test func `Caption is Departs for a vehicle leaving this stop`() {
+        let formatters = Formatters(locale: usLocale, calendar: calendar, themeColors: ThemeColors())
+        #expect(formatters.arrivalDepartureCaption(for: .departing, temporalState: .future) == "Departs")
+    }
+
+    @Test func `Past caption uses arrived or departed`() {
+        let formatters = Formatters(locale: usLocale, calendar: calendar, themeColors: ThemeColors())
+        #expect(formatters.arrivalDepartureCaption(for: .arriving, temporalState: .past) == "Arrived")
+        #expect(formatters.arrivalDepartureCaption(for: .departing, temporalState: .past) == "Departed")
+    }
+
+    // MARK: - Map route labels (#132)
+
+    @Test func `Formatted map routes within the limit lists every route`() throws {
+        let routes = try makeRoutes(shortNames: ["10", "20", "30"])
+        let label = try #require(Formatters.formattedMapRoutes(routes, limit: 3))
+        #expect(label == "10, 20, 30")
+        #expect(!label.contains("..."))
+        #expect(!label.hasPrefix("Routes:"))
+    }
+
+    /// U+2026, not three ASCII periods: `StopAnnotationView.titleLabel` truncates
+    /// with UIKit's own `…`, and mixing the two glyphs is the inconsistency #514
+    /// is about. The marker lives in `OBALoc` so translators can substitute
+    /// locale-conventional overflow marks (zh-Hans `……`).
+    @Test func `Formatted map routes over the limit appends ellipsis`() throws {
+        let routes = try makeRoutes(shortNames: ["10", "20", "30", "40", "62"])
+        let label = try #require(Formatters.formattedMapRoutes(routes, limit: 3))
+        #expect(label == "10, 20, 30…")
+        #expect(label.contains("\u{2026}"))
+        #expect(!label.contains("..."))
+        #expect(!label.hasPrefix("Routes:"))
+    }
+
+    /// The pin label and the callout must agree. Home/Recent still use
+    /// `Stop.subtitle` (`"Routes: …"` with every route) — that is not a map
+    /// surface, so it is left alone.
+    @Test func `Map callout uses the overflowing map route list, not plus-more`() throws {
+        let stop = try #require(Fixtures.loadSomeStops().first)
+        stop.routes = try makeRoutes(shortNames: ["10", "20", "30", "40", "62"])
+
+        let callout = stop.mapCalloutText
+        #expect(callout == "#\(stop.code)\n10, 20, 30…")
+        #expect(!callout.contains("Routes:"))
+
+        let subtitle = try #require(stop.subtitle)
+        #expect(subtitle.hasPrefix("#\(stop.code)"))
+        #expect(subtitle.contains("Routes:"))
+        #expect(subtitle.contains("62"))
+        #expect(!subtitle.contains("\u{2026}"))
+    }
+
+    /// Bookmark pins title with `bookmark.name`, so the callout is the only
+    /// place routes appear — keep every route (#1342).
+    @Test func `Bookmark callout lists every route without truncating`() throws {
+        let stop = try #require(Fixtures.loadSomeStops().first)
+        stop.routes = try makeRoutes(shortNames: ["10", "20", "30", "40", "62"])
+
+        let callout = stop.bookmarkCalloutText
+        #expect(callout == "#\(stop.code)\n10, 20, 30, 40, 62")
+        #expect(!callout.contains("\u{2026}"))
+        #expect(!callout.hasPrefix("Routes:"))
+    }
+
+    private func makeRoutes(shortNames: [String]) throws -> [Route] {
+        try shortNames.enumerated().map { index, shortName in
+            try Fixtures.dictionaryToModel(type: Route.self, dictionary: [
+                "agencyId": "test_agency",
+                "id": "route_\(index)",
+                "shortName": shortName,
+                "type": 3
+            ])
+        }
+    }
+
+    // MARK: - Time and Accessibility Formatting (Added)
+
+    @Test func `Time formatting outputs correct time`() {
+        let date = Date(timeIntervalSince1970: 1672531200) // 2023-01-01 00:00:00 UTC
+        let formatters = Formatters(locale: Locale(identifier: "en_US"), calendar: calendar, themeColors: ThemeColors())
+        formatters.timeFormatter.timeZone = TimeZone(secondsFromGMT: 0)!
+        
+        let timeString = formatters.timeFormatter.string(from: date)
+        let normalizedString = timeString.replacingOccurrences(of: "\u{202F}", with: " ")
+        #expect(normalizedString == "12:00 AM")
+    }
+
+    @Test func `Contextual date time string for today returns just time`() {
+        let formatters = Formatters(locale: usLocale, calendar: calendar, themeColors: ThemeColors())
+        let date = Date()
+        let contextualString = formatters.contextualDateTimeString(date)
+        let timeString = formatters.timeFormatter.string(from: date)
+        #expect(contextualString == timeString)
+    }
+
+    @Test func `Contextual date time string for other day returns date and time`() {
+        let formatters = Formatters(locale: usLocale, calendar: calendar, themeColors: ThemeColors())
+        let otherDate = calendar.date(byAdding: .day, value: -2, to: Date())!
+        let contextualString = formatters.contextualDateTimeString(otherDate)
+        let expectedString = formatters.shortDateTimeFormatter.string(from: otherDate)
+        #expect(contextualString == expectedString)
+    }
+
+    @Test func `Accessibility value for future arrival on time`() {
+        let formatters = Formatters(locale: usLocale, calendar: calendar, themeColors: ThemeColors())
+        formatters.timeFormatter.timeZone = TimeZone(secondsFromGMT: 0)!
+        let date = Date(timeIntervalSince1970: 1672531200) // 12:00 AM
+        let result = formatters.accessibilityValueForArrivalDeparture(
+            arrivalDepartureDate: date, 
+            arrivalDepartureMinutes: 5, 
+            arrivalDepartureStatus: .arriving, 
+            temporalState: .future, 
+            scheduleStatus: .onTime
+        )
+        let timeStr = formatters.timeFormatter.string(from: date)
+        #expect(result == "arriving in 5 minutes at \(timeStr).")
+    }
+
+    @Test func `Accessibility value for present departure`() {
+        let formatters = Formatters(locale: usLocale, calendar: calendar, themeColors: ThemeColors())
+        let date = Date()
+        let result = formatters.accessibilityValueForArrivalDeparture(
+            arrivalDepartureDate: date, 
+            arrivalDepartureMinutes: 0, 
+            arrivalDepartureStatus: .departing, 
+            temporalState: .present, 
+            scheduleStatus: .onTime
+        )
+        #expect(result == "departing now!")
+    }
+
+    @Test func `Accessibility value for past arrival`() {
+        let formatters = Formatters(locale: usLocale, calendar: calendar, themeColors: ThemeColors())
+        formatters.timeFormatter.timeZone = TimeZone(secondsFromGMT: 0)!
+        let date = Date(timeIntervalSince1970: 1672531200)
+        let result = formatters.accessibilityValueForArrivalDeparture(
+            arrivalDepartureDate: date, 
+            arrivalDepartureMinutes: -3, 
+            arrivalDepartureStatus: .arriving, 
+            temporalState: .past, 
+            scheduleStatus: .delayed
+        )
+        let timeStr = formatters.timeFormatter.string(from: date)
+        #expect(result == "arrived 3 minutes ago at \(timeStr).")
+    }
+
+    @Test func `Accessibility value for past departure`() {
+        let formatters = Formatters(locale: usLocale, calendar: calendar, themeColors: ThemeColors())
+        formatters.timeFormatter.timeZone = TimeZone(secondsFromGMT: 0)!
+        let date = Date(timeIntervalSince1970: 1672531200)
+        let result = formatters.accessibilityValueForArrivalDeparture(
+            arrivalDepartureDate: date,
+            arrivalDepartureMinutes: -5,
+            arrivalDepartureStatus: .departing,
+            temporalState: .past,
+            scheduleStatus: .onTime
+        )
+        let timeStr = formatters.timeFormatter.string(from: date)
+        #expect(result == "departed 5 minutes ago at \(timeStr).")
+    }
+
+    @Test func `Accessibility value for present arrival`() {
+        let formatters = Formatters(locale: usLocale, calendar: calendar, themeColors: ThemeColors())
+        let date = Date()
+        let result = formatters.accessibilityValueForArrivalDeparture(
+            arrivalDepartureDate: date,
+            arrivalDepartureMinutes: 0,
+            arrivalDepartureStatus: .arriving,
+            temporalState: .present,
+            scheduleStatus: .onTime
+        )
+        #expect(result == "arriving now!")
+    }
+
+    @Test func `Accessibility value for future departure`() {
+        let formatters = Formatters(locale: usLocale, calendar: calendar, themeColors: ThemeColors())
+        formatters.timeFormatter.timeZone = TimeZone(secondsFromGMT: 0)!
+        let date = Date(timeIntervalSince1970: 1672531200)
+        let result = formatters.accessibilityValueForArrivalDeparture(
+            arrivalDepartureDate: date,
+            arrivalDepartureMinutes: 10,
+            arrivalDepartureStatus: .departing,
+            temporalState: .future,
+            scheduleStatus: .onTime
+        )
+        let timeStr = formatters.timeFormatter.string(from: date)
+        #expect(result == "departing in 10 minutes at \(timeStr).")
+    }
+
+    @Test func `Accessibility value for scheduled future arrival`() {
+        let formatters = Formatters(locale: usLocale, calendar: calendar, themeColors: ThemeColors())
+        formatters.timeFormatter.timeZone = TimeZone(secondsFromGMT: 0)!
+        let date = Date(timeIntervalSince1970: 1672531200)
+        let result = formatters.accessibilityValueForArrivalDeparture(
+            arrivalDepartureDate: date,
+            arrivalDepartureMinutes: 15,
+            arrivalDepartureStatus: .arriving,
+            temporalState: .future,
+            scheduleStatus: .unknown
+        )
+        let timeStr = formatters.timeFormatter.string(from: date)
+        #expect(result == "scheduled to arrive in 15 minutes at \(timeStr).")
+    }
+
+    @Test func `Accessibility value for scheduled future departure`() {
+        let formatters = Formatters(locale: usLocale, calendar: calendar, themeColors: ThemeColors())
+        formatters.timeFormatter.timeZone = TimeZone(secondsFromGMT: 0)!
+        let date = Date(timeIntervalSince1970: 1672531200)
+        let result = formatters.accessibilityValueForArrivalDeparture(
+            arrivalDepartureDate: date,
+            arrivalDepartureMinutes: 20,
+            arrivalDepartureStatus: .departing,
+            temporalState: .future,
+            scheduleStatus: .unknown
+        )
+        let timeStr = formatters.timeFormatter.string(from: date)
+        #expect(result == "scheduled to depart in 20 minutes at \(timeStr).")
     }
 }

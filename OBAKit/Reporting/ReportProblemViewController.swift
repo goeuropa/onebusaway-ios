@@ -7,12 +7,15 @@
 //  LICENSE file in the root directory of this source tree.
 //
 
+import SwiftUI
 import UIKit
 import OBAKitCore
 
 /// The 'hub' view controller for reporting problems about stops and trips.
 ///
-/// From here, a user can report a problem either about a `Stop` or about a trip at that stop.
+/// From here, a user can report incorrect stop details or a problem with a specific
+/// trip's service. These reports are sent to the transit agency to improve data and
+/// service — they are not app bug reports.
 ///
 /// - Note: This view controller expects to be presented modally.
 class ReportProblemViewController: TaskController<StopArrivals>,
@@ -93,12 +96,10 @@ class ReportProblemViewController: TaskController<StopArrivals>,
         )
 
         let row = OBAListRowView.DefaultViewModel(title: String(format: fmt, stop.name), accessoryType: .disclosureIndicator) { [weak self] _ in
-            guard let self = self else { return }
-            let stopProblemController = StopProblemViewController(application: self.application, stop: self.stop)
-            self.navigationController?.pushViewController(stopProblemController, animated: true)
+            self?.showStopProblemForm()
         }
 
-        return OBAListViewSection(id: "stop_problem_section", title: OBALoc("report_problem_controller.stop_problem.header", value: "Problem with the Stop", comment: "A table header in the 'Report Problem' view controller."), contents: [row])
+        return OBAListViewSection(id: "stop_problem_section", title: ReportProblemCopy.stopProblemHeader, contents: [row])
     }
 
     private var vehicleProblemSection: OBAListViewSection? {
@@ -108,13 +109,87 @@ class ReportProblemViewController: TaskController<StopArrivals>,
 
         let rows = arrivalsAndDepartures.map { ArrivalDepartureItem(arrivalDeparture: $0, isAlarmAvailable: false, onSelectAction: onSelectArrivalDeparture) }
 
-        return OBAListViewSection(id: "vehicle_problem_section", title: OBALoc("report_problem_controller.vehicle_problem.header", value: "Problem with a Vehicle at the Stop", comment: "A table header in the 'Report Problem' view controller."), contents: rows)
+        return OBAListViewSection(id: "vehicle_problem_section", title: ReportProblemCopy.vehicleProblemHeader, contents: rows)
     }
 
     func onSelectArrivalDeparture(_ arrivalDepartureItem: ArrivalDepartureItem) {
         guard let arrDep = data?.arrivalsAndDepartures.first(where: { $0.id == arrivalDepartureItem.arrivalDepartureID }) else { return }
-        let controller = VehicleProblemViewController(application: self.application, arrivalDeparture: arrDep)
-        self.navigationController?.pushViewController(controller, animated: true)
+        showVehicleProblemForm(for: arrDep)
+    }
+
+    // MARK: - Problem Forms
+
+    private func showStopProblemForm() {
+        let pageURL = "app://localhost/stop-problem"
+        application.analytics?.reportEvent(pageURL: pageURL, label: AnalyticsLabels.reportProblem, value: "feedback_stop_problem")
+
+        let stopID = stop.id
+        let form = StopProblemView(
+            send: { [weak self] code, comment, shareLocation in
+                guard let self, let apiService = self.application.apiService else {
+                    throw UnstructuredError("No API Service")
+                }
+                let location = shareLocation ? self.application.locationService.currentLocation : nil
+                let report = RESTAPIService.StopProblemReport(stopID: stopID, code: code, comment: comment, location: location)
+                _ = try await self.classifyingErrors { try await apiService.getStopProblem(report: report) }
+                self.application.analytics?.reportEvent(pageURL: pageURL, label: AnalyticsLabels.reportProblem, value: "Reported Stop Problem")
+            },
+            onSent: { [weak self] in self?.finishReporting() }
+        )
+
+        pushProblemForm(form, title: OBALoc("stop_problem_controller.title", value: "Report a Problem", comment: "Title for the Report Stop Problem controller"))
+    }
+
+    private func showVehicleProblemForm(for arrivalDeparture: ArrivalDeparture) {
+        let pageURL = "app://localhost/vehicle-problem"
+        application.analytics?.reportEvent(pageURL: pageURL, label: AnalyticsLabels.reportProblem, value: "feedback_trip_problem")
+
+        let (tripID, serviceDate, stopID) = (arrivalDeparture.tripID, arrivalDeparture.serviceDate, arrivalDeparture.stopID)
+        let form = VehicleProblemView(
+            vehicleID: arrivalDeparture.vehicleID,
+            send: { [weak self] input in
+                guard let self, let apiService = self.application.apiService else {
+                    throw UnstructuredError("No API Service")
+                }
+                let report = RESTAPIService.TripProblemReport(
+                    tripID: tripID,
+                    serviceDate: serviceDate,
+                    vehicleID: input.vehicleID,
+                    stopID: stopID,
+                    code: input.code,
+                    comment: input.comment,
+                    userOnVehicle: input.isOnVehicle,
+                    location: input.shareLocation ? self.application.locationService.currentLocation : nil
+                )
+                _ = try await self.classifyingErrors { try await apiService.getTripProblem(report: report) }
+                self.application.analytics?.reportEvent(pageURL: pageURL, label: AnalyticsLabels.reportProblem, value: "Reported Trip Problem")
+            },
+            onSent: { [weak self] in self?.finishReporting() }
+        )
+
+        pushProblemForm(form, title: OBALoc("vehicle_problem_controller.title", value: "Report a Problem", comment: "Title for the Report Vehicle Problem controller"))
+    }
+
+    private func pushProblemForm(_ form: some View, title: String) {
+        let host = UIHostingController(rootView: form.defaultAppStorage(application.userDefaults))
+        host.title = title
+        navigationController?.pushViewController(host, animated: true)
+    }
+
+    /// Runs `body`, rethrowing any failure in its rider-facing form — with this
+    /// region's name in server-down copy, and cellular restriction recognized.
+    private func classifyingErrors<T>(_ body: () async throws -> T) async throws -> T {
+        do {
+            return try await body()
+        } catch {
+            throw ErrorClassifier.classify(error, regionName: application.currentRegionName, isCellularDataRestricted: application.isCellularDataRestricted)
+        }
+    }
+
+    /// A report went through: confirm it and close the whole report flow.
+    private func finishReporting() {
+        ProgressHUD.showSuccessAndDismiss()
+        dismiss(animated: true)
     }
 
     // MARK: - Actions

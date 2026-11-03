@@ -1,0 +1,339 @@
+//
+//  MapViewController+TripPlanner.swift
+//  OBAKit
+//
+//  Copyright © Open Transit Software Foundation
+//  This source code is licensed under the Apache 2.0 license found in the
+//  LICENSE file in the root directory of this source tree.
+//
+
+import FloatingPanel
+import MapKit
+import OBAKitCore
+import OTPKit
+import SwiftUI
+import UIKit
+
+/// The planner fallback's state (spec 3.8): the endpoints passed to the
+/// planner, used when `tripPlanEmpty` carries none, and the probe in flight.
+struct TripPlannerFallbackContext {
+    var origin: CLLocationCoordinate2D?
+    var destination: CLLocationCoordinate2D?
+    var task: Task<Void, Never>?
+    /// The planner panel's delegate, held here because the panel keeps it weakly.
+    var panelObserver: TripPlannerPanelObserver?
+}
+
+/// Tells the map when the trip planner panel changes detent, so the planner
+/// card re-lays out against it (and hides at full height). Only the state
+/// callback is implemented; the panel keeps its default layout.
+final class TripPlannerPanelObserver: NSObject, FloatingPanelControllerDelegate {
+    private let onStateChange: () -> Void
+
+    init(onStateChange: @escaping () -> Void) {
+        self.onStateChange = onStateChange
+    }
+
+    func floatingPanelDidChangeState(_ fpc: FloatingPanelController) {
+        onStateChange()
+    }
+}
+
+/// Trip planner presentation. An extension rather than more of `MapViewController`
+/// because presenting one feature is a separate concern from the map state that
+/// class holds — not because of a lint limit. `type_body_length` reports nothing
+/// on `MapViewController` today; only `file_length` is suppressed there.
+/// See: https://github.com/OneBusAway/onebusaway-ios/issues/1303
+extension MapViewController {
+
+    func showTripPlannerMapView() {
+        isShowingTripPlannerMap = true
+
+        tripPlannerMapView.mapType = mapRegionManager.mapView.mapType
+
+        tripPlannerMapView.isHidden = false
+
+        UIView.animate(withDuration: 0.3) {
+            self.mapRegionManager.mapView.alpha = 0
+            self.tripPlannerMapView.alpha = 1
+        } completion: { _ in
+            self.mapRegionManager.mapView.isHidden = true
+        }
+    }
+
+    func hideTripPlannerMapView() {
+        // Only the region comes back. `mapType` used to be copied here too, which
+        // overwrote any choice the rider made during the trip: the picker writes to
+        // the main map, the trip map only received the value once on the way in,
+        // and this line then put the stale one back. Both maps now track the
+        // rider's choice while route mode is up (`bindMapType`), so the main map
+        // already holds it. See #1451.
+        mapRegionManager.mapView.region = tripPlannerMapView.region
+
+        // The zoom pills come back with the main map, so judge the region it is
+        // coming back at before the flag below redraws them; until it settles, its
+        // warnings still describe where it was when route mode began (#1547).
+        viewModel.updateZoomWarnings(stops: mapRegionManager.zoomInStatus, rentals: mapRegionManager.rentalZoomHintStatus)
+        isShowingTripPlannerMap = false
+
+        mapRegionManager.mapView.isHidden = false
+
+        UIView.animate(withDuration: 0.3) {
+            self.mapRegionManager.mapView.alpha = 1
+            self.tripPlannerMapView.alpha = 0
+        } completion: { _ in
+            self.tripPlannerMapView.isHidden = true
+        }
+    }
+
+    func buildTripPlanner(region: Region) -> TripPlanner? {
+        // GraphQL (OTP 2.x) is the preferred trip-planning API whenever the region
+        // provides it; OTP 1.x REST is the fallback. Only the GraphQL service can
+        // support vehicle rental features.
+        let serverURL: URL
+        let apiService: OTPKit.APIService
+        if let graphQLURL = region.openTripPlannerGraphQLURL {
+            serverURL = graphQLURL
+            apiService = GraphQLAPIService(baseURL: graphQLURL)
+        } else if let restURL = region.openTripPlannerURL {
+            serverURL = restURL
+            apiService = RestAPIService(baseURL: restURL)
+        } else {
+            return nil
+        }
+
+        var enabledModes: [TransportMode] = [.transit, .walk, .bike, .car]
+        if region.isBikeshareEnabled {
+            // The capability filter in OTPKit hides these again if the service
+            // can't actually plan rental trips (e.g. the REST fallback).
+            enabledModes.append(contentsOf: [.transitBikeRental, .bikeRental])
+        }
+
+        let searchRect = application.currentRegion?.serviceRect ?? mapRegionManager.mapView.visibleMapRect
+
+        let config = OTPConfiguration(
+            otpServerURL: serverURL,
+            enabledTransportModes: enabledModes,
+            themeConfiguration: .init(
+                primaryColor: Color(uiColor: ThemeColors().brand)
+            ),
+            searchRegion: MKCoordinateRegion(searchRect)
+        )
+
+        let mapViewProvider = MKMapViewAdapter(mapView: tripPlannerMapView)
+
+        let mapDelegate = TripPlannerMapDelegate(
+            forwardingTo: mapViewProvider,
+            locationService: application.locationService,
+            showsHeading: mapRegionManager.mapViewShowsHeading
+        )
+        mapDelegate.attach(to: tripPlannerMapView)
+        tripPlannerMapDelegate = mapDelegate
+
+        let tripPlanner = TripPlanner(
+            otpConfig: config,
+            apiService: apiService,
+            mapProvider: mapViewProvider,
+            notificationCenter: application.notificationCenter
+        )
+
+        return tripPlanner
+    }
+
+    /// Presents the trip planner.
+    /// - Parameters:
+    ///   - origin: Optional prefilled origin. When set, current location is not
+    ///     used as origin — stop-page "Directions from Here" and the rental sheet's
+    ///     "Plan a trip using this vehicle" both rely on that.
+    ///   - destination: Optional prefilled destination.
+    ///   - viaPoint: Optional coordinate every planned trip must pass through. The
+    ///     rental sheet no longer uses it: a via point never produced a rental leg.
+    ///   - preselectedMode: Optional transport mode to preselect, e.g. `.bikeRental`.
+    func showTripPlanner(
+        origin: MKMapItem? = nil,
+        destination: MKMapItem? = nil,
+        viaPoint: CLLocationCoordinate2D? = nil,
+        preselectedMode: TransportMode? = nil
+    ) {
+        guard let currentRegion = application.regionsService.currentRegion,
+              currentRegion.supportsOTP,
+              application.userDataStore.isTripPlanningEnabled(for: currentRegion) else {
+            return
+        }
+
+        let originLocation = TripPlannerEndpoints.origin(
+            explicit: origin,
+            currentLocation: application.locationService.currentLocation
+        )
+        let destinationLocation = TripPlannerEndpoints.destination(from: destination)
+        tripPlannerFallback.origin = originLocation?.coordinate
+        tripPlannerFallback.destination = destinationLocation?.coordinate
+
+        guard let tripPlanner = buildTripPlanner(region: currentRegion) else { return }
+
+        // One planner at a time. A second panel stacked on the first overwrote the
+        // references to it, so closing the top one stranded the bottom one with no
+        // way to dismiss it, and the notification observers were registered twice.
+        dismissTripPlannerController()
+
+        subscribeToTripPlannerNotifications()
+
+        // `.embedded`, under a plain header rather than OTPKit's navigation stack,
+        // which reserved an empty vertical-bar column in the panel. See `TripPlannerPanelView`.
+        let plannerBody = tripPlanner.createTripPlannerView(
+            origin: originLocation,
+            destination: destinationLocation,
+            viaPoint: viaPoint,
+            transportMode: preselectedMode,
+            chrome: .embedded
+        )
+        let tripPlannerView = TripPlannerPanelView(planner: plannerBody) { [weak self, weak tripPlanner] in
+            // The cleanup OTPKit's own close button performs in `.standalone`.
+            tripPlanner?.reset()
+            self?.dismissTripPlannerController()
+        }
+
+        self.floatingPanel.move(to: .tip, animated: true)
+
+        let hostingController = UIHostingController(rootView: tripPlannerView)
+        hostingController.view.backgroundColor = .clear
+
+        let semiModal = createSemiModalPanel(childController: hostingController)
+        let panelObserver = TripPlannerPanelObserver { [weak self] in self?.layoutOnDemandDock() }
+        semiModal.delegate = panelObserver
+        tripPlannerFallback.panelObserver = panelObserver
+        addSemiModalPanel(semiModal)
+        self.semiModalTripPlannerController = semiModal
+        self.tripPlanner = tripPlanner
+        self.tripPlannerHostingController = hostingController
+        updateOnDemandDockContext()
+    }
+
+    func dismissTripPlannerController() {
+        guard let tripPlannerHostingController else { return }
+        dismissModalController(tripPlannerHostingController)
+
+        self.semiModalTripPlannerController = nil
+        tripPlannerFallback.panelObserver = nil
+        self.tripPlannerHostingController = nil
+        self.tripPlanner = nil
+        self.tripPlannerMapDelegate = nil
+        hideTripPlannerMapView()
+
+        tripPlannerFallback.task?.cancel()
+        tripPlannerFallback.task = nil
+        onDemandProbeController.clearPlanner()
+        unsubscribeFromTripPlannerNotifications()
+        updateOnDemandDockContext()
+    }
+
+    func subscribeToTripPlannerNotifications() {
+        application.notificationCenter.addObserver(self, selector: #selector(itinerariesUpdated), name: Notifications.itinerariesUpdated, object: nil)
+        application.notificationCenter.addObserver(self, selector: #selector(tripStarted), name: Notifications.tripStarted, object: nil)
+        application.notificationCenter.addObserver(self, selector: #selector(tripPlanEmpty), name: Notifications.tripPlanEmpty, object: nil)
+    }
+
+    func unsubscribeFromTripPlannerNotifications() {
+        application.notificationCenter.removeObserver(self, name: Notifications.itinerariesUpdated, object: nil)
+        application.notificationCenter.removeObserver(self, name: Notifications.tripStarted, object: nil)
+        application.notificationCenter.removeObserver(self, name: Notifications.tripPlanEmpty, object: nil)
+    }
+
+    @objc func itinerariesUpdated(_ note: NSNotification) {
+        tripPlannerFallback.task?.cancel()
+        onDemandProbeController.clearPlanner()
+        layoutOnDemandDock()
+        semiModalTripPlannerController?.move(to: .full, animated: true)
+    }
+
+    /// R11: the planner came back empty (an OTP error or zero itineraries).
+    /// Probe both ends and dock the on-demand options above the planner panel.
+    @objc func tripPlanEmpty(_ note: NSNotification) {
+        tripPlannerFallback.task?.cancel()
+        // An OTP error posts no `itinerariesUpdated`, so nothing else removes a
+        // card from an earlier empty plan; one for other endpoints must not
+        // outlive a re-plan whose own card can't be built.
+        guard let endpoints = TripPlanEmptyEndpoints.resolve(
+            userInfo: note.userInfo,
+            fallbackOrigin: tripPlannerFallback.origin,
+            fallbackDestination: tripPlannerFallback.destination
+        ) else {
+            onDemandProbeController.clearPlanner()
+            layoutOnDemandDock()
+            return
+        }
+
+        tripPlannerFallback.task = Task { [weak self] in
+            guard let self else { return }
+            let result = await onDemandProbeController.plannerResult(origin: endpoints.origin, destination: endpoints.destination)
+            guard !Task.isCancelled else { return }
+            guard let result else {
+                onDemandProbeController.clearPlanner()
+                layoutOnDemandDock()
+                return
+            }
+            onDemandProbeController.showPlanner(result)
+            // An empty plan also posts `itinerariesUpdated` first, which moves
+            // the panel to full height, where the card is hidden.
+            if semiModalTripPlannerController?.state == .full {
+                semiModalTripPlannerController?.move(to: .half, animated: true)
+            }
+            layoutOnDemandDock()
+        }
+    }
+
+    @objc func tripStarted(_ note: NSNotification) {
+        showTripPlannerMapView()
+
+        semiModalTripPlannerController?.move(to: Self.tripStartedPanelState(isVoiceOverRunning: UIAccessibility.isVoiceOverRunning), animated: true)
+    }
+
+    /// Starting a trip drops the planner to `.tip` so the route map shows. Under
+    /// VoiceOver the map is nothing to look at and `.tip` leaves barely more than
+    /// the grabber, so the itinerary the rider just chose stays readable at `.half`.
+    static func tripStartedPanelState(isVoiceOverRunning: Bool) -> FloatingPanelState {
+        isVoiceOverRunning ? .half : .tip
+    }
+}
+
+/// OTPKit's planner under a title and close button, in place of the
+/// navigation stack OTPKit's `.standalone` chrome wraps it in. In a floating
+/// panel on iPhone Duo that stack reserved an empty vertical-bar column; the
+/// planner pushes nothing, so a plain header loses nothing.
+struct TripPlannerPanelView<Planner: View>: View {
+    let planner: Planner
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .center, spacing: 12) {
+                Text(OTPLoc("trip_planner.title", comment: "Title of the trip planning screen"))
+                    .font(.largeTitle.bold())
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.75)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 0)
+                closeButton
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            .padding(.bottom, 4)
+
+            planner
+        }
+        // The panel's surface and the hosting view are both clear; the navigation
+        // stack this replaces painted the background.
+        .background(Color(uiColor: .systemBackground).ignoresSafeArea())
+    }
+
+    private var closeButton: some View {
+        Button(action: onClose) {
+            Image(systemName: "xmark")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.primary)
+                .glassCircleLabel(diameter: 44)
+        }
+        .glassCircleSurface()
+        .accessibilityLabel(Strings.close)
+    }
+}

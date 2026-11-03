@@ -31,12 +31,17 @@ struct DepartureRowView: View {
     let canAlarm: Bool
     let onAlarmToggle: () -> Void
     var style: Style = .normal
+    /// True when this row is the rider's inbound transfer trip and should
+    /// read as visually selected (background tint is applied by the list).
+    var isTransferHighlight: Bool = false
     let onTap: () -> Void
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.obaFormatters) private var formatters
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @ScaledMetric(relativeTo: .body) private var alarmCircleSize: CGFloat = 34
     @AppStorage(UserDefaultsStore.stopUIReducedColorsKey) private var reducedColors = false
+    @AppStorage(UserDefaultsStore.stopTripCompactModeKey) private var compactMode = false
 
     private var dimmed: Bool { style == .past }
 
@@ -51,7 +56,7 @@ struct DepartureRowView: View {
         // fast path holds. At accessibility sizes the row "stacks" (the guide's
         // committed layout): badge + countdown share the first line as glance
         // tokens, destination + status flow below — nothing is dropped.
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: StopTripSpacing.stack(compactMode)) {
             if dynamicTypeSize.isAccessibilitySize {
                 HStack(alignment: .center) {
                     routeBadge
@@ -66,9 +71,9 @@ struct DepartureRowView: View {
                 statusText
                 occupancyBadge
             } else {
-                HStack(alignment: .center, spacing: 13) {
+                HStack(alignment: .center, spacing: StopTripSpacing.hStack(compactMode)) {
                     routeBadge
-                    VStack(alignment: .leading, spacing: 3) {
+                    VStack(alignment: .leading, spacing: StopTripSpacing.stack(compactMode)) {
                         headsignText
                         HStack(spacing: 6) {
                             DepartureTimeText(display: timeDisplay)
@@ -87,12 +92,33 @@ struct DepartureRowView: View {
                 }
             }
         }
-        .opacity(dimmed ? 0.55 : 1.0)
+        // Past rows fade to say "gone", but at 0.55 their secondary text falls
+        // well under 4.5:1. Increase Contrast keeps the cue and the legibility.
+        .opacity(dimmed ? (colorSchemeContrast == .increased ? 0.8 : 0.55) : 1.0)
+        .overlay(alignment: .leading) {
+            if isTransferHighlight {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color(uiColor: ThemeColors.shared.brand))
+                    .frame(width: 4)
+                    .padding(.vertical, 4)
+            }
+        }
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityText)
-        .accessibilityAddTraits(.isButton)
+        // `.updatesFrequently` so a focused row re-speaks its changing countdown,
+        // matching the legacy `StopArrivalView`'s `[.button, .updatesFrequently]`.
+        // VoiceOver re-reads only the focused element, so this isn't chatty.
+        .accessibilityAddTraits([.isButton, .updatesFrequently])
+        // THE contract for every tap-driven row on this page, restated nowhere
+        // else: `.isButton` only changes the spoken trait, and the row's tap lives
+        // on `.onTapGesture`, which assistive tech cannot reach — so without an
+        // explicit default action VoiceOver announces "button" and activating does
+        // nothing. A default `.accessibilityAction` touches only the accessibility
+        // layer, so it avoids the nested-Button gesture conflict called out on
+        // `alarmCircleButton`.
+        .accessibilityAction { onTap() }
         .accessibilityActions {
             if showsAlarmAffordance {
                 Button(hasAlarm ? removeAlarmTitle : Strings.addAlarm) {
@@ -135,7 +161,7 @@ struct DepartureRowView: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(hasAlarm ? Color.white : Color.secondary)
                 .frame(width: alarmCircleSize, height: alarmCircleSize)
-                .background(hasAlarm ? Color(uiColor: ThemeColors.shared.departureOnTime) : Color.clear, in: Circle())
+                .background(hasAlarm ? Color(uiColor: ThemeColors.shared.departureOnTimeFill) : Color.clear, in: Circle())
                 .overlay(Circle().strokeBorder(Color(uiColor: .separator), lineWidth: hasAlarm ? 0 : 1.5))
                 // Use onTapGesture, not Button: inner gestures beat the outer
                 // .onTapGesture(perform: onTap) on the row VStack, so tapping the
@@ -157,19 +183,24 @@ struct DepartureRowView: View {
         CountdownView(
             minutes: departure.arrivalDepartureMinutes,
             isRealTime: status.isRealTime,
-            color: dimmed ? Color(uiColor: .tertiaryLabel) : Color(uiColor: status.color)
+            color: dimmed ? Color(uiColor: .tertiaryLabel) : Color(uiColor: status.color),
+            caption: formatters.arrivalDepartureCaption(for: departure.arrivalDepartureStatus, temporalState: departure.temporalState)
         )
     }
 
     private var accessibilityText: String {
         var extras: [String] = []
 
+        if isTransferHighlight {
+            extras.append(OBALoc("stop_page.row.a11y_transfer_trip", value: "your transfer trip", comment: "VoiceOver clause appended to a departure row that matches the rider's inbound transfer trip."))
+        }
+
         if style == .missed {
             extras.append(OBALoc("stop_page.row.a11y_missed", value: "likely missed — departs sooner than your walk to the stop", comment: "VoiceOver clause appended to a departure row that's upcoming but not reachable on foot before it leaves."))
         }
 
         if hasAlarm {
-            extras.append(OBALoc("stop_page.row.a11y_alarm_set", value: "alarm set", comment: "VoiceOver suffix indicating a departure alarm is active"))
+            extras.append(StopPageAccessibilityCopy.alarmSet)
         }
 
         return DepartureAccessibility.label(
@@ -185,10 +216,17 @@ struct DepartureRowView: View {
         switch style {
         case .past:
             let fmt = OBALoc("stop_page.row.a11y_past_fmt", value: "Route %@ to %@, departed %d minutes ago, %@", comment: "VoiceOver label for a departure row that has already departed: route, headsign, minutes ago, status.")
-            return String(format: fmt, departure.routeShortName, departure.tripHeadsign ?? "", abs(departure.arrivalDepartureMinutes), status.accessibilityStatusDescription)
+            // localizedStringWithFormat so the stringsdict plural categories resolve
+            // against the rider's locale rather than the root rule.
+            return String.localizedStringWithFormat(fmt, departure.routeShortName, departure.tripHeadsign ?? "", abs(departure.arrivalDepartureMinutes), status.accessibilityStatusDescription)
         case .normal, .missed:
-            let fmt = OBALoc("stop_page.row.a11y_fmt", value: "Route %@ to %@, departs in %d minutes, %@", comment: "VoiceOver label for a departure row: route, headsign, minutes, status.")
-            return String(format: fmt, departure.routeShortName, departure.tripHeadsign ?? "", departure.arrivalDepartureMinutes, status.accessibilityStatusDescription)
+            return StopPageAccessibilityCopy.upcomingIdentity(
+                routeShortName: departure.routeShortName,
+                headsign: departure.tripHeadsign ?? "",
+                minutes: departure.arrivalDepartureMinutes,
+                arrivalDepartureStatus: departure.arrivalDepartureStatus,
+                adherence: status.accessibilityStatusDescription
+            )
         }
     }
 }
@@ -197,7 +235,6 @@ struct DepartureRowView: View {
 /// menu actions (Alarm / Schedule / Save).
 struct DepartureRowActions {
     let canAlarm: Bool
-    let canSchedule: Bool
     let hasAlarm: Bool
     let onAlarmToggle: () -> Void
     let onSchedule: () -> Void
@@ -223,16 +260,14 @@ extension View {
                         Label(actions.hasAlarm ? removeAlarmTitle : Strings.addAlarm, systemImage: "bell")
                     }
                 }
-                if actions.canSchedule {
-                    Button(action: actions.onSchedule) {
-                        Label(Strings.schedules, systemImage: "calendar")
-                    }
+                Button(action: actions.onSchedule) {
+                    Label(Strings.schedules, systemImage: "calendar")
                 }
                 Button(action: actions.onBookmark) {
                     Label(Strings.addBookmark, systemImage: "bookmark")
                 }
                 Button(action: actions.onShareTrip) {
-                    Label(OBALoc("stop_page.row.share_trip", value: "Share Trip", comment: "Context menu action that shares the trip after choosing a destination stop"), systemImage: "square.and.arrow.up")
+                    Label(Strings.shareTrip, systemImage: "square.and.arrow.up")
                 }
             }, preview: {
                 actions.makePreview()

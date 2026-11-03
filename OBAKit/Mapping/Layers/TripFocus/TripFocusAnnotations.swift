@@ -26,15 +26,17 @@ final class TripShapeOverlay: MKPolyline {
     /// Behind the vehicle. Drawn gray, so the rider can see at a glance how much
     /// of the trip is already gone.
     var isSpent: Bool = false
-    /// The white line drawn underneath the colored one, which is what keeps a
-    /// route-colored shape legible over the basemap.
-    var isCasing: Bool = false
+    /// The casing under the colored line keeps a route-colored shape legible over
+    /// the basemap; see `RouteLinePart`.
+    var part: RouteLinePart = .core
 
-    static func make(coordinates: [CLLocationCoordinate2D], isSpent: Bool, isCasing: Bool) -> TripShapeOverlay {
+    var isCasing: Bool { part == .casing }
+
+    static func make(coordinates: [CLLocationCoordinate2D], isSpent: Bool, part: RouteLinePart) -> TripShapeOverlay {
         var coordinates = coordinates
         let overlay = TripShapeOverlay(coordinates: &coordinates, count: coordinates.count)
         overlay.isSpent = isSpent
-        overlay.isCasing = isCasing
+        overlay.part = part
         return overlay
     }
 }
@@ -99,13 +101,13 @@ final class TripStopAnnotationView: MKAnnotationView {
     }
 
     private static func diameter(for stop: TripStopAnnotation) -> CGFloat {
-        if stop.isUserStop { return 16 }
-        if stop.isTerminal { return 14 }
-        return 10
+        if stop.isUserStop { return TripFocusMapLayer.Style.userStopDiameter }
+        if stop.isTerminal { return TripFocusMapLayer.Style.terminalStopDiameter }
+        return TripFocusMapLayer.Style.stopDiameter
     }
 
     private static func dot(diameter: CGFloat, fill: UIColor, stroke: UIColor, isFilled: Bool) -> UIImage {
-        let lineWidth: CGFloat = 2.5
+        let lineWidth = TripFocusMapLayer.Style.stopRingWidth
         let size = CGSize(width: diameter + lineWidth, height: diameter + lineWidth)
 
         return UIGraphicsImageRenderer(size: size).image { context in

@@ -74,13 +74,16 @@ public final class Agency: NSObject, Identifiable, Codable, @unchecked Sendable 
     }
 
     public func cleanedPhoneNumber() -> String? {
-        let cleaned = phone.trimmingCharacters(in: .whitespaces)
-            .replacingOccurrences(of: "[^0-9+]", with: "", options: .regularExpression)
-        return cleaned.isEmpty ? nil : cleaned
+        phone.dialableDigits
     }
 
     public var callURL: URL? {
-        guard let cleaned = cleanedPhoneNumber() else { return nil }
-        return URL(string: "tel://\(cleaned)")
+        phone.telephoneURL
+    }
+
+    /// The agency's IANA time zone, or `nil` if `timeZone` is empty or unknown.
+    /// Does not fall back to the device zone — a missing identifier is not UTC.
+    public var resolvedTimeZone: TimeZone? {
+        TimeZone(identifier: timeZone)
     }
 }

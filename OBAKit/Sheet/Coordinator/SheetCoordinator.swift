@@ -47,6 +47,18 @@ final class SheetCoordinator<Route: SheetRouteable>: ObservableObject {
     var stackedRoutes: [Route] { stackedEntries.map(\.route) }
     var stackedDetents: [PresentationDetent] { stackedEntries.map(\.detent) }
 
+    /// The stacked layer whose sheets `open(_:from:)` closed to go back to a route
+    /// already open further down, until that layer's dismissal claims it.
+    /// See `claimUnwindFocus(atDepth:)`.
+    ///
+    /// Not `@Published`: nothing draws from it, and publishing it would redraw
+    /// every layer for a value only one of them reads, once.
+    private(set) var unwindFocusDepth: Int?
+
+    /// Every route on screen: the base sheet's stack from its root up, then the
+    /// stacked sheets from the bottom up.
+    var allRoutes: [Route] { routeStack + stackedRoutes }
+
     // MARK: - Init
 
     init(root: Route) {
@@ -79,6 +91,9 @@ final class SheetCoordinator<Route: SheetRouteable>: ObservableObject {
                 !route.detentConfiguration.isDismissDisabled,
                 "Stacked routes must have isDismissDisabled == false; \(route) does not."
             )
+            // A sheet opening on top takes VoiceOver itself, so an unwind still
+            // closing beneath it has no focus left to move.
+            unwindFocusDepth = nil
             stackedEntries.append(StackedEntry(route: route, detent: route.detentConfiguration.initialDetent))
         } else {
             additionalRoutes.append(route)
@@ -98,6 +113,30 @@ final class SheetCoordinator<Route: SheetRouteable>: ObservableObject {
         currentDetent = currentRoute.detentConfiguration.initialDetent
     }
 
+    /// Opens `route` from the stacked sheet showing `source`, where a tap inside that
+    /// sheet should land.
+    ///
+    /// If `route` is already open further down, the sheets above it close and the
+    /// rider goes back to it, rather than getting a second copy or nothing at all.
+    /// Otherwise any sheets above `source` close and `route` goes on top of it, so
+    /// Back returns to `source`. A `source` that is no longer in the pile changes
+    /// nothing below, and `route` is pushed on top.
+    func open(_ route: Route, from source: Route) {
+        if let existing = stackedEntries.lastIndex(where: { $0.route == route }) {
+            let closingDepth = existing + 1
+            // Already on top: nothing closes, so there is no dismissal to claim this.
+            if closingDepth < stackedEntries.count {
+                unwindFocusDepth = closingDepth
+            }
+            truncateStacked(toDepth: closingDepth)
+            return
+        }
+        if let sourceDepth = stackedEntries.lastIndex(where: { $0.route == source }) {
+            truncateStacked(toDepth: sourceDepth + 1)
+        }
+        push(route)
+    }
+
     /// Removes every stacked sheet at or above the given depth. Called by the
     /// container when the OS dismisses a sheet (drag-down) so storage stays in
     /// sync with what's actually on screen.
@@ -110,6 +149,52 @@ final class SheetCoordinator<Route: SheetRouteable>: ObservableObject {
     func setStackedDetent(_ detent: PresentationDetent, at depth: Int) {
         guard stackedEntries.indices.contains(depth) else { return }
         stackedEntries[depth].detent = detent
+    }
+
+    /// Moves the topmost stacked sheet whose route matches `predicate` to `detent`.
+    ///
+    /// Depth-free on purpose: a sheet's own content knows *which route it is* but has
+    /// no way to learn its index in the pile, and that content is exactly what needs to
+    /// resize itself in response to something happening inside it.
+    ///
+    /// Refuses a detent the route doesn't declare — `presentationDetents(_:selection:)`
+    /// ignores a selection outside its set, so writing one would leave stored state
+    /// disagreeing with what is on screen. Returns whether the move was applied.
+    @discardableResult
+    func setStackedDetent(
+        _ detent: PresentationDetent,
+        forTopmostRouteMatching predicate: (Route) -> Bool
+    ) -> Bool {
+        guard let depth = stackedEntries.lastIndex(where: { predicate($0.route) }),
+              stackedEntries[depth].route.detentConfiguration.detents.contains(detent) else {
+            return false
+        }
+        stackedEntries[depth].detent = detent
+        return true
+    }
+
+    /// Whether another stacked sheet is presented over the one at `depth`.
+    ///
+    /// The container keeps a covered sheet from being swiped away. A sheet on top
+    /// that lets touches through (a `.medium` trip sheet, say) leaves the one under
+    /// it draggable, and swiping that one away left the sheet on top on screen with
+    /// no route behind it in the pile.
+    func isStackedSheetCovered(atDepth depth: Int) -> Bool {
+        depth < stackedEntries.count - 1
+    }
+
+    /// Whether the dismissal of the stacked layer at `depth` was an unwind by
+    /// `open(_:from:)`, after which VoiceOver should move to the sheet revealed.
+    /// `true` once per unwind: claiming it clears it.
+    ///
+    /// Going back to a sheet further down closes every sheet above it at once, and
+    /// UIKit leaves focus wherever it lands — possibly on a sheet that is closing.
+    /// A sheet the rider drags away is left alone: UIKit returns focus to the
+    /// control that opened it, which is better than the top of the sheet revealed.
+    func claimUnwindFocus(atDepth depth: Int) -> Bool {
+        guard unwindFocusDepth == depth else { return false }
+        unwindFocusDepth = nil
+        return true
     }
 
     /// Bounds-checked accessor for the stacked route at `depth`.
@@ -127,8 +212,41 @@ final class SheetCoordinator<Route: SheetRouteable>: ObservableObject {
 
     /// Clears the stacked layer and unwinds the content stack to its root.
     func popToRoot() {
+        unwindFocusDepth = nil
         stackedEntries.removeAll()
         additionalRoutes.removeAll()
         currentDetent = root.detentConfiguration.initialDetent
+    }
+}
+
+// MARK: - Returning to a stacked sheet
+
+/// When a screen that is *itself* a stacked sheet has become visible again
+/// because something on top of it went away.
+///
+/// A stacked sheet is never removed from the view hierarchy while another sheet
+/// covers it, so `.task` and `.onAppear` fire exactly once no matter how many
+/// times the user comes back to it. Any screen whose contents can go stale
+/// underneath — the Recent Stops index, whose store is rewritten by the very act
+/// of viewing a stop from it — has to notice the return some other way.
+///
+/// Kept as a pure function so the rule is assertable without a sheet stack, in
+/// the same spirit as `NearbyCoordinateResolver`.
+nonisolated enum StackedSheetReturn {
+
+    /// Whether a change in stacked depth means a sheet at *any* depth has just
+    /// been uncovered.
+    ///
+    /// Keyed on the depth decreasing rather than reaching zero: a stacked sheet
+    /// is itself part of the count, so the stack never empties while one is on
+    /// screen. `HomeSheetView` can watch for empty because it sits below the
+    /// stacked layer entirely — same intent, different depth. Getting this
+    /// wrong fails silently, which is why it has a name and a test.
+    ///
+    /// - Parameters:
+    ///   - previousDepth: `stackedRoutes.count` before the change.
+    ///   - depth: `stackedRoutes.count` after it.
+    static func wasUncovered(previousDepth: Int, depth: Int) -> Bool {
+        depth < previousDepth
     }
 }

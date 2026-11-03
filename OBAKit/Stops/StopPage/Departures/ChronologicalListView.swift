@@ -16,7 +16,11 @@ import OBAKitCore
 struct ChronologicalListView: View {
     let partition: StopPageListBuilder.ChronologicalPartition<ArrivalDeparture>
     let walkMinutes: Int?
+    /// Whether `walkMinutes` was computed at bike speed — Bike Mode swaps the
+    /// divider's wording/icon/color from walk to bike to match.
+    var isBikeMode: Bool = false
     let showPast: Bool
+    let highlightedTripID: TripIdentifier?
     let statusProvider: (ArrivalDeparture) -> DepartureStatus
     let alarmLookup: (ArrivalDeparture) -> Alarm?
     let actionsProvider: (ArrivalDeparture) -> DepartureRowActions
@@ -39,7 +43,7 @@ struct ChronologicalListView: View {
             }
             // Walk divider escapes the card chrome (out-of-card row rules).
             Section {
-                WalkLineDivider(walkMinutes: walkMinutes)
+                WalkLineDivider(walkMinutes: walkMinutes, isBikeMode: isBikeMode)
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
@@ -56,6 +60,7 @@ struct ChronologicalListView: View {
         // Identity: ArrivalDeparture.id (stable across prediction refreshes).
         ForEach(departures, id: \.id) { departure in
             let actions = actionsProvider(departure)
+            let isTransferTrip = highlightedTripID == departure.tripID
             DepartureRowView(
                 departure: departure,
                 status: statusProvider(departure),
@@ -63,9 +68,11 @@ struct ChronologicalListView: View {
                 canAlarm: actions.canAlarm,
                 onAlarmToggle: actions.onAlarmToggle,
                 style: style,
+                isTransferHighlight: isTransferTrip,
                 onTap: { onSelectDeparture(departure) }
             )
             .departureRowActions(actions)
+            .listRowBackground(DepartureTransferHighlight.rowBackground(isHighlighted: isTransferTrip))
         }
     }
 }

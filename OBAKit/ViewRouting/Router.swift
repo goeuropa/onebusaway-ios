@@ -28,11 +28,112 @@ public class ViewRouter: NSObject, UINavigationControllerDelegate {
 
     private let application: Application
 
-    /// Set by `ClassicApplicationRootController.init`. `nil` when the
-    /// experimental SwiftUI map-panel experience is the active root —
-    /// `SheetCoordinator` owns navigation in that mode and bypasses
-    /// `ViewRouter` entirely.
-    var rootController: ClassicApplicationRootController?
+    private let registeredRootControllers = NSHashTable<ClassicApplicationRootController>.weakObjects()
+
+    func register(rootController: ClassicApplicationRootController) {
+        registeredRootControllers.add(rootController)
+    }
+
+    /// Resolves the active or context-specific `ClassicApplicationRootController`.
+    ///
+    /// Rather than holding a single strong reference to a root controller (which would
+    /// overwrite across windows and leak closed windows in multi-window environments),
+    /// this dynamically resolves the root controller from the calling context, active
+    /// window scene, or connected scenes.
+    public func rootController(from context: UIViewController? = nil) -> ClassicApplicationRootController? {
+        if let context = context {
+            if let classic = findClassicRoot(from: context) {
+                return classic
+            }
+            if let windowScene = context.viewIfLoaded?.window?.windowScene {
+                return findClassicRoot(in: windowScene, preferringKeyWindow: false)
+            }
+        }
+
+        // Check active foreground window scenes first
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene,
+                  windowScene.activationState == .foregroundActive else { continue }
+            if let classic = findClassicRoot(in: windowScene) {
+                return classic
+            }
+        }
+
+        // Check any connected window scene
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene else { continue }
+            if let classic = findClassicRoot(in: windowScene) {
+                return classic
+            }
+        }
+
+        // Fallback for tests or environments without window scenes:
+        // check registered controllers (held weakly).
+        for root in registeredRootControllers.allObjects where root.viewIfLoaded?.window?.isKeyWindow == true {
+            return root
+        }
+        return registeredRootControllers.allObjects.first
+    }
+
+    /// Backwards-compatible computed accessor that resolves the root controller without context.
+    public var rootController: ClassicApplicationRootController? {
+        rootController(from: nil)
+    }
+
+    private func findClassicRoot(from context: UIViewController?) -> ClassicApplicationRootController? {
+        guard let context = context else { return nil }
+        if let classic = context as? ClassicApplicationRootController {
+            return classic
+        }
+        if let classic = context.tabBarController as? ClassicApplicationRootController {
+            return classic
+        }
+        if let window = context.viewIfLoaded?.window,
+           let classic = findClassicRoot(in: window.rootViewController) {
+            return classic
+        }
+        if let nav = context.navigationController,
+           let classic = findClassicRoot(from: nav) {
+            return classic
+        }
+        if let presenting = context.presentingViewController,
+           let classic = findClassicRoot(from: presenting) {
+            return classic
+        }
+        return nil
+    }
+
+    /// Searches `windowScene`'s windows, starting with its key window unless `preferringKeyWindow` is `false`.
+    private func findClassicRoot(in windowScene: UIWindowScene, preferringKeyWindow: Bool = true) -> ClassicApplicationRootController? {
+        if preferringKeyWindow,
+           let keyWindow = windowScene.keyWindow,
+           let classic = findClassicRoot(in: keyWindow.rootViewController) {
+            return classic
+        }
+        for window in windowScene.windows {
+            if let classic = findClassicRoot(in: window.rootViewController) {
+                return classic
+            }
+        }
+        return nil
+    }
+
+    private func findClassicRoot(in viewController: UIViewController?) -> ClassicApplicationRootController? {
+        guard let viewController = viewController else { return nil }
+        if let classic = viewController as? ClassicApplicationRootController {
+            return classic
+        }
+        if let presented = viewController.presentedViewController,
+           let classic = findClassicRoot(in: presented) {
+            return classic
+        }
+        for child in viewController.children {
+            if let classic = findClassicRoot(in: child) {
+                return classic
+            }
+        }
+        return nil
+    }
 
     public init(application: Application) {
         self.application = application
@@ -100,18 +201,20 @@ public class ViewRouter: NSObject, UINavigationControllerDelegate {
     ///
     /// - Parameter showToolbarOnBottom: Pass `true` when the caller will present the result as a
     ///   sheet rather than push it, which swaps the redesigned page's dark map header for a light
-    ///   one and moves its chrome into a bottom toolbar. Ignored when the flag or a transfer
-    ///   context routes to the legacy `StopViewController`, which has only the pushed layout.
+    ///   one and moves its chrome into a bottom toolbar. Ignored when the flag is off and the
+    ///   legacy `StopViewController` is used (pushed layout only). Transfer context is still
+    ///   gated by `displayedTransferContext` — on the new page it drives trip highlighting;
+    ///   on the legacy page it drives the arrival banner.
     public func makeStopController(stop: Stop, bookmark: Bookmark? = nil, transferContext: TransferContext? = nil, showToolbarOnBottom: Bool = false) -> UIViewController {
-        // TransferContext UX (arrival-relative filtering, transfer banner) is not yet built on the new stop page — route transfers to the legacy screen until it is.
+        let effective = application.userDataStore.displayedTransferContext(transferContext)
         let stopController: StopContextConfigurable
-        if transferContext == nil, FeatureFlags.isNewStopPageEnabled(userDefaults: application.userDefaults) {
+        if FeatureFlags.isNewStopPageEnabled(userDefaults: application.userDefaults) {
             stopController = StopPageViewController(application: application, stop: stop, showToolbarOnBottom: showToolbarOnBottom)
         } else {
             stopController = StopViewController(application: application, stop: stop)
         }
         stopController.bookmarkContext = bookmark
-        stopController.transferContext = transferContext
+        stopController.transferContext = effective
         return stopController
     }
 
@@ -123,14 +226,24 @@ public class ViewRouter: NSObject, UINavigationControllerDelegate {
         }
     }
 
-    public func navigateTo(arrivalDeparture: ArrivalDeparture, from fromController: UIViewController) {
+    /// - Parameter destinationStopID: Where the sharer said they will step off,
+    ///   when this came from a shared trip link that named one. See #449.
+    public func navigateTo(
+        arrivalDeparture: ArrivalDeparture,
+        from fromController: UIViewController,
+        destinationStopID: StopID? = nil
+    ) {
         guard shouldNavigate(from: fromController, to: .arrivalDeparture(arrivalDeparture)) else { return }
-        let tripController = TripViewController(application: application, arrivalDeparture: arrivalDeparture)
+        let tripController = TripViewController(
+            application: application,
+            arrivalDeparture: arrivalDeparture,
+            destinationStopID: destinationStopID
+        )
         navigate(to: tripController, from: fromController)
     }
 
-    public func rootNavigateTo(page: ClassicApplicationRootController.Page) {
-        guard let rootController = self.rootController else {
+    public func rootNavigateTo(page: ClassicApplicationRootController.Page, from context: UIViewController? = nil) {
+        guard let rootController = self.rootController(from: context) else {
             // Map-panel mode bypasses ViewRouter — `SheetCoordinator` owns
             // navigation. Log so deep-link / recent-stops paths that still
             // call this don't silently degrade. (No `assertionFailure`: test
@@ -156,6 +269,11 @@ public class ViewRouter: NSObject, UINavigationControllerDelegate {
         let view = TransitAlertDetailViewController(alert, locale: locale)
         let navigationController = UINavigationController(rootViewController: view)
         present(navigationController, from: fromController)
+    }
+
+    /// Pushes the on-demand service page.
+    public func navigateTo(onDemandService service: OnDemandService, from fromController: UIViewController) {
+        navigate(to: OnDemandServiceViewController(application: application, service: service), from: fromController)
     }
 
     /// Presents the route picker modal, then navigates to the current trip flow.

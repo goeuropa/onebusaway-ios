@@ -6,6 +6,7 @@
 //
 
 import MapKit
+import OBAKitCore
 
 typealias PulsingAnnotationWillMoveAnimationBlock = (PulsingAnnotationView?, UIView?) -> Void
 
@@ -119,11 +120,24 @@ class PulsingAnnotationView: MKAnnotationView {
         calloutOffset = CGPoint(x: 0, y: 4)
         self.bounds = bounds
 
+        updateLayerContentsScale()
+
         registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (self: Self, previousTraitCollection: UITraitCollection) in
             if self.traitCollection.userInterfaceStyle != previousTraitCollection.userInterfaceStyle {
                 self.rebuildLayers()
             }
         }
+        registerForTraitChanges([UITraitDisplayScale.self]) { (self: Self, _) in
+            self.updateLayerContentsScale()
+        }
+    }
+
+    /// The layers are built before `super.init`, when there are no traits to read, so
+    /// their scale is set here and again whenever the display's changes.
+    private func updateLayerContentsScale() {
+        let displayScale = traitCollection.displayScale
+        outerDotLayer.contentsScale = displayScale
+        colorHaloLayer.contentsScale = displayScale
     }
 
     required init?(coder aDecoder: NSCoder) {
@@ -141,6 +155,7 @@ class PulsingAnnotationView: MKAnnotationView {
 
         colorHaloLayer.removeFromSuperlayer()
         colorHaloLayer = PulsingAnnotationView.buildColorHaloLayer(bounds: bounds, pulseScaleFactor: pulseScaleFactor, pulseColor: pulseColor, delayBetweenPulseCycles: delayBetweenPulseCycles, pulseAnimationGroup: pulseAnimationGroup)
+        updateLayerContentsScale()
 
         if image == nil {
             imageView.removeFromSuperview()
@@ -219,7 +234,6 @@ class PulsingAnnotationView: MKAnnotationView {
         let width = bounds.width * pulseScaleFactor
         layer.bounds = CGRect(x: 0, y: 0, width: width, height: width)
         layer.position = CGPoint(x: bounds.width / 2.0, y: bounds.height / 2.0)
-        layer.contentsScale = UIScreen.main.scale
         layer.backgroundColor = pulseColor?.cgColor ?? nil
         layer.cornerRadius = width / 2.0
         layer.opacity = 0
@@ -274,7 +288,6 @@ class PulsingAnnotationView: MKAnnotationView {
         layer.contents = buildCircleImage(color: outerColor, height: bounds.height).cgImage
         layer.position = CGPoint(x: bounds.width / 2.0, y: bounds.height / 2.0)
         layer.contentsGravity = .center
-        layer.contentsScale = UIScreen.main.scale
         layer.shadowColor = UIColor.black.cgColor
         layer.shadowOffset = CGSize(width: 0, height: 2)
         layer.shadowRadius = 3.0
@@ -292,5 +305,17 @@ class PulsingAnnotationView: MKAnnotationView {
         let dotImage = UIGraphicsGetImageFromCurrentImageContext()
         UIGraphicsEndImageContext()
         return dotImage!
+    }
+}
+
+extension PulsingAnnotationView {
+    /// Points the user-heading cone at `heading`, adding the cone image on first use.
+    func showUserHeading(_ heading: CLHeading) {
+        if headingImage == nil {
+            headingImage = Icons.userHeading
+        }
+
+        // The PulsingAnnotationView treats east as 0º.
+        headingImageView.transform = heading.trueHeading.affineTransform(rotatedBy: -0.5 * .pi)
     }
 }

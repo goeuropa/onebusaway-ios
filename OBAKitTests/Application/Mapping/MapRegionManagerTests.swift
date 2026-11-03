@@ -7,6 +7,7 @@
 //  LICENSE file in the root directory of this source tree.
 //
 
+import Combine
 import Foundation
 import MapKit
 import CoreLocation
@@ -19,6 +20,16 @@ import Testing
 @Suite(.serialized)
 final class MapRegionManagerTests: OBATestCase {
     var queue: OperationQueue!
+
+    @MainActor
+    private final class PrepareForReuseCountingStopAnnotationView: StopAnnotationView {
+        var prepareForReuseCount = 0
+
+        override func prepareForReuse() {
+            prepareForReuseCount += 1
+            super.prepareForReuse()
+        }
+    }
 
     override init() async throws {
         try await super.init()
@@ -226,6 +237,35 @@ final class MapRegionManagerTests: OBATestCase {
         #expect(!mgr.stops.isEmpty)
     }
 
+    /// The Map sheet's Routes on Map list reads `stops` through `MapSheetModel`,
+    /// which must re-render when they land — not only when the zoom gate flips,
+    /// or an open list keeps showing whatever was in memory before.
+    @Test func `Map sheet model refreshes Routes on Map when stops arrive`() async {
+        let dataLoader = MockDataLoader(testName: name)
+        let application = makeSeattleApplication(dataLoader: dataLoader)
+        clearStopCache(for: application)
+        let mgr = MapRegionManager(application: application)
+        let model = MapSheetModel(mapRegionManager: mgr, mapViewModel: MapViewModel(application: application)) { _ in }
+        #expect(model.routeFilterContent == .noRoutes)
+
+        var changeCount = 0
+        let subscription = model.objectWillChange.sink { changeCount += 1 }
+        defer { subscription.cancel() }
+
+        await mgr.requestStops(in: MKCoordinateRegion(
+            center: TestData.mockSeattleLocation.coordinate,
+            latitudinalMeters: 5000,
+            longitudinalMeters: 5000
+        ))
+
+        #expect(changeCount > 0)
+        guard case .routes(let routes) = model.routeFilterContent else {
+            Issue.record("Expected routes once stops loaded, got \(model.routeFilterContent)")
+            return
+        }
+        #expect(!routes.isEmpty)
+    }
+
     @Test func `Schedule stops request debounced load populates stops`() async {
         let dataLoader = MockDataLoader(testName: name)
         let application = makeSeattleApplication(dataLoader: dataLoader)
@@ -382,6 +422,43 @@ final class MapRegionManagerTests: OBATestCase {
         #expect(Set(mgr.stops.map(\.id)) == Set(fixtureStops.map(\.id)))
     }
 
+    /// With a whole region synced (#1555) the box around a settle can hold
+    /// hundreds of cached stops. One read returns the nearest 400 only, so the
+    /// 50 near the edge of the view are left out.
+    @Test func `Schedule stops request serves at most the 400 nearest cached stops`() async throws {
+        let dataLoader = MockDataLoader(testName: name)
+        let application = makeSeattleApplication(dataLoader: dataLoader)
+        let mgr = MapRegionManager(application: application)
+        let regionId = try #require(application.currentRegion?.regionIdentifier)
+        clearStopCache(for: application)
+
+        let center = CLLocationCoordinate2D(latitude: 47.653, longitude: -122.308)
+        // A 20 × 20 grid about 200 m across, and a row near the top of the view.
+        let near: [Stop] = (0..<400).map { index in
+            let dLat = Double(index / 20 - 10) * 0.0001
+            let dLon = Double(index % 20 - 10) * 0.0001
+            let location = CLLocation(latitude: center.latitude + dLat, longitude: center.longitude + dLon)
+            return Stop(id: "near_\(index)", name: "Near \(index)", location: location)
+        }
+        let edge: [Stop] = (0..<50).map { index in
+            let location = CLLocation(latitude: center.latitude + 0.03, longitude: center.longitude + Double(index) * 0.0005)
+            return Stop(id: "edge_\(index)", name: "Edge \(index)", location: location)
+        }
+        application.stopCacheRepository?.saveStops(near + edge, regionId: regionId)
+
+        let recorder = StopsRecorder()
+        mgr.addDelegate(recorder)
+        mgr.scheduleStopsRequest(in: MKCoordinateRegion(center: center, latitudinalMeters: 8000, longitudinalMeters: 8000))
+
+        await poll(until: { !recorder.deliveries.isEmpty }, "the cache was never served")
+        let firstDelivery = try #require(recorder.deliveries.first)
+        #expect(MapRegionManager.cachedStopReadLimit == 400)
+        #expect(Set(firstDelivery.map(\.id)) == Set(near.map(\.id)))
+
+        mgr.cancelScheduledStopsRequest()
+        clearStopCache(for: application)
+    }
+
     /// A cache miss is a no-op: the previously-loaded stops stay on the map until
     /// the network refresh repopulates the cache — no empty set is ever
     /// published (which would flash the map blank between the settle and the
@@ -488,13 +565,87 @@ final class MapRegionManagerTests: OBATestCase {
 
     /// The under-pin label height gate (routes served / bookmark name), shared
     /// by the UIKit `shouldHideExtraStopAnnotationData` and the SwiftUI
-    /// `MapPanelRootView` — labels show only at/below the 7,000-point threshold.
+    /// `MapPanelRootView` — labels show only at/below the 5,000-point threshold.
     @Test func `Should show extra stop data threshold behavior`() {
         // Zoomed in close → show labels.
         #expect(MapRegionManager.shouldShowExtraStopData(forVisibleMapRectHeight: 1_000) == true)
         // At the threshold → still show.
-        #expect(MapRegionManager.shouldShowExtraStopData(forVisibleMapRectHeight: 7_000) == true)
+        #expect(MapRegionManager.shouldShowExtraStopData(forVisibleMapRectHeight: 5_000) == true)
         // Zoomed out past it → hide.
-        #expect(MapRegionManager.shouldShowExtraStopData(forVisibleMapRectHeight: 7_001) == false)
+        #expect(MapRegionManager.shouldShowExtraStopData(forVisibleMapRectHeight: 5_001) == false)
+    }
+
+    // MARK: - Bookmark selection preservation
+
+    private func makeBookmarkManager() -> MapRegionManager {
+        let queue = OperationQueue()
+        let dataLoader = MockDataLoader(testName: name)
+        let application = buildApplication(queue: queue, dataLoader: dataLoader)
+        return MapRegionManager(application: application)
+    }
+
+    /// When stop annotations reload, a sibling `Stop` for a bookmarked stopID is
+    /// removed but the selected `Bookmark` must stay selected — rebinding its view
+    /// dismisses the callout (#782).
+    @Test @MainActor
+    func `Display unique stop annotations preserves selected bookmark`() throws {
+        let mgr = makeBookmarkManager()
+        mgr.mapView.register(
+            PrepareForReuseCountingStopAnnotationView.self,
+            forAnnotationViewWithReuseIdentifier: MKMapView.reuseIdentifier(for: StopAnnotationView.self)
+        )
+
+        // Host the map so MapKit vends annotation views. Calling `viewFor`
+        // directly hands the dequeued view to the test, not the map, so
+        // `mapView.view(for:)` would observe a different instance (or nil).
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        mgr.mapView.frame = window.bounds
+        window.addSubview(mgr.mapView)
+        window.makeKeyAndVisible()
+
+        let stop = try #require(Fixtures.loadSomeStops().first)
+        let bookmark = Bookmark(name: "Home", regionIdentifier: pugetSoundRegionIdentifier, stop: stop)
+
+        mgr.mapView.addAnnotations([stop, bookmark])
+        mgr.mapView.setCenter(stop.coordinate, animated: false)
+        mgr.mapView.layoutIfNeeded()
+        mgr.mapView.selectAnnotation(bookmark, animated: false)
+
+        let bookmarkView = try #require(
+            mgr.mapView.view(for: bookmark) as? PrepareForReuseCountingStopAnnotationView
+        )
+
+        // Simulate a stale sibling Stop lingering after a stops reload.
+        mgr.bookmarks = [bookmark]
+
+        #expect(mgr.mapView.selectedAnnotations.contains { $0 === bookmark })
+        #expect(mgr.mapView.annotations.contains { $0 === bookmark })
+        #expect(!mgr.mapView.annotations.contains { ($0 as? Stop)?.id == stop.id })
+        #expect(bookmarkView.prepareForReuseCount == 0)
+        #expect(mgr.mapView.view(for: bookmark) === bookmarkView)
+    }
+
+    /// Disabling the stops layer removes browse stops but must not deselect a
+    /// bookmark the rider is actively previewing.
+    @Test @MainActor
+    func `Remove stop annotations preserving selection keeps selected bookmark`() throws {
+        let mgr = makeBookmarkManager()
+        mgr.registerMapLayer(StopsMapLayer(manager: mgr))
+
+        let stops = try Fixtures.loadSomeStops()
+        let stop = try #require(stops.first)
+        let otherStop = try #require(stops.dropFirst().first)
+        let bookmark = Bookmark(name: "Work", regionIdentifier: pugetSoundRegionIdentifier, stop: stop)
+
+        mgr.bookmarks = [bookmark]
+        mgr.mapView.addAnnotation(stop)
+        mgr.mapView.addAnnotation(otherStop)
+        mgr.mapView.selectAnnotation(bookmark, animated: false)
+
+        mgr.setMapLayerEnabled(false, id: StopsMapLayer.layerID)
+
+        #expect(mgr.mapView.selectedAnnotations.contains { $0 === bookmark })
+        #expect(mgr.mapView.annotations.contains { $0 === bookmark })
+        #expect(mgr.mapView.annotations.contains { ($0 as? Stop)?.id == stop.id })
     }
 }

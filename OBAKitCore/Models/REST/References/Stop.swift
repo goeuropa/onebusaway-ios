@@ -29,6 +29,21 @@ public enum Direction: Int, Comparable {
     public static func < (lhs: Direction, rhs: Direction) -> Bool {
         return lhs.rawValue < rhs.rawValue
     }
+
+    /// The canonical unlocalized cardinal direction abbreviation (e.g. "N", "S", "W"), or nil if unknown.
+    public var canonicalAbbreviation: String? {
+        switch self {
+        case .n: return "N"
+        case .ne: return "NE"
+        case .e: return "E"
+        case .se: return "SE"
+        case .s: return "S"
+        case .sw: return "SW"
+        case .w: return "W"
+        case .nw: return "NW"
+        case .unknown: return nil
+        }
+    }
 }
 
 public enum StopLocationType: Int, Decodable {
@@ -113,6 +128,13 @@ public final class Stop: NSObject, Identifiable, Codable, HasReferences, @unchec
     /// Route IDs correspond to values in References.
     public let routeIDs: [String]
 
+    /// IDs of `/api/ondemand` services that reference this stop — a
+    /// location-group member, or a deviated route's timed stop (wiki §3.1).
+    /// Empty for servers and feeds without flex data; the key is omitted on the
+    /// wire when empty and this property is encoded only when non-empty, so
+    /// cached stop blobs for non-flex regions are byte-identical to before.
+    public let onDemandServiceIDs: [String]
+
     /// A list of `Route`s served by this stop.
     public var routes: [Route]!
 
@@ -149,10 +171,47 @@ public final class Stop: NSObject, Identifiable, Codable, HasReferences, @unchec
         case lon
         case locationType
         case name
+        case onDemandServiceIDs = "onDemandServiceIds"
         case regionIdentifier
         case routes
         case routeIDs = "routeIds"
         case wheelchairBoarding
+    }
+
+    public init(
+        id: StopID,
+        name: String,
+        code: String = "",
+        direction: String? = nil,
+        location: CLLocation = CLLocation(latitude: 0, longitude: 0),
+        locationType: StopLocationType = .stop,
+        routeIDs: [String] = [],
+        onDemandServiceIDs: [String] = [],
+        regionIdentifier: Int? = nil,
+        wheelchairBoarding: WheelchairBoarding = .unknown
+    ) {
+        self.id = id
+        self.name = name
+        self.code = code
+        self._direction = direction
+        self.location = location
+        self.locationType = locationType
+        self.routeIDs = routeIDs
+        self.onDemandServiceIDs = onDemandServiceIDs
+        self.routes = []
+        self.regionIdentifier = regionIdentifier
+        self.wheelchairBoarding = wheelchairBoarding
+        super.init()
+    }
+
+    public convenience init(watchBookmark: WatchBookmark) {
+        self.init(
+            id: watchBookmark.stopID,
+            name: watchBookmark.stopName,
+            direction: watchBookmark.stopDirection,
+            location: CLLocation(latitude: watchBookmark.latitude, longitude: watchBookmark.longitude),
+            regionIdentifier: Int(watchBookmark.regionIdentifier)
+        )
     }
 
     public required init(from decoder: Decoder) throws {
@@ -170,6 +229,7 @@ public final class Stop: NSObject, Identifiable, Codable, HasReferences, @unchec
         locationType = try container.decode(StopLocationType.self, forKey: .locationType)
 
         routeIDs = try container.decode([String].self, forKey: .routeIDs)
+        onDemandServiceIDs = try container.decodeIfPresent([String].self, forKey: .onDemandServiceIDs) ?? []
 
         if let encodedRoutes = try container.decodeIfPresent([Route].self, forKey: .routes) {
             // If we are decoding a Stop that has been serialized internally (e.g. as
@@ -195,9 +255,22 @@ public final class Stop: NSObject, Identifiable, Codable, HasReferences, @unchec
         try container.encode(locationType.rawValue, forKey: .locationType)
         try container.encode(name, forKey: .name)
         try container.encode(routeIDs, forKey: .routeIDs)
+        if !onDemandServiceIDs.isEmpty {
+            try container.encode(onDemandServiceIDs, forKey: .onDemandServiceIDs)
+        }
         try container.encodeIfPresent(regionIdentifier, forKey: .regionIdentifier)
-        try container.encodeIfPresent(routes, forKey: .routes)
+        if encoder.userInfo[Self.omitsRoutesUserInfoKey] as? Bool != true {
+            try container.encodeIfPresent(routes, forKey: .routes)
+        }
         try container.encode(wheelchairBoarding.rawValue, forKey: .wheelchairBoarding)
+    }
+
+    /// Set to `true` in an encoder's `userInfo` to leave `routes` out. The stop
+    /// cache stores routes once per region instead, since a full copy in every
+    /// stop made a synced region several times larger (#1555). Recent stops and
+    /// bookmarks don't set it, so they keep their routes.
+    static var omitsRoutesUserInfoKey: CodingUserInfoKey {
+        CodingUserInfoKey(rawValue: "omitsRoutes")!
     }
 
     // MARK: - HasReferences
@@ -228,6 +301,7 @@ public final class Stop: NSObject, Identifiable, Codable, HasReferences, @unchec
             location.coordinate.longitude == rhs.location.coordinate.longitude &&
             locationType == rhs.locationType &&
             name == rhs.name &&
+            onDemandServiceIDs == rhs.onDemandServiceIDs &&
             regionIdentifier == rhs.regionIdentifier &&
             routeIDs == rhs.routeIDs &&
             wheelchairBoarding == rhs.wheelchairBoarding
@@ -242,6 +316,7 @@ public final class Stop: NSObject, Identifiable, Codable, HasReferences, @unchec
         hasher.combine(location.coordinate.longitude)
         hasher.combine(locationType)
         hasher.combine(name)
+        hasher.combine(onDemandServiceIDs)
         hasher.combine(regionIdentifier)
         hasher.combine(routeIDs)
         hasher.combine(wheelchairBoarding)

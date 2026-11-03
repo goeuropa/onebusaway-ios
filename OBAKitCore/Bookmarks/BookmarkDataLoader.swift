@@ -52,28 +52,63 @@ public class BookmarkDataLoader: NSObject {
     /// Resumed when that batch drains (`taskFinished`) or is retired (`cancelUpdates`).
     @MainActor private var batchContinuations: [UInt64: [CheckedContinuation<Void, Never>]] = [:]
 
-    /// Stops whose arrival fetch has completed successfully at least once this
-    /// session. Lets consumers distinguish "still loading" from "loaded, but no
-    /// upcoming departures".
+    /// Stops whose arrival fetch has finished this session — a successful
+    /// payload, a literal HTTP 404, or HTTP 200 with body `null`. Lets
+    /// consumers distinguish "still loading" from "loaded, but no upcoming
+    /// departures". Empty HTTP 200 (also thrown as `APIError.requestNotFound`)
+    /// is not recorded here.
     @MainActor private var fetchedStopIDs = Set<StopID>()
 
-    /// `true` once at least one arrival fetch for `stopID` has completed
-    /// successfully this session.
+    /// `true` once an arrival fetch for `stopID` has finished this session
+    /// (success, HTTP 404, or JSON `null`).
     @MainActor public func hasFetchedData(forStopID stopID: StopID) -> Bool {
         fetchedStopIDs.contains(stopID)
     }
 
-    public init(application: CoreApplication, delegate: BookmarkDataDelegate) {
+    /// When set, supplies the bookmarks a batch should fetch instead of every
+    /// bookmark in the current region. Lets a caller that only displays a few
+    /// bookmarks — the home sheet's preview section — reuse this loader without
+    /// paying for the whole set.
+    private let bookmarkProvider: (() -> [Bookmark])?
+
+    /// When `false`, `startRefreshTimer()` is a no-op, so the loader fetches
+    /// only when explicitly asked. Callers that display a handful of bookmarks
+    /// outside a dedicated screen don't want a background 30-second cycle.
+    private let autoRefreshes: Bool
+
+    public init(
+        application: CoreApplication,
+        delegate: BookmarkDataDelegate,
+        bookmarkProvider: (() -> [Bookmark])? = nil,
+        autoRefreshes: Bool = true
+    ) {
         self.application = application
         self.delegate = delegate
+        self.bookmarkProvider = bookmarkProvider
+        self.autoRefreshes = autoRefreshes
     }
 
     public func startRefreshTimer() {
         timer?.invalidate()
 
+        guard autoRefreshes else {
+            timer = nil
+            return
+        }
+
         timer = Timer.scheduledMainActorTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] in
             self?.loadData()
         }
+    }
+
+    /// Whether a repeating refresh is currently armed.
+    ///
+    /// Deliberately `internal`, not `public`: nothing in the app reads it, and
+    /// it exists so `BookmarkDataLoaderTests` can assert that a loader built with
+    /// `autoRefreshes: false` really installs no timer. `@testable import` reaches
+    /// it; the framework's public surface doesn't grow for a test.
+    var hasScheduledRefresh: Bool {
+        timer?.isValid ?? false
     }
 
     public func cancelUpdates() {
@@ -124,7 +159,10 @@ public class BookmarkDataLoader: NSObject {
     }
 
     private func eligibleBookmarks() -> [Bookmark] {
-        application.userDataStore.bookmarks.filter {
+        if let bookmarkProvider {
+            return bookmarkProvider()
+        }
+        return application.userDataStore.bookmarks.filter {
             $0.regionIdentifier == application.regionsService.currentRegion?.id
         }
     }
@@ -140,58 +178,115 @@ public class BookmarkDataLoader: NSObject {
                 batchContinuations[batchID, default: []].append(continuation)
             }
         }
+
+        // `beginBatch` reserved one slot per bookmark. Results arrive per *stop*
+        // (the loader fetches each stop once), so count how many slots each stop
+        // settles, and release at once the slots that will never fetch.
+        var slotsByStop = [StopID: Int]()
+        var destinationsByStop = [StopID: [BookmarkDestination]]()
         for bookmark in bookmarks {
-            loadData(bookmark: bookmark, batchID: batchID)
+            if application.apiService != nil, bookmark.isTripBookmark {
+                slotsByStop[bookmark.stopID, default: 0] += 1
+                if let destination = BookmarkDestination(bookmark: bookmark) {
+                    destinationsByStop[bookmark.stopID, default: []].append(destination)
+                }
+            } else {
+                // No fetch will run for this bookmark — release the slot reserved by beginBatch.
+                taskFinished(batchID: batchID)
+            }
+        }
+
+        guard let apiService = application.apiService, !slotsByStop.isEmpty else { return }
+
+        let slots = slotsByStop
+        let destinationsByStopSnapshot = destinationsByStop
+        let requests = slots.keys.map { BookmarkArrivalsRequest(stopID: $0) }
+        Task(priority: .userInitiated) {
+            for await (stopID, result) in BookmarkArrivalsLoader().arrivals(for: requests, using: apiService) {
+                // The loader only ever reports stops it was asked about, so a
+                // miss here means the invariant broke. Settling 0 slots would
+                // leave the batch short a release and hang `loadDataAndWait`
+                // silently; say so in debug instead.
+                guard let stopSlots = slots[stopID] else {
+                    assertionFailure("BookmarkArrivalsLoader delivered a stop (\(stopID)) this batch never requested.")
+                    continue
+                }
+
+                // One task per stop, so a slow `displayError` for one stop
+                // does not hold up delivery of the next stop's arrivals.
+                let destinations = destinationsByStopSnapshot[stopID] ?? []
+                Task { @MainActor in
+                    await self.settle(
+                        result,
+                        stopID: stopID,
+                        slots: stopSlots,
+                        destinations: destinations,
+                        apiService: apiService,
+                        batchID: batchID
+                    )
+                }
+            }
         }
     }
 
+    /// Applies one stop's result, then releases the slots of every bookmark at
+    /// that stop. The release comes last, as it did when this was a `defer`:
+    /// `loadDataAndWait()` must not return before the delegate has been told.
+    ///
+    /// For bookmarks at this stop that track a destination, the arrivals are
+    /// delivered first and the trip schedules needed for destination arrival
+    /// times load afterwards in a separate task, so neither the departures nor
+    /// the batch's completion wait on them.
     @MainActor
-    private func loadData(bookmark: Bookmark, batchID: UInt64) {
-        guard
-            let apiService = application.apiService,
-            bookmark.isTripBookmark
-        else {
-            // No fetch will run for this bookmark — release the slot reserved by beginBatch.
-            taskFinished(batchID: batchID)
-            return
+    private func settle(
+        _ result: Result<[ArrivalDeparture], Error>,
+        stopID: StopID,
+        slots: Int,
+        destinations: [BookmarkDestination],
+        apiService: RESTAPIService,
+        batchID: UInt64
+    ) async {
+        defer {
+            for _ in 0..<slots { taskFinished(batchID: batchID) }
         }
 
-        Task(priority: .userInitiated) {
-            defer {
-                Task { @MainActor in self.taskFinished(batchID: batchID) }
+        // Skip stale completions: a newer batch has already started (or
+        // cancelUpdates() retired this one), so writing this fetch's data would
+        // overwrite fresher results, and an error would be shown to a consumer
+        // that has moved on.
+        guard batchID == currentBatchID else { return }
+
+        switch result {
+        case .success(let arrivals):
+            fetchedStopIDs.insert(stopID)
+            for (key, deps) in arrivals.tripKeyGroupedElements {
+                tripBookmarkKeys[key] = deps
             }
-            do {
-                let stopArrivals = try await apiService.getArrivalsAndDeparturesForStop(id: bookmark.stopID, minutesBefore: 0, minutesAfter: 60).entry
+            delegate?.dataLoaderDidUpdate(self)
 
-                await MainActor.run {
-                    // Skip stale completions: a newer batch has already started, so
-                    // writing this fetch's data would overwrite fresher results and
-                    // fire dataLoaderDidUpdate with stale state for the consumer.
-                    guard batchID == self.currentBatchID else { return }
-
-                    self.fetchedStopIDs.insert(bookmark.stopID)
-
-                    let keysAndDeps = stopArrivals.arrivalsAndDepartures.tripKeyGroupedElements
-                    for (key, deps) in keysAndDeps {
-                        self.tripBookmarkKeys[key] = deps
-                    }
-
-                    self.delegate?.dataLoaderDidUpdate(self)
+            // Its own task, not an `await` here: the `defer` above releases this
+            // stop's slots only when `settle` returns, so waiting on the
+            // sequential schedule fetches would hold `isLoading` true and
+            // delay `loadDataAndWait()` for as long as they take.
+            if !destinations.isEmpty {
+                Task { @MainActor [weak self] in
+                    await self?.loadTripSchedules(for: destinations, using: apiService, batchID: batchID)
                 }
-            } catch {
-                // Same staleness gate as the success path: if cancelUpdates() retired
-                // the batch (or a newer batch started) while this fetch was in flight,
-                // suppress the error — the consumer has moved on and shouldn't see it.
-                let isCurrent = await MainActor.run { () -> Bool in
-                    let current = batchID == self.currentBatchID
-                    // Record the failure against the live batch so the batch-complete
-                    // signal can report whether any fetch errored.
-                    if current { self.lastBatchHadError = true }
-                    return current
-                }
-                guard isCurrent else { return }
-                await self.application.displayError(error)
             }
+
+        case .failure(let error as APIError) where error.indicatesMissingStop:
+            // The stop no longer exists in this region. Don't bulletin —
+            // settle the card on "No upcoming departures" and drop any
+            // previous countdown for this stop.
+            fetchedStopIDs.insert(stopID)
+            tripBookmarkKeys = tripBookmarkKeys.filter { $0.key.stopID != stopID }
+            delegate?.dataLoaderDidUpdate(self)
+
+        case .failure(let error):
+            // Record the failure against the live batch so the batch-complete
+            // signal can report whether any fetch errored.
+            lastBatchHadError = true
+            await application.displayError(error)
         }
     }
 
@@ -230,7 +325,145 @@ public class BookmarkDataLoader: NSObject {
         tripBookmarkKeys[key, default: []]
     }
 
+    // MARK: - Destination Arrivals
+
+    /// How many upcoming departures per destination bookmark get an arrival time.
+    /// The card shows one arrival; the rest let it skip departures that don't
+    /// reach the destination (short-turn trips) without leaving the card empty.
+    static let destinationLookupLimit = 3
+
+    /// Upper bound on cached trip schedules. Schedules are static for a service
+    /// day, so the cache is simply reset when it grows past this.
+    private static let tripScheduleCacheLimit = 200
+
+    /// Scheduled stop times, by trip run. Cached across refreshes: a trip's
+    /// timetable doesn't change during the day, and the deviation used for the
+    /// estimate comes from the freshly fetched `ArrivalDeparture` instead.
+    private var tripSchedules = [TripScheduleKey: [TripStopTime]]()
+
+    /// Trips whose schedule fetch failed, so `destinationArrival(for:...)` can
+    /// report `.unavailable` rather than leaving the card on "Loading…" for as
+    /// long as the failure lasts. Kept across refreshes to avoid flicker, but
+    /// not a permanent verdict: each refresh retries these trips, and a
+    /// success removes the entry.
+    private var failedTripSchedules = Set<TripScheduleKey>()
+
+    /// When `arrivalDeparture`'s trip reaches `destinationStopID`, as far as the
+    /// loader currently knows.
+    public func destinationArrival(for arrivalDeparture: ArrivalDeparture, destinationStopID: StopID) -> DestinationArrivalLookup {
+        let key = TripScheduleKey(arrivalDeparture: arrivalDeparture)
+        guard let stopTimes = tripSchedules[key] else {
+            return failedTripSchedules.contains(key) ? .unavailable : .pending
+        }
+
+        if let arrival = DestinationArrival.estimate(origin: arrivalDeparture, stopTimes: stopTimes, destinationStopID: destinationStopID) {
+            return .arrives(arrival)
+        }
+        return .notServed
+    }
+
+    /// Fetches the schedules of the upcoming trips each destination needs, one
+    /// trip at a time, and tells the delegate once if anything new arrived.
+    ///
+    /// Runs outside the batch: it isn't counted in `pendingFetchCount`, so it
+    /// neither delays `isLoading` nor `loadDataAndWait()`. It stops as soon as
+    /// its batch is retired (a newer refresh, or `cancelUpdates()`); the newer
+    /// batch looks up whatever is still missing.
+    ///
+    /// A failed schedule fetch is logged rather than surfaced, and recorded so
+    /// the card can stop showing the arrival as loading. The departures are
+    /// already on screen, and the schedule is retried next refresh.
+    private func loadTripSchedules(for destinations: [BookmarkDestination], using apiService: RESTAPIService, batchID: UInt64) async {
+        var requested = Set<TripScheduleKey>()
+        var didChange = false
+
+        for destination in destinations {
+            for arrivalDeparture in departuresNeedingSchedules(for: destination) {
+                guard batchID == currentBatchID else { return }
+
+                let key = TripScheduleKey(arrivalDeparture: arrivalDeparture)
+                guard requested.insert(key).inserted else { continue }
+
+                do {
+                    let tripDetails = try await apiService.getTrip(
+                        tripID: arrivalDeparture.tripID,
+                        vehicleID: arrivalDeparture.vehicleID,
+                        serviceDate: arrivalDeparture.serviceDate
+                    ).entry
+
+                    if tripSchedules.count >= Self.tripScheduleCacheLimit {
+                        tripSchedules.removeAll()
+                    }
+                    tripSchedules[key] = tripDetails.stopTimes
+                    failedTripSchedules.remove(key)
+                    didChange = true
+                } catch {
+                    if error.isCancellation { return }
+                    Logger.error("BookmarkDataLoader: schedule for trip \(arrivalDeparture.tripID) failed: \(error.localizedDescription)")
+
+                    if failedTripSchedules.count >= Self.tripScheduleCacheLimit {
+                        failedTripSchedules.removeAll()
+                    }
+                    // Only a trip's first failure changes what the card shows.
+                    if failedTripSchedules.insert(key).inserted {
+                        didChange = true
+                    }
+                }
+            }
+        }
+
+        // A schedule that lands as its batch is retired stays cached for the next
+        // one, but only the live batch may notify, matching `settle`.
+        if didChange, batchID == currentBatchID {
+            delegate?.dataLoaderDidUpdate(self)
+        }
+    }
+
+    /// The upcoming departures for `destination` whose schedules aren't cached,
+    /// among the first `destinationLookupLimit` that may still reach the
+    /// destination. Departures already known not to reach it don't count
+    /// toward the limit, so a run of short-turn trips can't starve the card.
+    private func departuresNeedingSchedules(for destination: BookmarkDestination) -> [ArrivalDeparture] {
+        var needed = [ArrivalDeparture]()
+        var candidates = 0
+
+        for arrivalDeparture in dataForKey(destination.tripKey) where arrivalDeparture.temporalState != .past {
+            guard candidates < Self.destinationLookupLimit else { break }
+
+            switch destinationArrival(for: arrivalDeparture, destinationStopID: destination.stopID) {
+            case .notServed:
+                continue
+            case .arrives:
+                candidates += 1
+            case .pending, .unavailable:
+                // Unavailable trips are retried: the failure may have been transient.
+                candidates += 1
+                needed.append(arrivalDeparture)
+            }
+        }
+
+        return needed
+    }
+
     /// A dictionary that maps each bookmark to `ArrivalDeparture`s.
     /// This is used to update the UI when new `ArrivalDeparture` objects are loaded.
     private var tripBookmarkKeys = [TripBookmarkKey: [ArrivalDeparture]]()
+}
+
+/// The trip and destination stop a destination bookmark needs arrival times for.
+struct BookmarkDestination: Sendable {
+    let tripKey: TripBookmarkKey
+    let stopID: StopID
+
+    init?(bookmark: Bookmark) {
+        guard
+            bookmark.hasDestination,
+            let tripKey = TripBookmarkKey(bookmark: bookmark),
+            let stopID = bookmark.destinationStopID
+        else {
+            return nil
+        }
+        self.tripKey = tripKey
+        self.stopID = stopID
+    }
 }

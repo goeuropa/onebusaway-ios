@@ -1,8 +1,34 @@
 default_platform(:ios)
 
+TEAM_ID = "4ZQCMA634J"
+APP_BUNDLE_ID = "org.onebusaway.iphone"
+WIDGET_BUNDLE_ID = "org.onebusaway.iphone.OBAWidget"
+WATCH_BUNDLE_ID = "org.onebusaway.iphone.watchkitapp"
+EXTERNAL_TESTER_GROUP = "Public Beta Testers"
+
 platform :ios do
   desc "Build and upload to TestFlight"
   lane :beta do
+    # The archive is signed manually rather than by Xcode's automatic signing.
+    # That keeps the App Store Connect API key below away from signing assets:
+    # automatic signing would need -allowProvisioningUpdates, which in turn needs
+    # a key that can mint and revoke the team's certificates and profiles.
+    # .github/workflows/testflight.yml installs the profiles and exports their
+    # names here.
+    app_profile = ENV.fetch("APP_PROVISIONING_PROFILE_NAME") do
+      UI.user_error!("APP_PROVISIONING_PROFILE_NAME is not set. This lane is " \
+                     "driven by .github/workflows/testflight.yml, which installs " \
+                     "the provisioning profiles and exports their names.")
+    end
+    widget_profile = ENV.fetch("WIDGET_PROVISIONING_PROFILE_NAME") do
+      UI.user_error!("WIDGET_PROVISIONING_PROFILE_NAME is not set. See the note " \
+                     "on APP_PROVISIONING_PROFILE_NAME above.")
+    end
+    watch_profile = ENV.fetch("WATCH_PROVISIONING_PROFILE_NAME") do
+      UI.user_error!("WATCH_PROVISIONING_PROFILE_NAME is not set. See the note " \
+                     "on APP_PROVISIONING_PROFILE_NAME above.")
+    end
+
     # Authenticate with App Store Connect using API key from environment.
     # Secrets are configured in the repository's GitHub Actions settings.
     api_key = app_store_connect_api_key(
@@ -12,32 +38,129 @@ platform :ios do
       is_key_content_base64: true
     )
 
+    # One build number for every bundle in the archive. scripts/version stamps
+    # CFBundleVersion twice: once from generate_project, and again from the App
+    # target's `Versioning` pre-build script during the archive. WatchApp and
+    # OBAWidget are dependencies of App, so they are built before that second
+    # stamp and keep the first, minutes older. App Store Connect rejects an
+    # embedded watch app whose CFBundleVersion differs from the iOS app's. With
+    # OBA_BUILD_VERSION set, both stamps write this one value.
+    ENV["OBA_BUILD_VERSION"] = Time.now.strftime("%Y%m%d.%H%M")
+
     # Generate the Xcode project via XcodeGen (required before any build).
     # Run from the project root so the script can find Apps/OneBusAway/project.yml.
+    # No --no-watch: the archive embeds the watch app.
     Dir.chdir("..") do
       sh("scripts/generate_project", "OneBusAway")
     end
 
-    # Use the GitHub Actions run number as the build number to ensure
-    # each CI build has a unique, auto-incrementing number.
-    increment_build_number(
-      build_number: ENV.fetch("GITHUB_RUN_NUMBER"),
-      xcodeproj: "OBAKit.xcodeproj"
-    )
+    # Apply signing settings *after* generate_project, since it rewrites the
+    # pbxproj wholesale. XcodeGen's iOS application preset leaves the App target
+    # on CODE_SIGN_IDENTITY = "iPhone Developer" with no CODE_SIGN_STYLE, which
+    # Xcode reads as manual signing with no profile — the cause of the "no iOS App
+    # Development provisioning profiles were found" archive failure. Only the
+    # Release configuration is touched, so local simulator debugging is
+    # unaffected. This has to be per-target: App, OBAWidget and WatchApp are
+    # different bundle IDs needing different profiles, which a global xcargs
+    # override cannot express. The OBAKitWatch framework is signed when it is
+    # embedded and needs no profile of its own.
+    {
+      "App" => app_profile,
+      "OBAWidget" => widget_profile,
+      "WatchApp" => watch_profile
+    }.each do |target, profile_name|
+      update_code_signing_settings(
+        path: "OBAKit.xcodeproj",
+        use_automatic_signing: false,
+        targets: [target],
+        build_configurations: ["Release"],
+        team_id: TEAM_ID,
+        code_sign_identity: "Apple Distribution",
+        profile_name: profile_name
+      )
+    end
 
-    # Archive the app for App Store distribution.
+    # Archive the app for App Store distribution. The build number is not passed
+    # here: scripts/version stamps every Info.plist with OBA_BUILD_VERSION (set
+    # above), including from the App target's `Versioning` pre-build script.
     build_app(
       project: "OBAKit.xcodeproj",
       scheme: "App",
+      configuration: "Release",
       export_method: "app-store",
       output_directory: "./build",
-      clean: true
+      clean: true,
+      export_options: {
+        method: "app-store",
+        signingStyle: "manual",
+        teamID: TEAM_ID,
+        provisioningProfiles: {
+          APP_BUNDLE_ID => app_profile,
+          WIDGET_BUNDLE_ID => widget_profile,
+          WATCH_BUNDLE_ID => watch_profile
+        }
+      }
     )
 
-    # Upload the archive to TestFlight.
+    # Upload the archive, wait for App Store Connect to process it, then add it
+    # to the external group and submit it for Beta App Review. Internal testers
+    # get every build automatically (the group's "Automatic for Xcode Builds"
+    # setting); external testers get it once Apple approves the submission.
+    # reject_build_waiting_for_review withdraws an older build still waiting for
+    # review, so builds don't queue up behind Apple when Beta App Review takes
+    # longer than a night.
     upload_to_testflight(
       api_key: api_key,
-      skip_waiting_for_build_processing: true
+      changelog: testflight_changelog,
+      distribute_external: true,
+      groups: [EXTERNAL_TESTER_GROUP],
+      notify_external_testers: true,
+      reject_build_waiting_for_review: true
     )
+  end
+
+  # TestFlight rejects "What to Test" text longer than this.
+  CHANGELOG_LIMIT = 4000
+
+  # "What to Test" text: every change merged to main since the last TestFlight
+  # build, plus a link to the history. Builds are nightly, so one build usually
+  # carries several pull requests. The workflow's gate job passes the commit of
+  # the last build in TESTFLIGHT_PREVIOUS_SHA; without it (first build, or that
+  # commit is gone from main's history) only the newest change is listed.
+  def testflight_changelog
+    sha = sh("git", "rev-parse", "HEAD", log: false).strip
+    previous = ENV.fetch("TESTFLIGHT_PREVIOUS_SHA", "").strip
+    since_previous = !previous.empty? &&
+                     system("git", "merge-base", "--is-ancestor", previous, sha,
+                            out: File::NULL, err: File::NULL)
+    range = since_previous ? ["#{previous}..#{sha}"] : ["-1", sha]
+
+    # --first-parent walks main itself: one entry per merged pull request (or
+    # direct push), not every commit inside each pull request.
+    log = sh("git", "log", "--first-parent", "--format=%B%x00", *range, log: false)
+    changes = log.split("\0").map(&:strip).reject(&:empty?).map { |m| "• #{change_summary(m)}" }
+
+    header = since_previous ? "Changes since the last TestFlight build:" : "Latest change:"
+    footer = "Full history: https://github.com/OneBusAway/onebusaway-ios/commits/#{sha}"
+    # Leave room for the header, the footer, and an "…and N more" line.
+    budget = CHANGELOG_LIMIT - header.length - footer.length - 40
+    listed = []
+    changes.each do |line|
+      break if listed.sum { |l| l.length + 1 } + line.length + 1 > budget
+      listed << line
+    end
+    listed << "…and #{changes.length - listed.length} more" if listed.length < changes.length
+
+    "#{header}\n#{listed.join("\n")}\n\n#{footer}"
+  end
+
+  # One line per change. "Merge pull request #123 from owner/branch\n\nTitle"
+  # reads better as "Title (#123)"; anything else is its subject line.
+  def change_summary(message)
+    if (match = message.match(/\AMerge pull request (#\d+) from \S+\s+(.+)/m))
+      "#{match[2].lines.first.strip} (#{match[1]})"
+    else
+      message.lines.first.strip
+    end
   end
 end

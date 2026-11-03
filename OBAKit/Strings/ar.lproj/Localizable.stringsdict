@@ -2,6 +2,30 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>alarm_builder_controller.minutes_fmt</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@count@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>few</key>
+			<string>%d دقائق</string>
+			<key>many</key>
+			<string>%d دقيقة</string>
+			<key>one</key>
+			<string>دقيقة واحدة</string>
+			<key>other</key>
+			<string>%d دقيقة</string>
+			<key>two</key>
+			<string>دقيقتان</string>
+			<key>zero</key>
+			<string>صفر دقيقة</string>
+		</dict>
+	</dict>
 	<key>data_migration_bulletin.report_summary_number_of_failures</key>
 	<dict>
 		<key>NSStringLocalizedFormatKey</key>
@@ -12,18 +36,18 @@
 			<string>NSStringPluralRuleType</string>
 			<key>NSStringFormatValueTypeKey</key>
 			<string>d</string>
-			<key>zero</key>
-			<string>لا توجد حالات فشل</string>
-			<key>one</key>
-			<string>حالة فشل واحدة</string>
-			<key>two</key>
-			<string>حالتا فشل</string>
 			<key>few</key>
 			<string>%d حالات فشل</string>
 			<key>many</key>
 			<string>%d حالة فشل</string>
+			<key>one</key>
+			<string>حالة فشل واحدة</string>
 			<key>other</key>
 			<string>%d حالة فشل</string>
+			<key>two</key>
+			<string>حالتا فشل</string>
+			<key>zero</key>
+			<string>لا توجد حالات فشل</string>
 		</dict>
 	</dict>
 	<key>data_migration_bulletin.report_summary_number_of_successes</key>
@@ -36,18 +60,186 @@
 			<string>NSStringPluralRuleType</string>
 			<key>NSStringFormatValueTypeKey</key>
 			<string>d</string>
-			<key>zero</key>
-			<string>لا توجد حالات ناجحة</string>
-			<key>one</key>
-			<string>حالة ناجحة واحدة</string>
-			<key>two</key>
-			<string>حالتان ناجحتان</string>
 			<key>few</key>
 			<string>%d حالات ناجحة</string>
 			<key>many</key>
 			<string>%d حالة ناجحة</string>
+			<key>one</key>
+			<string>حالة ناجحة واحدة</string>
 			<key>other</key>
 			<string>%d حالة ناجحة</string>
+			<key>two</key>
+			<string>حالتان ناجحتان</string>
+			<key>zero</key>
+			<string>لا توجد حالات ناجحة</string>
+		</dict>
+	</dict>
+	<key>map_controller.map_type.accessibility_value_with_layers_fmt</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%1$@، %2$#@count@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>few</key>
+			<string>%2$d طبقات مفعّلة</string>
+			<key>many</key>
+			<string>%2$d طبقة مفعّلة</string>
+			<key>one</key>
+			<string>طبقة واحدة مفعّلة</string>
+			<key>other</key>
+			<string>%2$d طبقة مفعّلة</string>
+			<key>two</key>
+			<string>طبقتان مفعّلتان</string>
+			<key>zero</key>
+			<string>لا توجد طبقات مفعّلة</string>
+		</dict>
+	</dict>
+	<key>map_controller.stop_cluster.accessibility_label_fmt</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@count@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>few</key>
+			<string>%d مواقف</string>
+			<key>many</key>
+			<string>%d موقفًا</string>
+			<key>one</key>
+			<string>موقف واحد</string>
+			<key>other</key>
+			<string>%d موقف</string>
+			<key>two</key>
+			<string>موقفان</string>
+			<key>zero</key>
+			<string>لا توجد مواقف</string>
+		</dict>
+	</dict>
+	<key>next_departures_intent.in_minutes_fmt</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@count@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>few</key>
+			<string>خلال %d دقائق</string>
+			<key>many</key>
+			<string>خلال %d دقيقة</string>
+			<key>one</key>
+			<string>خلال دقيقة واحدة</string>
+			<key>other</key>
+			<string>خلال %d دقيقة</string>
+			<key>two</key>
+			<string>خلال دقيقتين</string>
+			<key>zero</key>
+			<string>خلال %d دقيقة</string>
+		</dict>
+	</dict>
+	<key>rental_cluster.title_fmt</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@count@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>few</key>
+			<string>%d مركبات هنا</string>
+			<key>many</key>
+			<string>%d مركبة هنا</string>
+			<key>one</key>
+			<string>مركبة واحدة هنا</string>
+			<key>other</key>
+			<string>%d مركبة هنا</string>
+			<key>two</key>
+			<string>مركبتان هنا</string>
+			<key>zero</key>
+			<string>لا توجد مركبات هنا</string>
+		</dict>
+	</dict>
+	<key>rental_annotation.vehicles_available_fmt</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@count@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>few</key>
+			<string>%d مركبات متاحة</string>
+			<key>many</key>
+			<string>%d مركبة متاحة</string>
+			<key>one</key>
+			<string>مركبة واحدة متاحة</string>
+			<key>other</key>
+			<string>%d مركبة متاحة</string>
+			<key>two</key>
+			<string>مركبتان متاحتان</string>
+			<key>zero</key>
+			<string>لا توجد مركبات متاحة</string>
+		</dict>
+	</dict>
+	<key>rental_detail.walk_time_fmt</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@count@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>few</key>
+			<string>%d دقائق مشيًا</string>
+			<key>many</key>
+			<string>%d دقيقة مشيًا</string>
+			<key>one</key>
+			<string>دقيقة واحدة مشيًا</string>
+			<key>other</key>
+			<string>%d دقيقة مشيًا</string>
+			<key>two</key>
+			<string>دقيقتان مشيًا</string>
+			<key>zero</key>
+			<string>%d دقيقة مشيًا</string>
+		</dict>
+	</dict>
+	<key>search_results_sheet.result_count_fmt</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@count@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>few</key>
+			<string>%d نتائج</string>
+			<key>many</key>
+			<string>%d نتيجة</string>
+			<key>one</key>
+			<string>نتيجة واحدة</string>
+			<key>other</key>
+			<string>%d نتيجة</string>
+			<key>two</key>
+			<string>نتيجتان</string>
+			<key>zero</key>
+			<string>لا توجد نتائج</string>
 		</dict>
 	</dict>
 	<key>stop_controller.transfer_show_earlier_departures_fmt</key>
@@ -60,18 +252,42 @@
 			<string>NSStringPluralRuleType</string>
 			<key>NSStringFormatValueTypeKey</key>
 			<string>d</string>
-			<key>zero</key>
-			<string>لا توجد مغادرات أبكر</string>
-			<key>one</key>
-			<string>إظهار مغادرة واحدة أبكر</string>
-			<key>two</key>
-			<string>إظهار مغادرتين أبكر</string>
 			<key>few</key>
 			<string>إظهار %d مغادرات أبكر</string>
 			<key>many</key>
 			<string>إظهار %d مغادرة أبكر</string>
+			<key>one</key>
+			<string>إظهار مغادرة واحدة أبكر</string>
 			<key>other</key>
 			<string>إظهار %d مغادرة أبكر</string>
+			<key>two</key>
+			<string>إظهار مغادرتين أبكر</string>
+			<key>zero</key>
+			<string>لا توجد مغادرات أبكر</string>
+		</dict>
+	</dict>
+	<key>stop_page.a11y.past_shown_fmt</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@count@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>few</key>
+			<string>يتم عرض %d مغادرات سابقة</string>
+			<key>many</key>
+			<string>يتم عرض %d مغادرة سابقة</string>
+			<key>one</key>
+			<string>يتم عرض مغادرة سابقة واحدة</string>
+			<key>other</key>
+			<string>يتم عرض %d مغادرة سابقة</string>
+			<key>two</key>
+			<string>يتم عرض مغادرتين سابقتين</string>
+			<key>zero</key>
+			<string>لا تُعرض أي مغادرة سابقة</string>
 		</dict>
 	</dict>
 	<key>stop_page.empty.no_departures_fmt</key>
@@ -84,18 +300,104 @@
 			<string>NSStringPluralRuleType</string>
 			<key>NSStringFormatValueTypeKey</key>
 			<string>d</string>
-			<key>zero</key>
-			<string>لا توجد مغادرات قادمة</string>
-			<key>one</key>
-			<string>لا توجد مغادرات خلال الدقيقة القادمة</string>
-			<key>two</key>
-			<string>لا توجد مغادرات خلال الدقيقتين القادمتين</string>
 			<key>few</key>
 			<string>لا توجد مغادرات خلال الـ%d دقائق القادمة</string>
 			<key>many</key>
 			<string>لا توجد مغادرات خلال الـ%d دقيقة القادمة</string>
+			<key>one</key>
+			<string>لا توجد مغادرات خلال الدقيقة القادمة</string>
 			<key>other</key>
 			<string>لا توجد مغادرات خلال الـ%d دقيقة القادمة</string>
+			<key>two</key>
+			<string>لا توجد مغادرات خلال الدقيقتين القادمتين</string>
+			<key>zero</key>
+			<string>لا توجد مغادرات قادمة</string>
+		</dict>
+	</dict>
+	<key>stop_page.grouped.a11y_arrives_fmt</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>الخط %1$@ إلى %2$@، الوصول التالي خلال %3$#@count@، %4$@. %5$#@departures@.</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>few</key>
+			<string>%3$d دقائق</string>
+			<key>many</key>
+			<string>%3$d دقيقة</string>
+			<key>one</key>
+			<string>دقيقة واحدة</string>
+			<key>other</key>
+			<string>%3$d دقيقة</string>
+			<key>two</key>
+			<string>دقيقتين</string>
+			<key>zero</key>
+			<string>أقل من دقيقة</string>
+		</dict>
+		<key>departures</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>few</key>
+			<string>تم تحميل %5$d مغادرات إضافية</string>
+			<key>many</key>
+			<string>تم تحميل %5$d مغادرة إضافية</string>
+			<key>one</key>
+			<string>تم تحميل مغادرة إضافية واحدة</string>
+			<key>other</key>
+			<string>تم تحميل %5$d مغادرة إضافية</string>
+			<key>two</key>
+			<string>تم تحميل مغادرتين إضافيتين</string>
+			<key>zero</key>
+			<string>لم يتم تحميل مغادرات إضافية</string>
+		</dict>
+	</dict>
+	<key>stop_page.grouped.a11y_fmt</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>الخط %1$@ إلى %2$@، المغادرة التالية خلال %3$#@count@، %4$@. %5$#@departures@.</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>few</key>
+			<string>%3$d دقائق</string>
+			<key>many</key>
+			<string>%3$d دقيقة</string>
+			<key>one</key>
+			<string>دقيقة واحدة</string>
+			<key>other</key>
+			<string>%3$d دقيقة</string>
+			<key>two</key>
+			<string>دقيقتين</string>
+			<key>zero</key>
+			<string>أقل من دقيقة</string>
+		</dict>
+		<key>departures</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>few</key>
+			<string>تم تحميل %5$d مغادرات إضافية</string>
+			<key>many</key>
+			<string>تم تحميل %5$d مغادرة إضافية</string>
+			<key>one</key>
+			<string>تم تحميل مغادرة إضافية واحدة</string>
+			<key>other</key>
+			<string>تم تحميل %5$d مغادرة إضافية</string>
+			<key>two</key>
+			<string>تم تحميل مغادرتين إضافيتين</string>
+			<key>zero</key>
+			<string>لم يتم تحميل مغادرات إضافية</string>
 		</dict>
 	</dict>
 	<key>stop_page.past_toggle_show_a11y_fmt</key>
@@ -108,18 +410,90 @@
 			<string>NSStringPluralRuleType</string>
 			<key>NSStringFormatValueTypeKey</key>
 			<string>d</string>
-			<key>zero</key>
-			<string>لا توجد مغادرات سابقة</string>
-			<key>one</key>
-			<string>إظهار مغادرة سابقة واحدة</string>
-			<key>two</key>
-			<string>إظهار مغادرتين سابقتين</string>
 			<key>few</key>
 			<string>إظهار %d مغادرات سابقة</string>
 			<key>many</key>
 			<string>إظهار %d مغادرة سابقة</string>
+			<key>one</key>
+			<string>إظهار مغادرة سابقة واحدة</string>
 			<key>other</key>
 			<string>إظهار %d مغادرة سابقة</string>
+			<key>two</key>
+			<string>إظهار مغادرتين سابقتين</string>
+			<key>zero</key>
+			<string>لا توجد مغادرات سابقة</string>
+		</dict>
+	</dict>
+	<key>stop_page.row.a11y_arrives_fmt</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>الخط %1$@ إلى %2$@، تصل خلال %3$#@count@، %4$@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>few</key>
+			<string>%3$d دقائق</string>
+			<key>many</key>
+			<string>%3$d دقيقة</string>
+			<key>one</key>
+			<string>دقيقة واحدة</string>
+			<key>other</key>
+			<string>%3$d دقيقة</string>
+			<key>two</key>
+			<string>دقيقتين</string>
+			<key>zero</key>
+			<string>أقل من دقيقة</string>
+		</dict>
+	</dict>
+	<key>stop_page.row.a11y_fmt</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>الخط %1$@ إلى %2$@، تغادر خلال %3$#@count@، %4$@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>few</key>
+			<string>%3$d دقائق</string>
+			<key>many</key>
+			<string>%3$d دقيقة</string>
+			<key>one</key>
+			<string>دقيقة واحدة</string>
+			<key>other</key>
+			<string>%3$d دقيقة</string>
+			<key>two</key>
+			<string>دقيقتين</string>
+			<key>zero</key>
+			<string>أقل من دقيقة</string>
+		</dict>
+	</dict>
+	<key>stop_page.row.a11y_past_fmt</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>الخط %1$@ إلى %2$@، غادرت قبل %3$#@count@، %4$@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>few</key>
+			<string>%3$d دقائق</string>
+			<key>many</key>
+			<string>%3$d دقيقة</string>
+			<key>one</key>
+			<string>دقيقة واحدة</string>
+			<key>other</key>
+			<string>%3$d دقيقة</string>
+			<key>two</key>
+			<string>دقيقتين</string>
+			<key>zero</key>
+			<string>أقل من دقيقة</string>
 		</dict>
 	</dict>
 	<key>stop_page.service_alerts.show_all_fmt</key>
@@ -132,18 +506,18 @@
 			<string>NSStringPluralRuleType</string>
 			<key>NSStringFormatValueTypeKey</key>
 			<string>d</string>
-			<key>zero</key>
-			<string>لا توجد تنبيهات لإظهارها</string>
-			<key>one</key>
-			<string>إظهار تنبيه واحد</string>
-			<key>two</key>
-			<string>إظهار تنبيهين</string>
 			<key>few</key>
 			<string>إظهار %d تنبيهات</string>
 			<key>many</key>
 			<string>إظهار %d تنبيهًا</string>
+			<key>one</key>
+			<string>إظهار تنبيه واحد</string>
 			<key>other</key>
 			<string>إظهار %d تنبيه</string>
+			<key>two</key>
+			<string>إظهار تنبيهين</string>
+			<key>zero</key>
+			<string>لا توجد تنبيهات لإظهارها</string>
 		</dict>
 	</dict>
 	<key>stop_page.service_alerts.summary_fmt</key>
@@ -156,18 +530,18 @@
 			<string>NSStringPluralRuleType</string>
 			<key>NSStringFormatValueTypeKey</key>
 			<string>d</string>
-			<key>zero</key>
-			<string>لا توجد تنبيهات خدمة</string>
-			<key>one</key>
-			<string>تنبيه خدمة واحد</string>
-			<key>two</key>
-			<string>تنبيها خدمة</string>
 			<key>few</key>
 			<string>%d تنبيهات خدمة</string>
 			<key>many</key>
 			<string>%d تنبيهًا للخدمة</string>
+			<key>one</key>
+			<string>تنبيه خدمة واحد</string>
 			<key>other</key>
 			<string>%d تنبيه خدمة</string>
+			<key>two</key>
+			<string>تنبيها خدمة</string>
+			<key>zero</key>
+			<string>لا توجد تنبيهات خدمة</string>
 		</dict>
 	</dict>
 	<key>stop_page.timeline.skipped_stops_fmt</key>
@@ -180,18 +554,306 @@
 			<string>NSStringPluralRuleType</string>
 			<key>NSStringFormatValueTypeKey</key>
 			<string>d</string>
-			<key>zero</key>
-			<string>لا توجد مواقف</string>
-			<key>one</key>
-			<string>موقف واحد</string>
-			<key>two</key>
-			<string>موقفان</string>
 			<key>few</key>
 			<string>%d مواقف</string>
 			<key>many</key>
 			<string>%d موقفًا</string>
+			<key>one</key>
+			<string>موقف واحد</string>
 			<key>other</key>
 			<string>%d موقف</string>
+			<key>two</key>
+			<string>موقفان</string>
+			<key>zero</key>
+			<string>لا توجد مواقف</string>
+		</dict>
+	</dict>
+	<key>trip_page.card.a11y_fmt</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>الخط %1$@ إلى %2$@، تصل خلال %3$#@count@، %4$@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>few</key>
+			<string>%3$d دقائق</string>
+			<key>many</key>
+			<string>%3$d دقيقة</string>
+			<key>one</key>
+			<string>دقيقة واحدة</string>
+			<key>other</key>
+			<string>%3$d دقيقة</string>
+			<key>two</key>
+			<string>دقيقتين</string>
+			<key>zero</key>
+			<string>أقل من دقيقة</string>
+		</dict>
+	</dict>
+	<key>trip_page.card.distance_stops_a11y_fmt</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>على بُعد %1$@، على بُعد %2$#@count@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>few</key>
+			<string>%2$d مواقف</string>
+			<key>many</key>
+			<string>%2$d موقفًا</string>
+			<key>one</key>
+			<string>موقف واحد</string>
+			<key>other</key>
+			<string>%2$d موقف</string>
+			<key>two</key>
+			<string>موقفين</string>
+			<key>zero</key>
+			<string>%2$d موقف</string>
+		</dict>
+	</dict>
+	<key>trip_page.card.distance_stops_fmt</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>على بُعد %1$@ · %2$#@count@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>few</key>
+			<string>%2$d مواقف</string>
+			<key>many</key>
+			<string>%2$d موقفًا</string>
+			<key>one</key>
+			<string>موقف واحد</string>
+			<key>other</key>
+			<string>%2$d موقف</string>
+			<key>two</key>
+			<string>موقفين</string>
+			<key>zero</key>
+			<string>%2$d موقف</string>
+		</dict>
+	</dict>
+	<key>on_demand.card.more_services</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@count@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>zero</key>
+			<string>لا توجد خدمات إضافية هنا</string>
+			<key>one</key>
+			<string>خدمة إضافية واحدة هنا</string>
+			<key>two</key>
+			<string>خدمتان إضافيتان هنا</string>
+			<key>few</key>
+			<string>%d خدمات إضافية هنا</string>
+			<key>many</key>
+			<string>%d خدمة إضافية هنا</string>
+			<key>other</key>
+			<string>%d خدمة إضافية هنا</string>
+		</dict>
+	</dict>
+	<key>on_demand.planner.more_serving_both</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@count@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>zero</key>
+			<string>لا توجد خدمات إضافية تخدم كلا الموقعين</string>
+			<key>one</key>
+			<string>خدمة إضافية واحدة تخدم كلا الموقعين</string>
+			<key>two</key>
+			<string>خدمتان إضافيتان تخدمان كلا الموقعين</string>
+			<key>few</key>
+			<string>%d خدمات إضافية تخدم كلا الموقعين</string>
+			<key>many</key>
+			<string>%d خدمة إضافية تخدم كلا الموقعين</string>
+			<key>other</key>
+			<string>%d خدمة إضافية تخدم كلا الموقعين</string>
+		</dict>
+	</dict>
+	<key>on_demand.picker.title</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@count@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>zero</key>
+			<string>لا توجد خدمات هنا</string>
+			<key>one</key>
+			<string>خدمة واحدة هنا</string>
+			<key>two</key>
+			<string>خدمتان هنا</string>
+			<key>few</key>
+			<string>%d خدمات هنا</string>
+			<key>many</key>
+			<string>%d خدمة هنا</string>
+			<key>other</key>
+			<string>%d خدمة هنا</string>
+		</dict>
+	</dict>
+	<key>on_demand.picker.title_nearby</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@count@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>zero</key>
+			<string>لا توجد خدمات قريبة</string>
+			<key>one</key>
+			<string>خدمة واحدة قريبة</string>
+			<key>two</key>
+			<string>خدمتان قريبتان</string>
+			<key>few</key>
+			<string>%d خدمات قريبة</string>
+			<key>many</key>
+			<string>%d خدمة قريبة</string>
+			<key>other</key>
+			<string>%d خدمة قريبة</string>
+		</dict>
+	</dict>
+	<key>on_demand.detail.zone_count</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@count@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>zero</key>
+			<string>لا توجد مناطق</string>
+			<key>one</key>
+			<string>منطقة واحدة</string>
+			<key>two</key>
+			<string>منطقتان</string>
+			<key>few</key>
+			<string>%d مناطق</string>
+			<key>many</key>
+			<string>%d منطقة</string>
+			<key>other</key>
+			<string>%d منطقة</string>
+		</dict>
+	</dict>
+	<key>on_demand.address.inside_more</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>داخل %1$@ و%2$#@count@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>zero</key>
+			<string>%d أخرى</string>
+			<key>one</key>
+			<string>واحدة أخرى</string>
+			<key>two</key>
+			<string>أخريان</string>
+			<key>few</key>
+			<string>%d أخرى</string>
+			<key>many</key>
+			<string>%d أخرى</string>
+			<key>other</key>
+			<string>%d أخرى</string>
+		</dict>
+	</dict>
+	<key>trip_page.stop_list.run_count_fmt</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@count@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>few</key>
+			<string>%d مواقف</string>
+			<key>many</key>
+			<string>%d موقفًا</string>
+			<key>one</key>
+			<string>موقف واحد</string>
+			<key>other</key>
+			<string>%d موقف</string>
+			<key>two</key>
+			<string>موقفين</string>
+			<key>zero</key>
+			<string>%d موقف</string>
+		</dict>
+	</dict>
+	<key>trip_page.stop_list.a11y_run_passed_fmt</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@count@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>few</key>
+			<string>%d مواقف تم تجاوزها</string>
+			<key>many</key>
+			<string>%d موقفًا تم تجاوزه</string>
+			<key>one</key>
+			<string>موقف واحد تم تجاوزه</string>
+			<key>other</key>
+			<string>%d موقف تم تجاوزه</string>
+			<key>two</key>
+			<string>موقفين تم تجاوزهما</string>
+			<key>zero</key>
+			<string>%d موقف تم تجاوزه</string>
+		</dict>
+	</dict>
+	<key>trip_page.stop_list.a11y_run_approaching_fmt</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@count@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>few</key>
+			<string>%d مواقف قبل موقفك</string>
+			<key>many</key>
+			<string>%d موقفًا قبل موقفك</string>
+			<key>one</key>
+			<string>موقف واحد قبل موقفك</string>
+			<key>other</key>
+			<string>%d موقف قبل موقفك</string>
+			<key>two</key>
+			<string>موقفين قبل موقفك</string>
+			<key>zero</key>
+			<string>%d موقف قبل موقفك</string>
 		</dict>
 	</dict>
 </dict>

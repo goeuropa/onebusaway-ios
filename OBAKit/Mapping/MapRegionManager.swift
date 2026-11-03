@@ -25,6 +25,10 @@ public protocol MapRegionDelegate {
     @objc optional func mapRegionManager(_ manager: MapRegionManager, didRemoveUserAnnotation annotation: UserDroppedPin)
     @objc optional func mapRegionManager(_ manager: MapRegionManager, didSelectUserAnnotation annotation: UserDroppedPin)
 
+    /// The map settled on a new viewport (`regionDidChangeAnimated`). The
+    /// on-demand probe controller reads the centre and zoom level from it.
+    @objc optional func mapRegionManager(_ manager: MapRegionManager, viewportDidSettle rect: MKMapRect)
+
     @objc optional func mapRegionManagerDismissSearch(_ manager: MapRegionManager)
 
     @objc optional func mapRegionManagerDataLoadingStarted(_ manager: MapRegionManager)
@@ -46,6 +50,16 @@ public class UserDroppedPin: MKPointAnnotation {
     // Matches the isolation of the nonisolated MKPointAnnotation initializer it overrides.
     nonisolated override public init() {
         super.init()
+    }
+
+    /// The name of a pin whose location has no better one. VoiceOver reads it as
+    /// the pin's label, and the map item card shows it as a title.
+    nonisolated static var defaultTitle: String {
+        OBALoc(
+            "map_controller.dropped_pin_title",
+            value: "Dropped Pin",
+            comment: "Name given to a pin the user dropped on the map by long-pressing it, when the location has no better name. Also read by VoiceOver."
+        )
     }
 }
 
@@ -248,6 +262,7 @@ public class MapRegionManager: NSObject,
         mapView.showsScale = mapViewShowsScale
         mapView.showsTraffic = mapViewShowsTraffic
         mapView.mapType = userSelectedMapType
+        currentVisibleMapRect = mapView.visibleMapRect
         applyPointsOfInterestVisibility()
 
         registerAnnotationViews(mapView: mapView)
@@ -285,6 +300,7 @@ public class MapRegionManager: NSObject,
         mapView.registerAnnotationView(MinimalStopAnnotationView.self)
         mapView.registerAnnotationView(MKMarkerAnnotationView.self)
         mapView.registerAnnotationView(StopAnnotationView.self)
+        mapView.registerAnnotationView(StopClusterAnnotationView.self)
         mapView.registerAnnotationView(PulsingAnnotationView.self)
         mapView.registerAnnotationView(PulsingVehicleAnnotationView.self)
         mapView.registerAnnotationView(RentalAnnotationView.self)
@@ -364,6 +380,20 @@ public class MapRegionManager: NSObject,
     }
 
     // MARK: - Map Layers
+
+    /// The viewport the layer pipeline last saw.
+    ///
+    /// Seeded from the map view so the UIKit path is unchanged, then written by
+    /// whichever host is driving. The panel must write it: the `MKMapView` this
+    /// manager owns is never added to a view hierarchy in panel mode, so its
+    /// `visibleMapRect` is not the viewport the rider is actually looking at.
+    ///
+    /// The one place that moves the unhosted map view behind the panel's back is
+    /// `regionsService(_:updatedRegion:)`, which frames the new region on it.
+    /// That does not clobber this value: `regionDidChangeAnimated` does not fire
+    /// for a map view with no window, so the whole-region rect is never
+    /// republished to the layers. `MapLayerViewportForwardingTests` pins that.
+    public private(set) var currentVisibleMapRect: MKMapRect = .world
 
     /// Registered toggleable data layers, in Map sheet order.
     public private(set) var mapLayers: [MapLayer] = []
@@ -501,24 +531,43 @@ public class MapRegionManager: NSObject,
         }
     }
 
+    /// Stop IDs the rider is actively looking at — from either a `Stop` or `Bookmark`
+    /// annotation selection. Used to preserve callouts when annotations reload.
+    private var selectedStopIDs: Set<StopID> {
+        Set(mapView.selectedAnnotations.compactMap { annotation -> StopID? in
+            if let stop = annotation as? Stop {
+                return stop.id
+            }
+            if let bookmark = annotation as? Bookmark {
+                return bookmark.stopID
+            }
+            return nil
+        })
+    }
+
     /// Removes stop annotations for the layer toggle, but never a stop the rider is
     /// actively looking at: a searched or selected stop is explicit user intent and
     /// outranks the browse-layer preference (bookmarks get the same exemption).
     private func removeStopAnnotationsPreservingSelection() {
-        let selectedStopIDs = Set(mapView.selectedAnnotations.compactMap { ($0 as? Stop)?.id })
         let stopsToRemove = mapView.annotations.compactMap { $0 as? Stop }.filter { !selectedStopIDs.contains($0.id) }
         mapView.removeAnnotations(stopsToRemove)
+        notifyMapLayersStopMarkersChanged()
     }
 
     /// Feeds the current viewport to a layer, applying its zoom window: outside
     /// the window the layer receives nil and removes its annotations.
     private func forwardViewport(to layer: MapLayer) {
-        let visibleRect = mapView.visibleMapRect
+        let visibleRect = currentVisibleMapRect
         let insideWindow = layer.zoomWindow.contains(visibleHeight: visibleRect.height)
         layer.viewportDidChange(insideWindow ? visibleRect : nil)
     }
 
-    private func updateMapLayers() {
+    /// Records a new viewport and fans it out to every enabled layer.
+    ///
+    /// Called by both hosts: `mapView(_:regionDidChangeAnimated:)` on the UIKit
+    /// path, and `.onMapCameraChange` on the SwiftUI panel.
+    public func mapLayersViewportDidChange(_ rect: MKMapRect) {
+        currentVisibleMapRect = rect
         for layer in mapLayers where isMapLayerEnabled(id: layer.id) {
             forwardViewport(to: layer)
         }
@@ -636,69 +685,53 @@ public class MapRegionManager: NSObject,
 
         let existingAnnotations = mapView.annotations
         let existingStopIDs = Set(existingAnnotations.compactMap { ($0 as? Stop)?.id })
-        var affectedStopIDs: Set<StopID> = []
-
-        // Remove Stop annotations that now have a corresponding Bookmark
-        let stopAnnotationsToRemove = existingAnnotations.compactMap { annotation -> MKAnnotation? in
-            guard
-                let stop = annotation as? Stop,
-                bookmarksHash[stop.id] != nil
-            else {
-                return nil
-            }
-
-            affectedStopIDs.insert(stop.id)
-            return stop
+        let existingBookmarks = existingAnnotations.compactMap { annotation -> StopAnnotationSync.BookmarkRef? in
+            guard let bookmark = annotation as? Bookmark else { return nil }
+            return StopAnnotationSync.BookmarkRef(id: bookmark.id, stopID: bookmark.stopID)
         }
-
-        // Remove Bookmark annotations that are stale:
-        //   - The bookmark's stop no longer has ANY bookmark (deleted), OR
-        //   - The bookmark on the map is a different object than the current one (replaced)
-        let bookmarkAnnotationsToRemove = existingAnnotations.compactMap { annotation -> MKAnnotation? in
-            guard let bookmark = annotation as? Bookmark else {
-                return nil
-            }
-
-            guard let currentBookmark = bookmarksHash[bookmark.stopID] else {
-                // No bookmark exists for this stop anymore, remove the stale annotation
-                affectedStopIDs.insert(bookmark.stopID)
-                return bookmark
-            }
-
-            // If a different bookmark now represents this stop, remove the old one
-            if currentBookmark.id != bookmark.id {
-                affectedStopIDs.insert(bookmark.stopID)
-                return bookmark
-            }
-
+        let selectedStopIDs = Set(existingAnnotations.compactMap { annotation -> StopID? in
+            guard mapView.selectedAnnotations.contains(where: { $0 === annotation }) else { return nil }
+            if let stop = annotation as? Stop { return stop.id }
+            if let bookmark = annotation as? Bookmark { return bookmark.stopID }
             return nil
-        }
+        })
 
-        let allAnnotationsToRemove = stopAnnotationsToRemove + bookmarkAnnotationsToRemove
-        for annotation in allAnnotationsToRemove {
+        let changes = StopAnnotationSync.changes(
+            existingStopIDs: existingStopIDs,
+            existingBookmarks: existingBookmarks,
+            incomingStopIDs: Set(stops.map(\.id)),
+            bookmarksByStopID: Dictionary(uniqueKeysWithValues: bookmarksHash.map { ($0.key, $0.value.id) }),
+            selectedStopIDs: selectedStopIDs,
+            isStopsLayerEnabled: isStopsLayerEnabled,
+            preserveStopsOutsideIncoming: searchResponseOverridesStopLoading()
+        )
+
+        let stopsToRemove = existingAnnotations.compactMap { $0 as? Stop }
+            .filter { changes.stopIDsToRemove.contains($0.id) }
+        let bookmarksToRemove = existingAnnotations.compactMap { $0 as? Bookmark }
+            .filter { changes.bookmarkIDsToRemove.contains($0.id) }
+        let annotationsToRemove: [MKAnnotation] = stopsToRemove + bookmarksToRemove
+
+        for annotation in annotationsToRemove {
             guard mapView.selectedAnnotations.contains(where: { $0 === annotation }) else { continue }
             mapView.deselectAnnotation(annotation, animated: false)
         }
-        mapView.removeAnnotations(allAnnotationsToRemove)
+        mapView.removeAnnotations(annotationsToRemove)
 
-        // Add new Bookmark annotations that aren't already on the map
-        // Check by bookmark ID (not just stopID) to correctly add replacements
-        let existingBookmarkIDs = Set(mapView.annotations.compactMap { ($0 as? Bookmark)?.id })
-        let bookmarksToAdd = bookmarksHash.values.filter {
-            !existingBookmarkIDs.contains($0.id)
-        }
-        mapView.addAnnotations(Array(bookmarksToAdd))
+        mapView.addAnnotations(bookmarksHash.values.filter { changes.bookmarkIDsToAdd.contains($0.id) })
+        mapView.addAnnotations(stops.filter { changes.stopIDsToAdd.contains($0.id) })
 
-        // Re-add Stop annotations for stops that no longer have bookmarks.
-        // With the stops layer toggled off, nothing is added — bookmarks are
-        // user content and stay visible regardless.
-        let stopsToAdd = isStopsLayerEnabled ? stops.filter {
-            !bookmarksHash.keys.contains($0.id) &&
-            !existingStopIDs.contains($0.id)
-        } : []
-        mapView.addAnnotations(stopsToAdd)
+        // A bookmark↔stop identity change still needs the surviving view rebound.
+        // Only the identity-diff stop IDs — not viewport removals (those annotations
+        // are already gone, so scanning for them is wasted main-thread work on every
+        // pan). Skip selected bookmarks: rebinding dismisses an open callout (#1266).
+        var affectedStopIDs = Set(bookmarksToRemove.map(\.stopID))
+        let selectedBookmarkStopIDs = Set(mapView.selectedAnnotations.compactMap { ($0 as? Bookmark)?.stopID })
+        affectedStopIDs.subtract(selectedBookmarkStopIDs)
+
         refreshAnnotationViews(for: Array(affectedStopIDs))
         notifyDelegatesStopsChanged()
+        notifyMapLayersStopMarkersChanged()
     }
 
     private func refreshAnnotationViews(for affectedStopIDs: [StopID]) {
@@ -716,9 +749,18 @@ public class MapRegionManager: NSObject,
                   let view = mapView.view(for: annotation) as? StopAnnotationView else {
                 continue
             }
-            view.prepareForReuse()
+
+            // Rebinding a selected annotation dismisses its callout; skip it.
+            guard !mapView.selectedAnnotations.contains(where: { $0 === annotation }) else {
+                continue
+            }
+
+            // Re-apply presentation after identity rebinding. The icon flash this
+            // PR removes came from MapKit recycling views on unnecessary re-adds,
+            // not from `prepareForReuse` (which only clears the label stack).
             view.annotation = annotation
             view.delegate = self
+            view.applyPresentation()
             mapViewDelegate?.mapRegionManager(self, customize: view)
         }
     }
@@ -760,6 +802,9 @@ public class MapRegionManager: NSObject,
         reloadStopAnnotations()
         notifyMapLayersAnnotationsCleared()
         notifyMapLayersOverlaysCleared()
+        // The wholesale removal took stop markers with it; layers that keep clear
+        // of them must stop avoiding markers that are gone.
+        notifyMapLayersStopMarkersChanged()
     }
 
     /// `removeAllAnnotations` strips layer annotations behind the layers' backs;
@@ -767,6 +812,15 @@ public class MapRegionManager: NSObject,
     private func notifyMapLayersAnnotationsCleared() {
         for layer in mapLayers where isMapLayerEnabled(id: layer.id) {
             layer.mapAnnotationsWereCleared()
+        }
+    }
+
+    /// Stops arrive with a fetch, well after the region change that asked for them,
+    /// so a layer that has to keep clear of their markers can't learn where they
+    /// are from `viewportDidChange`.
+    private func notifyMapLayersStopMarkersChanged() {
+        for layer in mapLayers where isMapLayerEnabled(id: layer.id) {
+            layer.stopMarkersDidChange()
         }
     }
 
@@ -847,13 +901,15 @@ public class MapRegionManager: NSObject,
 
         mapView.addOverlays(stopsForRoute.polylines)
         mapView.addAnnotations(stopsForRoute.stops)
+        notifyMapLayersStopMarkersChanged()
 
         let inset: CGFloat = 40.0
-        mapView.visibleMapRect = self.mapView.mapRectThatFits(stopsForRoute.mapRect, edgePadding: UIEdgeInsets(top: inset, left: inset, bottom: 200, right: inset))
+        mapView.visibleMapRect = self.mapView.mapRectThatFits(stopsForRoute.mapRect, edgePadding: mapView.edgePadding(top: inset, horizontal: inset, bottom: 200))
     }
 
     private func displaySearchResult(stop: Stop) {
         mapView.addAnnotation(stop)
+        notifyMapLayersStopMarkersChanged()
         mapView.setCenterCoordinate(centerCoordinate: stop.coordinate, zoomLevel: 18, animated: true)
         mapView.selectAnnotation(stop, animated: false)
 
@@ -904,6 +960,10 @@ public class MapRegionManager: NSObject,
         !FeatureFlags.isNewStopPageEnabled(userDefaults: application.userDefaults)
     }
 
+    var clustersStops: Bool {
+        application.userDefaults.bool(forKey: FeatureFlags.clustersStopsKey)
+    }
+
     /// Re-asks every stop annotation currently on the map whether it should show a callout.
     ///
     /// `canShowCallout` is computed once, when `viewFor` attaches the delegate, but
@@ -919,7 +979,11 @@ public class MapRegionManager: NSObject,
 
     /// Above this visible-map-rect height (map points), stop pins are too
     /// zoomed-out for their under-pin label. Shared with `MapPanelRootView`.
-    public static let requiredHeightToShowExtraStopData = 7000.0
+    ///
+    /// 7,000 still showed route lists at a city-block zoom where pins overlap
+    /// and the text is unreadable. 5,000 keeps labels for street-level zoom
+    /// where they help, and hides them sooner when zoomed out (#132).
+    public static let requiredHeightToShowExtraStopData = 5000.0
 
     /// Height half of the under-pin label gate. Callers combine it with the
     /// standard-map-type and "show labels" default checks.
@@ -951,6 +1015,18 @@ public class MapRegionManager: NSObject,
 
     // MARK: - Map View Delegate
 
+    /// Applies the current under-pin label gate to every bookmark pin on the map.
+    /// Bookmarks stay visible through search, zoom, and a disabled stops layer,
+    /// so this must run before those early returns.
+    func refreshBookmarkAnnotationLabels() {
+        let hideExtra = shouldHideExtraStopAnnotationData
+        for annotation in mapView.annotations where annotation is Bookmark {
+            if let stopView = mapView.view(for: annotation) as? StopAnnotationView {
+                stopView.isHidingExtraStopAnnotationData = hideExtra
+            }
+        }
+    }
+
     private func reloadStopAnnotations() {
         // Ahead of every early return below, including the search-result guard.
         // The pill states something about the current zoom, so it has to be
@@ -961,6 +1037,10 @@ public class MapRegionManager: NSObject,
         // already uses.
         updateZoomWarningOverlay()
 
+        // Bookmark pins are user content, so their label gate must refresh even
+        // when stop loading is suppressed by search, zoom, or a disabled layer.
+        refreshBookmarkAnnotationLabels()
+
         if searchResponseOverridesStopLoading() {
             return
         }
@@ -969,6 +1049,7 @@ public class MapRegionManager: NSObject,
         // region-scale bounding box is exactly what the 40,000-height gate prevents.
         guard mapView.visibleMapRect.height <= MapRegionManager.requiredHeightToShowStops else {
             mapView.removeAnnotations(type: Stop.self)
+            notifyMapLayersStopMarkersChanged()
             return
         }
 
@@ -981,9 +1062,8 @@ public class MapRegionManager: NSObject,
             return
         }
 
-        let visibleStops = mapView.annotations(in: mapView.visibleMapRect).filter(type: Stop.self)
-        for s in visibleStops {
-            if let stopView = mapView.view(for: s) as? StopAnnotationView {
+        for stop in mapView.annotations(in: mapView.visibleMapRect).filter(type: Stop.self) {
+            if let stopView = mapView.view(for: stop) as? StopAnnotationView {
                 stopView.isHidingExtraStopAnnotationData = shouldHideExtraStopAnnotationData
             }
         }
@@ -1013,7 +1093,11 @@ public class MapRegionManager: NSObject,
 
         reloadRegionAnnotations()
         reloadStopAnnotations()
-        updateMapLayers()
+        mapLayersViewportDidChange(mapView.visibleMapRect)
+
+        for delegate in delegates.allObjects {
+            delegate.mapRegionManager?(self, viewportDidSettle: mapView.visibleMapRect)
+        }
     }
 
     public func mapView(_ mapView: MKMapView, didSelect annotation: any MKAnnotation) {
@@ -1029,19 +1113,10 @@ public class MapRegionManager: NSObject,
         let request = MKMapItemRequest(mapFeatureAnnotation: feature)
 
         do {
-            // MKMapItemRequest and MKMapItem aren't Sendable, and Swift 6.2
-            // (CI's toolchain) won't let them cross the main-actor boundary
-            // around the nonisolated async `mapItem` accessor. Run the fetch in
-            // a detached task, handing each value across in a box: the request
-            // is one-shot and the fetched item has no other owner until the
-            // transfer completes.
-            let requestBox = UncheckedSendableBox(value: request)
-            let mapItem = try await Task.detached {
-                UncheckedSendableBox(value: try await requestBox.value.mapItem)
-            }.value.value
+            let mapItem = try await request.mapItem
 
             let searchRequest = SearchRequest(
-                query: mapItem.name ?? "Dropped Pin",
+                query: mapItem.name ?? UserDroppedPin.defaultTitle,
                 type: .address
             )
             let response = SearchResponse(
@@ -1060,10 +1135,10 @@ public class MapRegionManager: NSObject,
             // Fallback: create basic MKMapItem
             let placemark = MKPlacemark(coordinate: feature.coordinate)
             let mapItem = MKMapItem(placemark: placemark)
-            mapItem.name = feature.title ?? "Dropped Pin"
+            mapItem.name = feature.title ?? UserDroppedPin.defaultTitle
 
             let searchRequest = SearchRequest(
-                query: feature.title ?? "Dropped Pin",
+                query: feature.title ?? UserDroppedPin.defaultTitle,
                 type: .address
             )
             let response = SearchResponse(
@@ -1122,6 +1197,7 @@ public class MapRegionManager: NSObject,
 
         if let stopAnnotation = annotationView as? StopAnnotationView {
             stopAnnotation.delegate = self
+            stopAnnotation.applyPresentation()
             mapViewDelegate?.mapRegionManager(self, customize: stopAnnotation)
         }
 
@@ -1147,6 +1223,8 @@ public class MapRegionManager: NSObject,
         case is Region: return MKMapView.reuseIdentifier(for: MKMarkerAnnotationView.self)
         case is Stop: return MKMapView.reuseIdentifier(for: StopAnnotationView.self)
         case is UserDroppedPin: return "UserDroppedPin"
+        case let cluster as MKClusterAnnotation where StopCluster.isStopCluster(cluster):
+            return MKMapView.reuseIdentifier(for: StopClusterAnnotationView.self)
         default: return nil
         }
     }
@@ -1241,9 +1319,11 @@ public class MapRegionManager: NSObject,
         // Limit stored pins to prevent unbounded growth
         limitStoredPins(maxPins: 10)
     }
+}
 
-    // MARK: - User-dropped pin management
+// MARK: - User-dropped pin management
 
+extension MapRegionManager {
     /// Removes a specific user-dropped pin from the map and cleans up associated data
     public func removeUserAnnotation(_ annotation: UserDroppedPin) {
         // Notify delegates first (so UI can dismiss while data is still vaguely valid, though irrelevant)
@@ -1312,7 +1392,7 @@ public class MapRegionManager: NSObject,
     private func setUserAnnotation(coordinate: CLLocationCoordinate2D, title: String?, subtitle: String?) {
         let annotation = UserDroppedPin()
         annotation.coordinate = coordinate
-        annotation.title = title ?? "Dropped Pin"
+        annotation.title = title ?? UserDroppedPin.defaultTitle
         annotation.subtitle = subtitle ?? "Lat: \(coordinate.latitude), Lon: \(coordinate.longitude)"
 
         // Add to array
@@ -1466,7 +1546,8 @@ extension MapRegionManager {
             Logger.error("API stop request failed, attempting cache fallback: \(error)")
 
             // On API failure, try serving from cache before showing error.
-            let cachedStops = cachedStops(in: mapRegion)
+            let cachedStops = await cachedStops(in: mapRegion)
+            if Task.isCancelled { return }
             if !cachedStops.isEmpty {
                 await MainActor.run {
                     self.setStops(cachedStops)
@@ -1477,12 +1558,21 @@ extension MapRegionManager {
         }
     }
 
+    /// The most stops one cached read returns, nearest the centre first. With a
+    /// whole region synced (#1555) the box can hold hundreds; the panel keeps
+    /// only the 400 nearest anyway (`MapStopsObserver`'s render cap).
+    static let cachedStopReadLimit = 400
+
     /// Reads cached stops for `mapRegion` (already fudge-factor expanded) from
-    /// `StopCacheRepository`, using a bounding-box query. Returns `[]` when the
-    /// repository or current region is unavailable, or nothing is cached.
+    /// `StopCacheRepository`, using a bounding-box query capped at
+    /// `cachedStopReadLimit`. Returns `[]` when the repository or current region
+    /// is unavailable, or nothing is cached.
+    ///
+    /// The read and decode run off the main actor: with a full cache they take
+    /// milliseconds that panning shouldn't pay.
     ///
     /// See: https://github.com/OneBusAway/onebusaway-ios/issues/62
-    private func cachedStops(in mapRegion: MKCoordinateRegion) -> [Stop] {
+    private func cachedStops(in mapRegion: MKCoordinateRegion) async -> [Stop] {
         guard
             let regionId = application.currentRegion?.regionIdentifier,
             let repository = application.stopCacheRepository
@@ -1494,12 +1584,16 @@ extension MapRegionManager {
         let maxLat = mapRegion.center.latitude + mapRegion.span.latitudeDelta / 2.0
         let minLon = mapRegion.center.longitude - mapRegion.span.longitudeDelta / 2.0
         let maxLon = mapRegion.center.longitude + mapRegion.span.longitudeDelta / 2.0
+        let limit = Self.cachedStopReadLimit
 
-        return repository.stopsInRegion(
-            minLat: minLat, maxLat: maxLat,
-            minLon: minLon, maxLon: maxLon,
-            regionId: regionId
-        )
+        return await Task.detached(priority: .userInitiated) {
+            repository.stopsInRegion(
+                minLat: minLat, maxLat: maxLat,
+                minLon: minLon, maxLon: maxLon,
+                regionId: regionId,
+                limit: limit
+            )
+        }.value
     }
 
     /// Persists `stops` to `StopCacheRepository` for offline use.
@@ -1566,7 +1660,7 @@ extension MapRegionManager {
         // cancelled — a settle superseded by a newer one shouldn't pay for a
         // GRDB read whose result would be thrown away.
         guard !Task.isCancelled else { return false }
-        let cachedStops = cachedStops(in: fudgedRegion(for: region, factor: preferredLoadDataRegionFudgeFactor))
+        let cachedStops = await cachedStops(in: fudgedRegion(for: region, factor: preferredLoadDataRegionFudgeFactor))
         guard !cachedStops.isEmpty, !Task.isCancelled else { return false }
 
         await MainActor.run {
@@ -1701,12 +1795,7 @@ extension MapRegionManager: LocationServiceDelegate {
             return
         }
 
-        if annotationView.headingImage == nil {
-            annotationView.headingImage = Icons.userHeading
-        }
-
-        // The PulsingAnnotationView treats east as 0º.
-        annotationView.headingImageView.transform = heading.trueHeading.affineTransform(rotatedBy: -0.5 * .pi)
+        annotationView.showUserHeading(heading)
     }
 }
 

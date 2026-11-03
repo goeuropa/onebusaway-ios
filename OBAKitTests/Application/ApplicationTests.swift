@@ -549,6 +549,176 @@ final class ApplicationTests: OBATestCase {
         #expect(!result)
     }
 
+    /// Donated stop shortcuts launch the app via `continue userActivity`. Before
+    /// the root UI exists, that used to return `false` (no `apiService` / no
+    /// `currentRegion`) and drop the stop. Same stash as the `viewStop` URL-scheme
+    /// cold-launch path.
+    /// See: https://github.com/OneBusAway/onebusaway-ios/issues/1221
+    @Test func `Application continues a stop user activity on cold launch`() async {
+        let app = makeApplicationForUserActivity()
+        guard let builder = app.userActivityBuilder else {
+            Issue.record("Test host is missing NSUserActivityTypes")
+            return
+        }
+
+        let activity = NSUserActivity(activityType: builder.stopActivityType)
+        activity.userInfo = [
+            UserActivityBuilder.UserInfoKeys.stopID: "1_75403",
+            UserActivityBuilder.UserInfoKeys.regionID: 1
+        ]
+
+        let result = await MainActor.run {
+            app.application(UIApplication.shared, continue: activity, restorationHandler: { _ in })
+        }
+        #expect(result)
+        #expect(app.pendingStopID == "1_75403")
+        #expect(app.pendingStopRegionID == 1)
+    }
+
+    /// Shortcuts reconstitutes `userInfo` through a plist, so the donated
+    /// `regionID` may arrive as `NSNumber`. The parser has to accept that
+    /// shape, not only a Swift `Int`.
+    @Test func `Application continues a stop user activity whose region ID is an NSNumber`() async {
+        let app = makeApplicationForUserActivity()
+        guard let builder = app.userActivityBuilder else {
+            Issue.record("Test host is missing NSUserActivityTypes")
+            return
+        }
+
+        let activity = NSUserActivity(activityType: builder.stopActivityType)
+        activity.userInfo = [
+            UserActivityBuilder.UserInfoKeys.stopID: "1_75403",
+            UserActivityBuilder.UserInfoKeys.regionID: NSNumber(value: 1)
+        ]
+
+        let result = await MainActor.run {
+            app.application(UIApplication.shared, continue: activity, restorationHandler: { _ in })
+        }
+        #expect(result)
+        #expect(app.pendingStopID == "1_75403")
+        #expect(app.pendingStopRegionID == 1)
+    }
+
+    /// When Shortcuts strips `userInfo` and leaves only `webpageURL`, the stop
+    /// path (`/regions/{id}/stops/{stopID}`) still has to open that stop. Trip
+    /// URLs keep going through the existing trip decoder.
+    @Test func `Application continues a stop user activity from its webpage URL`() async {
+        let app = makeApplicationForUserActivity()
+        guard let builder = app.userActivityBuilder else {
+            Issue.record("Test host is missing NSUserActivityTypes")
+            return
+        }
+
+        let activity = NSUserActivity(activityType: builder.stopActivityType)
+        activity.webpageURL = URL(string: "https://onebusaway.co/regions/1/stops/1_75403")
+
+        let result = await MainActor.run {
+            app.application(UIApplication.shared, continue: activity, restorationHandler: { _ in })
+        }
+        #expect(result)
+        #expect(app.pendingStopID == "1_75403")
+        #expect(app.pendingStopRegionID == 1)
+    }
+
+    /// A restored or handed-off trip arrives before the root UI and the API
+    /// service exist, and with no `webpageURL` in a region without a sidecar.
+    /// It used to be dropped; now it waits in `pendingTripDeepLink`.
+    /// See: https://github.com/OneBusAway/onebusaway-ios/issues/1625
+    @Test func `Application continues a trip user activity on cold launch`() async {
+        let app = makeApplicationForUserActivity()
+        guard let builder = app.userActivityBuilder else {
+            Issue.record("Test host is missing NSUserActivityTypes")
+            return
+        }
+
+        let activity = NSUserActivity(activityType: builder.tripActivityType)
+        activity.userInfo = [
+            UserActivityBuilder.UserInfoKeys.regionID: 1,
+            UserActivityBuilder.UserInfoKeys.stopID: "1_75403",
+            UserActivityBuilder.UserInfoKeys.tripID: "1_545_trip",
+            UserActivityBuilder.UserInfoKeys.serviceDate: Date(timeIntervalSince1970: 1_710_273_600),
+            UserActivityBuilder.UserInfoKeys.stopSequence: 12
+        ]
+
+        let result = await MainActor.run {
+            app.application(UIApplication.shared, continue: activity, restorationHandler: { _ in })
+        }
+        #expect(result)
+        #expect(app.pendingTripDeepLink?.tripID == "1_545_trip")
+        #expect(app.pendingTripDeepLink?.regionID == 1)
+    }
+
+    @Test func `Application continues a browsing-web stop URL`() async {
+        let app = makeApplicationForUserActivity()
+
+        let activity = NSUserActivity(activityType: NSUserActivityTypeBrowsingWeb)
+        activity.webpageURL = URL(string: "https://onebusaway.co/regions/1/stops/1_75403")
+
+        let result = await MainActor.run {
+            app.application(UIApplication.shared, continue: activity, restorationHandler: { _ in })
+        }
+        #expect(result)
+        #expect(app.pendingStopID == "1_75403")
+        #expect(app.pendingStopRegionID == 1)
+    }
+
+    /// The Open Stop shortcut reaches `Application` only through this
+    /// notification. Before the root UI exists the stop is stashed, the same
+    /// as a donated stop activity. Remove the observer and nothing is stashed.
+    @Test func `An Open Stop request opens the stop`() async {
+        let app = makeApplicationForUserActivity()
+
+        OpenStopRequest.post(AppLinksRouter.StopDestination(stopID: "1_75403", regionID: 1))
+
+        // A `.main` observer posted to from the main thread runs before `post`
+        // returns, but that isn't documented, so wait for it.
+        await poll(until: { app.pendingStopID != nil }, "Open Stop request was never handled")
+        #expect(app.pendingStopID == "1_75403")
+        #expect(app.pendingStopRegionID == 1)
+    }
+
+    /// A region change is where the previous region's stops leave Spotlight.
+    /// Remove the call from `regionsService(_:updatedRegion:)` and nothing is cleared.
+    @Test func `A region change replaces the Spotlight index`() async {
+        let app = makeApplicationForUserActivity()
+        let index = FakeStopIndex()
+        let indexer = StopSpotlightIndexer(index: index, userDataStore: app.userDataStore, stopCache: nil, currentRegion: { Fixtures.pugetSoundRegion }, isIndexingAvailable: { true })
+        app.stopSpotlightIndexer = indexer
+
+        app.regionsService(app.regionsService, updatedRegion: Fixtures.pugetSoundRegion)
+        await indexer.currentRun?.value
+
+        #expect(await index.log == [.deleteAll])
+    }
+
+    /// The launch and region-change rebuilds run before the sync writes the
+    /// region's stops. Another region's sync is ignored; the second call is the
+    /// positive control. Remove the call from `regionStopSyncWroteStops(regionID:)`
+    /// and nothing is cleared.
+    @Test func `Only a sync of the current region replaces the Spotlight index`() async {
+        let (app, _) = makeAppAndPushService()
+        app.regionsService.currentRegion = Fixtures.tampaRegion
+        let index = FakeStopIndex()
+        let indexer = StopSpotlightIndexer(index: index, userDataStore: app.userDataStore, stopCache: nil, currentRegion: { Fixtures.tampaRegion }, isIndexingAvailable: { true })
+        app.stopSpotlightIndexer = indexer
+
+        app.regionStopSyncWroteStops(regionID: Fixtures.pugetSoundRegion.regionIdentifier)
+        #expect(indexer.currentRun == nil)
+
+        app.regionStopSyncWroteStops(regionID: Fixtures.tampaRegion.regionIdentifier)
+        await indexer.currentRun?.value
+        #expect(await index.log == [.deleteAll])
+    }
+
+    private func makeApplicationForUserActivity() -> Application {
+        let dataLoader = MockDataLoader(testName: name)
+        stubRegions(dataLoader: dataLoader)
+        let locManager = LocationManagerMock()
+        let locationService = LocationService(userDefaults: userDefaults, locationManager: locManager)
+        let config = AppConfig(regionsBaseURL: regionsURL, apiKey: apiKey, appVersion: appVersion, userDefaults: userDefaults, analytics: AnalyticsMock(), queue: queue, locationService: locationService, bundledRegionsFilePath: bundledRegionsPath, regionsAPIPath: regionsAPIPath, dataLoader: dataLoader)
+        return Application(config: config)
+    }
+
     // MARK: - Analytics Tests
 
     @Test func `Application has analytics property`() {
@@ -600,7 +770,128 @@ final class ApplicationTests: OBATestCase {
         // Analytics should have been called - reportSetRegion doesn't add to reportedEvents, but the test exercises the code path
     }
 
+    // MARK: - Region Stop Sync Tests
+
+    /// Region stop sync starts only from `didFinishLaunching`. The test host
+    /// builds thousands of `Application`s that never launch; if one synced on a
+    /// region change, `MockDataLoader` would crash the run on the unstubbed request.
+    @Test func `An Application that never launched never syncs region stops`() {
+        let app = makeApplicationForUserActivity()
+
+        app.regionsService(app.regionsService, updatedRegion: Fixtures.pugetSoundRegion)
+        app.scheduleRegionStopSync()
+
+        #expect(app.regionStopSyncScheduler == nil)
+    }
+
+    /// Once launched, a region change and each activation ask for a sync. Each is
+    /// cancelled during the pause, before any request, which `MockDataLoader`
+    /// would trap on.
+    @Test func `A launched Application schedules a region stop sync on a region change and on activation`() async throws {
+        let (app, _) = makeAppAndPushService()
+        app.startRegionStopSync()
+        let scheduler = try #require(app.regionStopSyncScheduler)
+        // No region yet, so nothing to sync.
+        #expect(scheduler.pendingSync == nil)
+
+        app.regionsService.currentRegion = Fixtures.tampaRegion
+        try await cancelPendingSync(of: scheduler)
+
+        app.applicationDidBecomeActive(UIApplication.shared)
+        try await cancelPendingSync(of: scheduler)
+    }
+
+    /// Requires a sync to be waiting, then cancels it and waits for it to end.
+    private func cancelPendingSync(of scheduler: RegionStopSyncScheduler) async throws {
+        let pending = try #require(scheduler.pendingSync)
+        pending.cancel()
+        await pending.value
+        #expect(scheduler.pendingSync == nil)
+    }
+
     // MARK: - Push Service Tests
+
+    /// The app and push service the proximity-tap tests below need.
+    private func makeAppAndPushService() -> (Application, PushService) {
+        let dataLoader = MockDataLoader(testName: name)
+        stubRegions(dataLoader: dataLoader)
+        // Setting `currentRegion` refetches agencies-with-coverage and then one
+        // alerts feed per agency it names, and `MockDataLoader` traps on a URL
+        // nobody mocked. Same pairing as `MapLayerRegistrarTests`, which switches
+        // region the same way.
+        stubAgenciesWithCoverage(dataLoader: dataLoader, baseURL: Fixtures.tampaRegion.OBABaseURL)
+        Fixtures.stubAllAgencyAlerts(dataLoader: dataLoader)
+        let locManager = LocationManagerMock()
+        let locationService = LocationService(userDefaults: userDefaults, locationManager: locManager)
+        let config = AppConfig(regionsBaseURL: regionsURL, apiKey: apiKey, appVersion: appVersion, userDefaults: userDefaults, analytics: AnalyticsMock(), queue: queue, locationService: locationService, bundledRegionsFilePath: bundledRegionsPath, regionsAPIPath: regionsAPIPath, dataLoader: dataLoader)
+        let app = Application(config: config)
+        return (app, PushService(serviceProvider: MockPushServiceProvider(), delegate: app))
+    }
+
+    @Test func `Push service proximity alert tap is never dropped`() {
+        let (app, pushService) = makeAppAndPushService()
+        // A region left behind by an earlier navigation. Without it the assertion
+        // below is inert: `pendingStopRegionID` starts nil on a freshly built
+        // `Application`, so deleting the handler's explicit clear would leave this
+        // test green.
+        app.pendingStopRegionID = 999
+
+        app.pushService(pushService, receivedProximityAlertForStopID: "1_75403", regionID: nil)
+
+        // The tap that matters is the one into a terminated app, where neither a
+        // root controller nor a region exists yet. Dropping it would strand the
+        // rider on whatever screen the app happened to open to, with no second
+        // chance — the notification is gone once tapped.
+        #expect(app.pendingStopID == "1_75403")
+        // Cleared, not merely absent: a stale region would make the drain refuse
+        // this stop as belonging somewhere else.
+        #expect(app.pendingStopRegionID == nil)
+    }
+
+    @Test func `Push service proximity alert tap stashes the region the alert carries`() {
+        let (app, pushService) = makeAppAndPushService()
+
+        // The case the carried region exists for: a geofence crossing relaunched a
+        // terminated app, so no region has loaded to fall back on yet.
+        #expect(app.regionsService.currentRegion == nil)
+
+        app.pushService(pushService, receivedProximityAlertForStopID: "1_75403", regionID: 12)
+
+        #expect(app.pendingStopID == "1_75403")
+        // Stashed rather than dropped as it was before the alert carried one: the
+        // drain now has a region to check the stop against, instead of whichever
+        // one happens to load first.
+        #expect(app.pendingStopRegionID == 12)
+    }
+
+    @Test func `Push service proximity alert tap falls back to the current region`() {
+        let (app, pushService) = makeAppAndPushService()
+        app.regionsService.currentRegion = Fixtures.tampaRegion
+
+        app.pushService(pushService, receivedProximityAlertForStopID: "1_75403", regionID: nil)
+
+        // An alert stored before it carried a region resolves exactly as it always
+        // did. Without this the fallback could be deleted and nothing would fail.
+        #expect(app.pendingStopID == "1_75403")
+        #expect(app.pendingStopRegionID == Fixtures.tampaRegion.regionIdentifier)
+    }
+
+    @Test func `Push service proximity alert tap refuses a stop from another region`() {
+        let (app, pushService) = makeAppAndPushService()
+        app.regionsService.currentRegion = Fixtures.tampaRegion
+
+        app.pushService(
+            pushService,
+            receivedProximityAlertForStopID: "1_75403",
+            regionID: Fixtures.pugetSoundRegion.regionIdentifier
+        )
+
+        // `queueOrOpenStop`'s mismatch guard, live from this call site for the
+        // first time: while the region came from `currentRegion` it was compared
+        // against itself. A pinned rider is no longer sent to the wrong API.
+        #expect(app.pendingStopID == nil)
+        #expect(app.pendingStopRegionID == nil)
+    }
 
     @Test func `Push service received donation prompt with no top view controller`() {
         let dataLoader = MockDataLoader(testName: name)

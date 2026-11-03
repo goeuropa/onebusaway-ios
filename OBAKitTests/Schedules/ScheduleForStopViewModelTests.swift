@@ -62,10 +62,11 @@ final class ScheduleForStopViewModelTests: OBATestCase {
     }
 
     func stubScheduleForStop(dataLoader: MockDataLoader) {
-        dataLoader.mock(
-            URLString: "https://www.example.com/api/where/schedule-for-stop/\(stopID).json",
-            with: Fixtures.loadData(file: "schedule-for-stop_1_75403.json")
-        )
+        let scheduleData = Fixtures.loadData(file: "schedule-for-stop_1_75403.json")
+        dataLoader.mock(data: scheduleData) { [stopID] request in
+            guard let path = request.url?.path else { return false }
+            return path.contains("/schedule-for-stop/\(stopID).json")
+        }
     }
 
     // MARK: - Initialization Tests
@@ -102,6 +103,31 @@ final class ScheduleForStopViewModelTests: OBATestCase {
         let viewModel = ScheduleForStopViewModel(stopID: stopID, application: app)
 
         #expect(viewModel.selectedRouteID == nil)
+    }
+
+    @Test @MainActor
+    func `Init with route ID sets selected route ID`() {
+        let dataLoader = MockDataLoader(testName: name)
+        stubScheduleForStop(dataLoader: dataLoader)
+        let app = createApplication(dataLoader: dataLoader)
+        let testRouteID = "1_100259"
+
+        let viewModel = ScheduleForStopViewModel(stopID: stopID, routeID: testRouteID, application: app)
+
+        #expect(viewModel.selectedRouteID == testRouteID)
+    }
+
+    @Test @MainActor
+    func `Fetch schedule preserves preselected route ID if present`() async {
+        let dataLoader = MockDataLoader(testName: name)
+        stubScheduleForStop(dataLoader: dataLoader)
+        let app = createApplication(dataLoader: dataLoader)
+        let testRouteID = "1_100259"
+
+        let viewModel = ScheduleForStopViewModel(stopID: stopID, routeID: testRouteID, application: app)
+        await viewModel.fetchSchedule()
+
+        #expect(viewModel.selectedRouteID == testRouteID)
     }
 
     // MARK: - Stop Name Tests
@@ -189,6 +215,24 @@ final class ScheduleForStopViewModelTests: OBATestCase {
         let app = createApplication(dataLoader: dataLoader)
         let viewModel = ScheduleForStopViewModel(stopID: stopID, application: app)
 
+        #expect(viewModel.scheduleData == nil)
+    }
+
+    /// `.task(id:)` cancels the in-flight fetch when the date changes.
+    /// `URLSession` throws `URLError.cancelled`, which must not become the
+    /// visible error or the replacement fetch shows "Unable to load".
+    @Test @MainActor
+    func `Cancelled fetch does not set error`() async {
+        let dataLoader = MockDataLoader(testName: name)
+        stubScheduleForStop(dataLoader: dataLoader)
+        let app = createApplication(dataLoader: dataLoader)
+        let viewModel = ScheduleForStopViewModel(stopID: stopID, application: app)
+
+        let task = Task { await viewModel.fetchSchedule() }
+        task.cancel()
+        await task.value
+
+        #expect(viewModel.error == nil)
         #expect(viewModel.scheduleData == nil)
     }
 }

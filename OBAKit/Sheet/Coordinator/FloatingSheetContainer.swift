@@ -76,13 +76,23 @@ private struct StackedSheetLayer<Route: SheetRouteable, SheetContent: View>: Vie
         )
     }
 
+    /// Runs once the dismissal has finished, so the sheet revealed — the one hosting
+    /// this layer — is frontmost, and a `nil` argument puts VoiceOver on its first
+    /// element. See `SheetCoordinator.claimUnwindFocus(atDepth:)`.
+    private func moveFocusAfterUnwind() {
+        guard coordinator.claimUnwindFocus(atDepth: depth) else { return }
+        UIAccessibility.post(notification: .screenChanged, argument: nil)
+    }
+
     func body(content: Content) -> some View {
-        content.sheet(item: routeBinding) { route in
+        content.sheet(item: routeBinding, onDismiss: moveFocusAfterUnwind) { route in
             sheetContent(route)
                 .applyDetentConfig(
                     route.detentConfiguration,
                     selection: detentBinding(for: route),
+                    // See `SheetCoordinator.isStackedSheetCovered(atDepth:)`.
                     interactiveDismissDisabled: route.detentConfiguration.isDismissDisabled
+                        || coordinator.isStackedSheetCovered(atDepth: depth)
                 )
                 .environmentObject(coordinator)
                 .modifier(StackedSheetLayer(

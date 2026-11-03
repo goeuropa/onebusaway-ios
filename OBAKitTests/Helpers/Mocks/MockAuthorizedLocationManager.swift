@@ -12,7 +12,7 @@ import CoreLocation
 import OBAKit
 import OBAKitCore
 
-class MockAuthorizedLocationManager: NSObject, LocationManager {
+class MockAuthorizedLocationManager: NSObject, RegionMonitoringLocationManager {
     weak var delegate: CLLocationManagerDelegate?
 
     private let updateLocation: CLLocation
@@ -20,6 +20,44 @@ class MockAuthorizedLocationManager: NSObject, LocationManager {
 
     var updatingLocation = false
     var updatingHeading = false
+    var desiredAccuracy: CLLocationAccuracy = kCLLocationAccuracyBest
+
+    /// How many times `requestLocation()` was called.
+    private(set) var requestLocationCount = 0
+
+    /// What the next `requestLocation()` delivers instead of `updateLocation`.
+    var oneShotLocation: CLLocation?
+
+    /// When set, the next `requestLocation()` delivers this error instead of a
+    /// fix, then clears itself.
+    var nextRequestLocationError: Error?
+
+    /// When `false`, `requestLocation()` only records the request and
+    /// `deliverPendingOneShot()` delivers it. That makes a pending one-shot
+    /// observable. Real Core Location always delivers asynchronously.
+    var deliversOneShotSynchronously = true
+
+    func requestLocation() {
+        requestLocationCount += 1
+        if deliversOneShotSynchronously {
+            deliverOneShot()
+        }
+    }
+
+    /// Delivers the deferred one-shot the way a synchronous `requestLocation()` would.
+    func deliverPendingOneShot() {
+        deliverOneShot()
+    }
+
+    private func deliverOneShot() {
+        if let error = nextRequestLocationError {
+            nextRequestLocationError = nil
+            delegate?.locationManager?(CLLocationManager(), didFailWithError: error)
+            return
+        }
+        location = oneShotLocation ?? updateLocation
+    }
+
     private(set) var monitoredRegions = Set<CLRegion>()
 
     init(updateLocation: CLLocation, updateHeading: CLHeading) {
@@ -29,6 +67,10 @@ class MockAuthorizedLocationManager: NSObject, LocationManager {
 
     func requestWhenInUseAuthorization() {
         // nop, already authorized.
+    }
+
+    func requestAlwaysAuthorization() {
+        authorizationStatus = .authorizedAlways
     }
 
     @available(iOS 14, *)
@@ -96,4 +138,8 @@ class MockAuthorizedLocationManager: NSObject, LocationManager {
     func stopMonitoring(for region: CLRegion) {
         monitoredRegions.remove(region)
     }
+
+    /// Large enough that no radius this mock is handed gets clamped by accident;
+    /// the clamping path has dedicated coverage against `LocationManagerMock`.
+    var maximumRegionMonitoringDistance: CLLocationDistance = 100_000
 }

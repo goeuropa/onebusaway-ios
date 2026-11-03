@@ -6,13 +6,24 @@ DerivedData/
 Apps/**/Info.plist
 Apps/**/*.entitlements
 OBAWidget/**/*.entitlements
+OBAKitTests/Info.plist
+# Left behind by the framework targets these package targets replaced.
+# SwiftPM ignores them, so keep them out of commits.
 OBAKit/Info.plist
 OBAKitCore/Info.plist
-OBAKitTests/Info.plist
+OBAKitWatch/Info.plist
 OBAWidget/Info.plist
+WatchApp/Info.plist
 /project.yml
+/project.local.yml
 
 ## SwiftPM
+.build/
+# Written when the package is built on its own (see the watch job in
+# tests.yml). The apps pin their dependencies in Apps/<App>/Package.resolved,
+# and a library's pins don't reach the apps that depend on it.
+/Package.resolved
+.swiftpm/
 OBAKit.xcodeproj/**
 
 ## Various settings
@@ -62,3 +73,8 @@ OBAKitTests.xcresult
 
 # Review artifacts (e.g. /aaron-pr-review)
 pr-*.md
+
+# Personal XcodeGen overrides (team ID / bundle ID). See Apps/*/local.yml.example.
+Apps/*/local.yml
+
+__pycache__/

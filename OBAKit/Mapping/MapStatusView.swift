@@ -55,6 +55,9 @@ class MapStatusView: UIView {
     private var iconView: UIImageView!
     private var detailLabel: UILabel!
 
+    /// What the pill last showed; `nil` when it is hidden.
+    private(set) var indicator: MapStatusIndicator?
+
     // MARK: - Layout Constants
 
     private enum Layout {
@@ -96,12 +99,12 @@ class MapStatusView: UIView {
     private func configure() {
         // Icon
         iconView = UIImageView.autolayoutNew()
-        iconView.tintColor = ThemeColors.shared.brand
+        iconView.tintColor = ThemeColors.shared.brandTint
 
         // Label
         detailLabel = UILabel.autolayoutNew()
         detailLabel.font = .preferredFont(forTextStyle: .headline)
-        detailLabel.textColor = ThemeColors.shared.brand
+        detailLabel.textColor = ThemeColors.shared.brandTint
         detailLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         // Stack
@@ -121,9 +124,10 @@ class MapStatusView: UIView {
         addSubview(visualEffectView)
 
         // Shadow on the outer view for the floating effect.
-        // Start with opacity 0 — the correct value is set in didMoveToWindow()
-        // because traitCollection is unreliable during init (view has no window yet,
-        // so userInterfaceStyle returns .unspecified regardless of actual appearance).
+        // Start with opacity 0 — `traitCollection` is unreliable during init (no
+        // window yet, so `userInterfaceStyle` reports `.unspecified` whatever the
+        // real appearance is). `layoutSubviews()` sets the first real value, and
+        // the `registerForTraitChanges` below keeps it right after that.
         layer.shadowColor = UIColor.black.cgColor
         layer.shadowOffset = CGSize(width: 0, height: 2)
         layer.shadowRadius = Layout.shadowBlur
@@ -182,13 +186,15 @@ class MapStatusView: UIView {
         self.configure(for: state(for: service), zoomInStatus: false)
     }
 
-    func configure(for state: LocationState, zoomInStatus: Bool) {
-        // The zoom-in warning wins over any permission state, matching the
-        // precedence in `MapViewModel.topPillState`. Both the SF Symbol names
-        // and the labels come from the shared `MapStatusIndicator`.
+    func configure(for state: LocationState, zoomInStatus: Bool, rentalZoomInStatus: Bool = false) {
+        // The zoom-in warnings win over any permission state, stops before
+        // rentals, matching the precedence in `MapViewModel.topPillState`. Both
+        // the SF Symbol names and the labels come from the shared `MapStatusIndicator`.
         let indicator: MapStatusIndicator?
         if zoomInStatus {
             indicator = .zoomInForStops
+        } else if rentalZoomInStatus {
+            indicator = .zoomInForRentals
         } else {
             switch state {
             case .locationServicesUnavailable, .locationServicesOff, .notDetermined:
@@ -200,6 +206,12 @@ class MapStatusView: UIView {
             }
         }
 
+        // Nothing changed: skip the animation, and the layout of the whole map it
+        // forces. Against the alpha it is headed for, which `UIView.animate` sets at
+        // once, not `isHidden`, which a hide sets only when it finishes: a repeat
+        // hide in the meantime would restart it, and a run of them never let it end.
+        guard indicator != self.indicator || alpha != (indicator == nil ? 0 : 1) else { return }
+        self.indicator = indicator
         let shouldHide = indicator == nil
         let setImage = indicator.map { UIImage(systemName: $0.symbolName) } ?? nil
         let setLargeImage = indicator.map { UIImage(systemName: $0.largeSymbolName) } ?? nil
@@ -231,32 +243,25 @@ class MapStatusView: UIView {
         }
     }
 
-    /// Provides a call-to-action alert for resolving location authorization issues.
-    /// - important: This only returns the title and message (body) of the alert. You have to manually add applicable actions.
-    /// - returns: In situations where the user can't modify their location services or location services is
-    /// already enabled, this will return `nil`, meaning the user doesn't need to do anything.
-    static func alert(for state: LocationState) -> UIAlertController? {
-        let title: String
-        let message: String
+    /// The purpose key, from the app's `NSLocationTemporaryUsageDescriptionDictionary`,
+    /// both maps use to ask for temporary full accuracy from the status pill.
+    static let fullAccuracyPurposeKey = "MapStatusView"
 
-        switch state {
-        case .locationServicesUnavailable, .locationServicesOn:
-            return nil
-        case .locationServicesOff, .notDetermined:
-            title = String(
-                format: OBALoc("locationservices_alert_off.title", value: "%@ works best with your location.", comment: "Title of the alert prompting the user to turn on location services. %@ is the app name."),
-                Bundle.main.appName
-            )
-            message = OBALoc("locationservices_alert_off.message", value: "You'll get to see where you are on the map and see nearby stops, making it easier to get where you need to go.", comment: "Body of the alert prompting the user to turn on location services.")
-        case .impreciseLocation:
-            title = String(
-                format: OBALoc("locationservices_alert_imprecise.title", value: "%@ works best with your precise location", comment: "Title of the alert prompting the user to upgrade from approximate to precise location. %@ is the app name."),
-                Bundle.main.appName
-            )
-            message = OBALoc("locationservices_alert_imprecise.message", value: "You'll get to see where you are on the map and see nearby stops, making it easier to get where you need to go.", comment: "Body of the alert prompting the user to grant precise location.")
-        }
+    /// The alert shown for `.locationServicesOff`, where iOS won't prompt again:
+    /// it offers Settings. Where iOS can still prompt, the map raises the system
+    /// prompt directly instead (see `MapViewController.didTapMapStatus`).
+    static func locationServicesOffAlert(onOpenSettings: @escaping () -> Void) -> UIAlertController {
+        let title = String(
+            format: OBALoc("locationservices_alert_off.title", value: "%@ works best with your location.", comment: "Title of the alert prompting the user to turn on location services. %@ is the app name."),
+            Bundle.main.appName
+        )
+        let message = OBALoc("locationservices_alert_off.message", value: "You'll get to see where you are on the map and see nearby stops, making it easier to get where you need to go.", comment: "Body of the alert prompting the user to turn on location services.")
 
-        return UIAlertController(title: title, message: message, preferredStyle: .alert)
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        let goToSettingsTitle = OBALoc("locationservices_alert_gotosettings.button", value: "Turn On in Settings", comment: "")
+        alert.addAction(UIAlertAction(title: goToSettingsTitle, style: .default) { _ in onOpenSettings() })
+        alert.addAction(UIAlertAction(title: OBALoc("locationservices_alert_keepoff.button", value: "Keep Location Off", comment: ""), style: .default))
+        return alert
     }
 }
 

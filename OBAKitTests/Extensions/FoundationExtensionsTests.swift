@@ -215,4 +215,123 @@ final class BundleFeedbackConfigTests {
         let bundle = try FeedbackConfigBundle.create(config: ["FeedbackPromptEnabled": false])
         #expect(!bundle.feedbackPromptEnabled)
     }
+
+    // MARK: - Fixed region (issue #608)
+
+    /// White-label apps pin a region in `OBAKitConfig` so the picker never
+    /// appears. These keys are how `RegionsService` is configured at launch.
+    @Test func `Fixed region name reads from OBA kit config`() throws {
+        let bundle = try FeedbackConfigBundle.create(config: ["FixedRegionName": "Puget Sound"])
+        #expect(bundle.fixedRegionName == "Puget Sound")
+    }
+
+    @Test func `Fixed region name is nil when absent`() throws {
+        let bundle = try FeedbackConfigBundle.create(config: [:])
+        #expect(bundle.fixedRegionName == nil)
+    }
+
+    @Test func `Fixed region OBA base URL reads from OBA kit config`() throws {
+        let bundle = try FeedbackConfigBundle.create(config: [
+            "FixedRegionOBABaseURL": "https://api.tampa.onebusawaycloud.com/"
+        ])
+        #expect(bundle.fixedRegionOBABaseURL == URL(string: "https://api.tampa.onebusawaycloud.com/"))
+    }
+
+    @Test func `Fixed region OBA base URL is nil when absent or unparseable`() throws {
+        let missing = try FeedbackConfigBundle.create(config: [:])
+        #expect(missing.fixedRegionOBABaseURL == nil)
+
+        let garbage = try FeedbackConfigBundle.create(config: ["FixedRegionOBABaseURL": ""])
+        #expect(garbage.fixedRegionOBABaseURL == nil)
+    }
+
+    // MARK: - Launch route (issue #617)
+
+    @Test func `Launch route ID reads from OBA kit config`() throws {
+        let bundle = try FeedbackConfigBundle.create(config: ["LaunchRouteID": "1_100479"])
+        #expect(bundle.launchRouteID == "1_100479")
+    }
+
+    @Test func `Launch route ID is nil when absent or not a string`() throws {
+        let missing = try FeedbackConfigBundle.create(config: [:])
+        #expect(missing.launchRouteID == nil)
+
+        let number = try FeedbackConfigBundle.create(config: ["LaunchRouteID": 100479])
+        #expect(number.launchRouteID == nil)
+    }
+
+    // MARK: - OBAKitConfig.MoreTab
+
+    @Test func `More tab configuration uses defaults when MoreTab is absent`() throws {
+        let bundle = try FeedbackConfigBundle.create(config: [:])
+        let more = bundle.moreTabConfiguration
+        #expect(more.headerSupportText == nil)
+        #expect(more.showHelpOutSection)
+        #expect(more.translateURL == nil)
+        #expect(more.developURL?.absoluteString == "https://github.com/oneBusAway/onebusaway-ios")
+        #expect(more.customLinks.isEmpty)
+    }
+
+    @Test func `More tab configuration reads nested MoreTab from OBAKitConfig`() throws {
+        let bundle = try FeedbackConfigBundle.create(config: [
+            "MoreTab": [
+                "HeaderSupportText": "Powered by TestAgency",
+                "ShowHelpOutSection": false,
+                "TranslateURL": "https://example.com/translate",
+                "DevelopURL": "https://example.com/develop",
+                "TutorialURL": "https://example.com/tutorials",
+                "PhoneURL": "tel:+1234567890",
+                "TextURL": "sms:+1234567890",
+                "CustomLinks": [
+                    ["Title": "Agency Site", "URL": "https://example.com"]
+                ]
+            ]
+        ])
+        let more = bundle.moreTabConfiguration
+        #expect(more.headerSupportText == "Powered by TestAgency")
+        #expect(!more.showHelpOutSection)
+        #expect(more.translateURL?.absoluteString == "https://example.com/translate")
+        #expect(more.developURL?.absoluteString == "https://example.com/develop")
+        #expect(more.tutorialURL?.absoluteString == "https://example.com/tutorials")
+        #expect(more.phoneURL?.absoluteString == "tel:+1234567890")
+        #expect(more.textURL?.absoluteString == "sms:+1234567890")
+        #expect(more.customLinks.count == 1)
+        #expect(more.customLinks[0].title == "Agency Site")
+        #expect(more.customLinks[0].url.absoluteString == "https://example.com")
+    }
+    // MARK: - String.normalizedSearchQuery
+
+    /// Nil means "match everything". `.searchable` hands a view the empty string
+    /// the moment its field is focused, and whitespace is the same non-intent —
+    /// treating either as a real query would blank the list the instant the user
+    /// tapped the search field.
+    @Test func `Normalized search query is nil for absent or blank input`() {
+        #expect(String.normalizedSearchQuery(nil) == nil)
+        #expect(String.normalizedSearchQuery("") == nil)
+        #expect(String.normalizedSearchQuery("   ") == nil)
+        #expect(String.normalizedSearchQuery("\n\t ") == nil)
+    }
+
+    /// Lowercased and trimmed, because `matchesQuery(_:)` compares against
+    /// lowercased fields and users leave stray spaces when they paste.
+    @Test func `Normalized search query lowercases and trims`() {
+        #expect(String.normalizedSearchQuery("  Pike St  ") == "pike st")
+        #expect(String.normalizedSearchQuery("3RD AVE") == "3rd ave")
+    }
+
+    /// Interior spacing is part of the query — only the ends are trimmed.
+    @Test func `Normalized search query preserves interior spacing`() {
+        #expect(String.normalizedSearchQuery(" 3rd  ave ") == "3rd  ave")
+    }
+
+    // MARK: - String.telephoneURL
+
+    /// Shared by `Agency.callURL` and the on-demand booking line: feeds publish
+    /// numbers in any punctuation, and a dialer takes digits and `+` only.
+    @Test func `Telephone URL keeps digits and plus`() {
+        #expect("(703) 746-5222".dialableDigits == "7037465222")
+        #expect(" +1 206.553.3000 ".telephoneURL == URL(string: "tel://+12065533000"))
+        #expect("n/a".dialableDigits == nil)
+        #expect("call us".telephoneURL == nil)
+    }
 }

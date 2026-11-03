@@ -7,12 +7,15 @@
 //  LICENSE file in the root directory of this source tree.
 //
 
+import SwiftUI
 import UIKit
-import Eureka
 import OBAKitCore
 
 /// This view controller offers support for creating and editing bookmarks.
-class EditBookmarkViewController: FormViewController, AddGroupAlertDelegate {
+///
+/// The form is `EditBookmarkView`; this controller owns the Save and Cancel
+/// buttons, the save-time alerts, and the delegate callbacks.
+class EditBookmarkViewController: UIHostingController<EditBookmarkView>, DestinationStopPickerDelegate {
     private let application: Application
     private let viewModel: EditBookmarkViewModel
     private weak var delegate: BookmarkEditorDelegate?
@@ -30,7 +33,11 @@ class EditBookmarkViewController: FormViewController, AddGroupAlertDelegate {
         self.delegate = delegate
         self.viewModel = EditBookmarkViewModel(application: application, source: source, bookmark: bookmark)
 
-        super.init(nibName: nil, bundle: nil)
+        super.init(rootView: EditBookmarkView(viewModel: viewModel))
+
+        rootView.chooseDestination = { [weak self] in
+            self?.showDestinationPicker()
+        }
 
         if viewModel.isAddMode {
             title = Strings.addBookmark
@@ -38,155 +45,92 @@ class EditBookmarkViewController: FormViewController, AddGroupAlertDelegate {
             title = OBALoc("edit_bookmark_controller.title_edit", value: "Edit Bookmark", comment: "Title for the Edit Bookmark controller in edit mode")
         }
 
-        self.navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem: .save, target: self, action: #selector(save))
+        self.navigationItem.rightBarButtonItem = makeSaveButton()
         self.navigationItem.leftBarButtonItem = UIBarButtonItem(barButtonSystemItem: .cancel, target: self, action: #selector(close))
+    }
+
+    /// A checkmark rather than "Save" (#1597). On iOS 26 it sits on a prominent
+    /// capsule filled with the item's tint. The system picks a dark glyph for the
+    /// bar's light `brandTint`, so the checkmark is drawn white, on `brandAccent`:
+    /// `brandTint` lightens in dark mode, leaving white at 2.7:1, and the accent
+    /// keeps it above 3:1 in both.
+    private func makeSaveButton() -> UIBarButtonItem {
+        var image = Icons.checkmark
+        var style = UIBarButtonItem.Style.done
+        var tint: UIColor?
+        if #available(iOS 26.0, *) {
+            image = image.withTintColor(.white, renderingMode: .alwaysOriginal)
+            style = .prominent
+            tint = ThemeColors.shared.brandAccent
+        }
+        let item = UIBarButtonItem(image: image, style: style, target: self, action: #selector(save))
+        item.tintColor = tint
+        item.accessibilityLabel = Strings.save
+        return item
     }
 
     required init?(coder aDecoder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
-    override func viewDidLoad() {
-        super.viewDidLoad()
+    // MARK: - Destination
 
-        loadForm()
-    }
+    private func showDestinationPicker() {
+        guard let arrivalDeparture = viewModel.destinationPickerArrivalDeparture else { return }
 
-    override func viewWillAppear(_ animated: Bool) {
-        super.viewWillAppear(animated)
-        refreshGroupSelection()
-    }
-
-    // MARK: - Eureka Form
-
-    private let selectedGroupTag = "groupTag"
-    private let bookmarkNameTag = "name"
-    private let showInTodayViewTag = "todayView"
-
-    /// Creates, loads, and populates data in the Eureka Form object.
-    private func loadForm() {
-        form
-            +++ bookmarkNameSection
-            +++ showInTodayViewSection
-            +++ selectedBookmarkGroupSection
-            +++ addGroupSection
-
-        form.setValues([
-            bookmarkNameTag: viewModel.initialName,
-            selectedGroupTag: viewModel.initialGroupID?.uuidString ?? "",
-            showInTodayViewTag: viewModel.initialIsFavorite
-        ])
-    }
-
-    /// The `Form` section that contains the Bookmark Name `TextRow`.
-    private lazy var bookmarkNameSection: Section = {
-        let title = OBALoc("edit_bookmark_controller.name_section.header_title", value: "Bookmark Name", comment: "Title of the Bookmark Name header.")
-        let section = Section(title)
-        section <<< TextRow {
-            $0.tag = bookmarkNameTag
-        }
-
-        return section
-    }()
-
-    private lazy var showInTodayViewSection: Section = {
-        let section = Section()
-
-        section <<< SwitchRow(showInTodayViewTag) {
-            $0.tag = showInTodayViewTag
-            $0.title = OBALoc("edit_bookmark_controller.show_in_today_view_switch_title", value: "Show in Today View widget", comment: "Title next to the switch that toggles whether a bookmark will appear in the today view.")
-        }
-
-        return section
-    }()
-
-    /// The `Form` section that contains an 'Add Bookmark Group' button.
-    private lazy var addGroupSection: Section = {
-        let section = Section()
-        section <<< ButtonRow {
-            $0.title = OBALoc("edit_bookmark_controller.add_group_button_title", value: "Add Bookmark Group", comment: "Title of the button that lets the user add a new Bookmark Group.")
-            $0.onCellSelection { [weak self] (_, _) in
-                guard let self = self else { return }
-
-                self.present(self.addGroupAlert.alertController, animated: true, completion: nil)
-            }
-        }
-        return section
-    }()
-
-    /// The `Form` section that contains the list of `BookmarkGroup`s.
-    private lazy var selectedBookmarkGroupSection: SelectableSection<ListCheckRow<String>> = {
-        let section = SelectableSection<ListCheckRow<String>>(
-            OBALoc("edit_bookmark_controller.group_section.header_title", value: "Bookmark Group", comment: "Title of the Bookmark Group header."),
-            selectionType: .singleSelection(enableDeselection: false)
+        let picker = DestinationStopPickerController(
+            application: application,
+            arrivalDeparture: arrivalDeparture,
+            allowsSkippingDestination: false
         )
-
-        for group in viewModel.bookmarkGroups {
-            addRow(for: group, to: section)
-        }
-
-        // `ListCheckRow<String>` requires a non-nil String, so "no group" is
-        // represented as the empty string here and round-tripped back to
-        // `UUID?` via `UUID(optionalUUIDString:)` in `save()`.
-        section <<< ListCheckRow<String>("") {
-            $0.tag = selectedGroupTag
-            $0.title = OBALoc("edit_bookmark_controller.no_group_row", value: "(No Group)", comment: "Don't add this bookmark to a group.")
-            $0.selectableValue = ""
-        }
-
-        return section
-    }()
-
-    /// Adds a new selectable `BookmarkGroup` row to the specified `section`.
-    private func addRow(for group: BookmarkGroup, to section: SelectableSection<ListCheckRow<String>>) {
-        let uuid = group.id.uuidString
-        section <<< ListCheckRow<String>(uuid) {
-            $0.tag = uuid
-            $0.title = group.name
-            $0.selectableValue = uuid
-        }
+        picker.delegate = self
+        navigationController?.pushViewController(picker, animated: true)
     }
 
-    // MARK: - Add Group Alert
-
-    private lazy var addGroupAlert: AddGroupAlertController = {
-        return AddGroupAlertController(dataStore: application.userDataStore, group: nil, delegate: self)
-    }()
-
-    func bookmarkGroupSaved(_ group: BookmarkGroup) {
-        addRow(for: group, to: selectedBookmarkGroupSection)
+    func destinationStopPicker(_ controller: DestinationStopPickerController, didSelectStop stopTime: TripStopTime) {
+        viewModel.setDestination(stopTime.stop)
+        navigationController?.popToViewController(self, animated: true)
     }
 
-    // MARK: - Group Selection
+    /// Unreachable while the picker is built with `allowsSkippingDestination: false`;
+    /// handled as a cancel so the flow can't strand the rider if that changes.
+    func destinationStopPickerDidSkipDestination(_ controller: DestinationStopPickerController) {
+        navigationController?.popToViewController(self, animated: true)
+    }
 
-    private func refreshGroupSelection() {
-        let currentGroupID = viewModel.currentGroupID()?.uuidString ?? ""
-        for row in selectedBookmarkGroupSection.allRows {
-            guard let checkRow = row as? ListCheckRow<String> else { continue }
-            checkRow.value = (checkRow.selectableValue == currentGroupID) ? checkRow.selectableValue : nil
-            checkRow.updateCell()
-        }
+    func destinationStopPickerDidCancel(_ controller: DestinationStopPickerController) {
+        navigationController?.popToViewController(self, animated: true)
     }
 
     // MARK: - Actions
 
+    /// Cancels the editor by telling the delegate, the way `save()` and
+    /// `AddBookmarkViewController.cancel()` both do.
+    ///
+    /// Dismissing here directly would leave the delegate believing the editor is
+    /// still up, which matters to any presenter that keeps its own state — a
+    /// SwiftUI `.sheet(item:)` binding, for one. Every delegate dismisses us in
+    /// response; the fallback covers a delegate that has been deallocated.
     @objc private func close() {
-        dismiss(animated: true, completion: nil)
+        guard let delegate else {
+            dismiss(animated: true, completion: nil)
+            return
+        }
+
+        delegate.bookmarkEditorCancelled(self)
     }
 
-    @objc private func save() {
-        let rawName = form.values()[bookmarkNameTag] as? String ?? ""
-        let isFavorite = (form.values()[showInTodayViewTag] as? Bool) ?? true
-        let rawSelectedGroupID = selectedBookmarkGroupSection.selectedRows().first?.value ?? ""
-        let selectedGroupID = UUID(optionalUUIDString: rawSelectedGroupID)
+    @objc func save() {
+        let rawName = viewModel.name
+        let isFavorite = viewModel.isFavorite
+        let selectedGroupID = viewModel.selectedGroupID
 
-        let commit: (Bookmark, Bool) -> Void = { [weak self] bookmark, isNew in
+        let notifyEdited: (Bookmark, Bool) -> Void = { [weak self] bookmark, isNew in
             guard let self else { return }
-            self.viewModel.persist(bookmark, name: rawName, isFavorite: isFavorite, to: selectedGroupID, isNewBookmark: isNew)
             self.delegate?.bookmarkEditor(self, editedBookmark: bookmark, isNewBookmark: isNew)
         }
 
-        switch viewModel.prepareToSave(name: rawName, isFavorite: isFavorite) {
+        switch viewModel.prepareToSave(name: rawName) {
         case .regionUnavailable:
             let alert = UIAlertController(
                 title: OBALoc("edit_bookmark_controller.region_error.title", value: "Unable to Save", comment: "Title of an alert shown when a bookmark cannot be saved because the current region is unavailable."),
@@ -196,17 +140,31 @@ class EditBookmarkViewController: FormViewController, AddGroupAlertDelegate {
             alert.addAction(UIAlertAction(title: Strings.ok, style: .default, handler: nil))
             present(alert, animated: true, completion: nil)
 
-        case .readyToSave(let bookmark, let isNew):
-            commit(bookmark, isNew)
+        case .readyToSaveNew(let bookmark):
+            viewModel.persistNew(bookmark, name: rawName, isFavorite: isFavorite, to: selectedGroupID)
+            notifyEdited(bookmark, true)
+
+        case .readyToSaveExisting(let bookmark):
+            viewModel.persistExisting(bookmark, name: rawName, isFavorite: isFavorite, to: selectedGroupID)
+            notifyEdited(bookmark, false)
 
         case .duplicateRequiresConfirmation(let bookmark):
             let alert = UIAlertController(
                 title: OBALoc("edit_bookmark_controller.duplicate_alert.title", value: "Duplicate Bookmark", comment: "The title of an alert telling the user that they have already bookmarked this thing. Noun form of 'duplicate', not the verb."),
                 message: OBALoc("edit_bookmark_controller.duplicate_alert.body", value: "You already have this bookmarked. Did you mean to create a duplicate?", comment: "Body of an alert telling the user they have already bookmarked this thing."), preferredStyle: .alert
             )
-            alert.addAction(UIAlertAction(title: Strings.cancel, style: .cancel, handler: nil))
-            alert.addAction(UIAlertAction(title: OBALoc("edit_bookmark_controller.duplicate_alert.affirmative_button", value: "Create Duplicate", comment: "Indicates that the user wants to create a duplicate bookmark."), style: .default, handler: { _ in
-                commit(bookmark, true)
+            alert.addAction(UIAlertAction(title: Strings.cancel, style: .cancel, handler: { [weak self] _ in
+                self?.viewModel.resolveDuplicate(.cancelled, name: rawName, isFavorite: isFavorite, to: selectedGroupID)
+            }))
+            alert.addAction(UIAlertAction(title: OBALoc("edit_bookmark_controller.duplicate_alert.affirmative_button", value: "Create Duplicate", comment: "Indicates that the user wants to create a duplicate bookmark."), style: .default, handler: { [weak self] _ in
+                guard let self else { return }
+                self.viewModel.resolveDuplicate(
+                    .createDuplicate(bookmark),
+                    name: rawName,
+                    isFavorite: isFavorite,
+                    to: selectedGroupID
+                )
+                notifyEdited(bookmark, true)
             }))
             present(alert, animated: true, completion: nil)
         }

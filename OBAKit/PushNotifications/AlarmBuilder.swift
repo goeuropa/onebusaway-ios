@@ -8,15 +8,12 @@
 //
 
 import UIKit
-import BLTNBoard
 import OBAKitCore
 
+/// The `AlarmBuilder` shows the loading HUD itself when it begins its request;
+/// the delegate takes ownership of it from the moment either method below is
+/// called, replacing it with a success message or dismissing it on failure.
 protocol AlarmBuilderDelegate: NSObjectProtocol {
-
-    /// Delegate method that gets called when the `AlarmBuilder` begins its request to create an `Alarm`.
-    /// A perfect opportunity to display a loading indicator.
-    /// - Parameter alarmBuilder: The `AlarmBuilder` object.
-    func alarmBuilderStartedRequest(_ alarmBuilder: AlarmBuilder)
 
     /// Delegate method that gets called when the `AlarmBuilder` has successfully created an `Alarm`.
     /// - Parameter alarmBuilder: The `AlarmBuilder` object.
@@ -90,21 +87,27 @@ class AlarmBuilder: NSObject {
 
     // MARK: - Public Methods
 
+    /// A no-op while the bulletin is already showing; `BLTNItemManager` enforces that.
     public func showBulletin(above viewController: UIViewController) {
-        guard !bulletinManager.isShowingBulletin else {
-            return
-        }
-
         bulletinManager.showBulletin(above: viewController)
     }
 
     // MARK: - Alarm Creation
+
+    /// `true` from the moment a request starts until it finishes and the card starts dismissing.
+    /// Add Alarm stays live while the request is in flight, so without this a
+    /// second tap posted a duplicate alarm.
+    private var isCreatingAlarm = false
+
     private func createAlarm(minutes: Int) async {
         guard
+            !isCreatingAlarm,
             let modelService = application.obacoService,
             let pushService = application.pushService,
             let currentRegion = application.currentRegion
         else { return }
+
+        isCreatingAlarm = true
 
         let arrivalDeparture = self.arrivalDeparture
 
@@ -112,8 +115,19 @@ class AlarmBuilder: NSObject {
 
         defer {
             Task { @MainActor in
-                ProgressHUD.dismiss()
+                // The delegate owns the HUD from here: it shows a self-dismissing
+                // success message on creation, and dismisses on failure.
+                // Dismissing here too would hide "Alarm created" the instant it
+                // appeared — `showSuccessAndDismiss` schedules its own dismissal,
+                // and this ran immediately after it.
+                //
+                // The delegate is weak, so with nobody left to own it, fall back
+                // to dismissing here rather than stranding a spinner on screen.
+                if self.delegate == nil {
+                    ProgressHUD.dismiss()
+                }
                 self.bulletinManager.dismissBulletin(animated: true)
+                self.isCreatingAlarm = false
             }
         }
 
@@ -122,18 +136,19 @@ class AlarmBuilder: NSObject {
         do {
             alarm = try await modelService.postAlarm(minutesBefore: minutes, arrivalDeparture: arrivalDeparture, userPushID: userPushID)
         } catch {
-            self.delegate?.alarmBuilder(self, error: AlarmBuilderErrors.creationFailed)
+            // No actor hop needed: OBAKit builds with
+            // `SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor`, so this type, this
+            // method and `AlarmBuilderDelegate` are all already main-actor
+            // isolated. When the delegate has gone, the `defer` above sees the
+            // same nil and dismisses the HUD itself.
+            delegate?.alarmBuilder(self, error: AlarmBuilderErrors.creationFailed)
             return
         }
 
         alarm.deepLink = ArrivalDepartureDeepLink(arrivalDeparture: self.arrivalDeparture, regionID: currentRegion.regionIdentifier)
         alarm.set(tripDate: self.arrivalDeparture.arrivalDepartureDate, alarmOffset: minutes)
 
-        if let delegate {
-            await MainActor.run {
-                delegate.alarmBuilder(self, alarmCreated: alarm)
-            }
-        }
+        delegate?.alarmBuilder(self, alarmCreated: alarm)
     }
 
     public enum AlarmBuilderErrors: Error {
@@ -155,12 +170,6 @@ class AlarmTimePickerItem: ThemedBulletinPage {
     /// The current value of the "Track on Lock Screen" toggle.
     var trackOnLockScreen: Bool { userDefaults.bool(forKey: Self.trackOnLockScreenKey) }
 
-    // Required by ThemedBulletinPage's initializer contract (see its init(title:)).
-    @available(*, unavailable)
-    nonisolated override init(title: String) {
-        fatalError("Use init(arrivalDeparture:initialMinutes:userDefaults:)")
-    }
-
     init(arrivalDeparture: ArrivalDeparture, initialMinutes: Int, userDefaults: UserDefaults) {
         self.arrivalDeparture = arrivalDeparture
         self.userDefaults = userDefaults
@@ -176,13 +185,9 @@ class AlarmTimePickerItem: ThemedBulletinPage {
         actionButtonTitle = Strings.addAlarm
     }
 
-    // nonisolated to match BLTNPageItem's nonisolated declaration; BLTNBoard only
-    // calls this while presenting UI on the main thread.
-    nonisolated override func makeViewsUnderDescription(with interfaceBuilder: BLTNInterfaceBuilder) -> [UIView]? {
-        MainActor.assumeIsolated {
-            timePickerManager.prepareForDisplay()
-            return [timePickerManager.pickerView, makeTrackOnLockScreenRow()]
-        }
+    override func makeViewsUnderDescription(with interfaceBuilder: BLTNInterfaceBuilder) -> [UIView]? {
+        timePickerManager.prepareForDisplay()
+        return [timePickerManager.pickerView, makeTrackOnLockScreenRow()]
     }
 
     private func makeTrackOnLockScreenRow() -> UIView {
@@ -197,6 +202,10 @@ class AlarmTimePickerItem: ThemedBulletinPage {
         label.numberOfLines = 0
 
         let toggle = UISwitch()
+        // The label beside it isn't read with it, so VoiceOver said only
+        // "Switch button, on".
+        toggle.accessibilityLabel = label.text
+        label.isAccessibilityElement = false
         toggle.isOn = trackOnLockScreen
         toggle.addTarget(self, action: #selector(trackSwitchChanged(_:)), for: .valueChanged)
         trackSwitch = toggle
@@ -311,7 +320,10 @@ class AlarmTimePickerManager: NSObject, UIPickerViewDelegate, UIPickerViewDataSo
         }
         else {
             let fmt = OBALoc("alarm_builder_controller.minutes_fmt", value: "%d minutes", comment: "{X} minutes. always plural.")
-            return String(format: fmt, minutes)
+            // localizedStringWithFormat, not String(format:) — the latter resolves
+            // `%#@count@` against the root plural rule, so Polish `few`/`many` would
+            // be unreachable and 5 would read "5 minuty" instead of "5 minut".
+            return String.localizedStringWithFormat(fmt, minutes)
         }
     }
 }

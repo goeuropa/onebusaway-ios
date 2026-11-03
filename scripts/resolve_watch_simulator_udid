@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+#
+# Prints the UDID of the first available Apple Watch simulator on the newest
+# installed watchOS runtime, creating one from the newest Apple Watch device
+# type if none exists. Mirrors scripts/resolve_simulator_udid: address devices
+# by id=, never by a name that goes stale every Xcode release.
+#
+# Devices are matched by device type, not by name: the one this script creates
+# is not named "Apple Watch …", and matching on the name would create another
+# on every run.
+#
+# Usage:
+#   WATCH_UDID=$(scripts/resolve_watch_simulator_udid)
+#   xcodebuild ... -destination "platform=watchOS Simulator,id=$WATCH_UDID"
+#
+# With --ultra it resolves (or creates) the newest Apple Watch Ultra instead:
+# its screen is the largest App Store watch size, which
+# `scripts/app_store_screenshots --watch` captures at.
+
+set -euo pipefail
+
+family="Apple-Watch"
+name="OBA Watch Smoke"
+case "${1:-}" in
+    "") ;;
+    --ultra) family="Apple-Watch-Ultra"; name="OBA Watch Ultra" ;;
+    *) echo "error: unknown argument: $1 (expected --ultra or nothing)" >&2; exit 2 ;;
+esac
+
+if ! devices_json=$(xcrun simctl list devices available -j 2>&1); then
+    echo "error: \`xcrun simctl\` failed:" >&2
+    echo "$devices_json" >&2
+    exit 1
+fi
+
+udid=$(printf '%s' "$devices_json" | python3 -c '
+import json, re, sys
+
+try:
+    devices = json.load(sys.stdin)["devices"]
+except (json.JSONDecodeError, KeyError, TypeError) as error:
+    sys.exit("error: could not parse the device list: " + str(error))
+
+def version(runtime):
+    match = re.search(r"watchOS-(\d+)-(\d+)", runtime)
+    return (int(match.group(1)), int(match.group(2))) if match else (0, 0)
+
+for runtime in sorted(devices, key=version, reverse=True):
+    if not re.search(r"watchOS-\d+-\d+", runtime):
+        continue
+    watches = [d for d in devices[runtime] if sys.argv[1] + "-" in d.get("deviceTypeIdentifier", "")]
+    if watches:
+        # Newest model first, e.g. "Ultra-4" over "Ultra-3".
+        if sys.argv[1] != "Apple-Watch":  # the default keeps its first-listed choice
+            watches.sort(key=lambda d: [int(n) for n in re.findall(r"-(\d+)-", d["deviceTypeIdentifier"])], reverse=True)
+        print(watches[0]["udid"])
+        break
+' "$family")
+
+if [ -z "$udid" ]; then
+    # No device on any watchOS runtime: create one from the newest runtime and
+    # a device type of the requested family (the newest, with --ultra).
+    runtime=$(xcrun simctl list runtimes -j | python3 -c '
+import json, re, sys
+runtimes = [r for r in json.load(sys.stdin)["runtimes"] if r["platform"] == "watchOS" and r["isAvailable"]]
+if not runtimes:
+    sys.exit("error: no watchOS runtime is installed. Run: xcodebuild -downloadPlatform watchOS")
+runtimes.sort(key=lambda r: [int(x) for x in r["version"].split(".")], reverse=True)
+print(runtimes[0]["identifier"])
+')
+    devicetype=$(xcrun simctl list devicetypes -j | python3 -c '
+import json, re, sys
+types = [t for t in json.load(sys.stdin)["devicetypes"] if (sys.argv[1] + "-") in t["identifier"]]
+if not types:
+    sys.exit("error: no " + sys.argv[1] + " device types are installed.")
+if sys.argv[1] != "Apple-Watch":  # the default keeps its first-listed choice
+    types.sort(key=lambda t: [int(n) for n in re.findall(r"-(\d+)-", t["identifier"])], reverse=True)
+print(types[0]["identifier"])
+' "$family")
+    udid=$(xcrun simctl create "$name" "$devicetype" "$runtime")
+fi
+
+printf '%s\n' "$udid"

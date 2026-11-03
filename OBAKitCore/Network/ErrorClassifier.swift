@@ -30,7 +30,7 @@ public enum ErrorClassifier {
         // Already-classified errors pass through unchanged.
         if let apiError = error as? APIError {
             switch apiError {
-            case .serverError, .serverUnavailable, .cellularDataRestricted:
+            case .serverError, .serverUnavailable, .invalidResponseData, .cellularDataRestricted, .rateLimited:
                 return apiError
             default:
                 return classifyAPIError(apiError, regionName: regionName, isCellularDataRestricted: isCellularDataRestricted)
@@ -45,7 +45,7 @@ public enum ErrorClassifier {
 
         // DecodingErrors surface raw Swift messages like
         // "The data couldn't be read because it is missing."
-        // Replace with a server-problem message.
+        // That is bad payload, not an unreachable host (#1276).
         if error is DecodingError {
             return classifyDecodingError(error, regionName: regionName)
         }
@@ -64,12 +64,31 @@ public enum ErrorClassifier {
             }
             return APIError.serverError(regionName: regionName)
 
+        case .requestFailure(let response) where response.statusCode == 429:
+            // Before this case existed, 429 fell through to `requestFailure`'s
+            // "the server encountered an error" copy (#1582).
+            return APIError.rateLimited
+
         case .requestFailure(let response) where isServerUnavailable(statusCode: response.statusCode):
             guard let regionName else {
                 logger.warning("Server error \(response.statusCode) but no region name available for user message.")
                 return apiError
             }
             return APIError.serverUnavailable(regionName: regionName, statusCode: response.statusCode)
+
+        case .requestNotFound(let response) where response.statusCode != 404:
+            // `APIService+GetData` throws `requestNotFound` for a blank HTTP 200 as
+            // well as for a literal 404, but `errorDescription` says "404 Not found
+            // (url)" either way — a raw URL and a status code the server never sent.
+            // The host answered; the body was unusable. Say that instead (#1336).
+            guard let regionName else {
+                // Returning `apiError` here would hand back the very "404 Not found"
+                // copy this case exists to prevent, so fall back to the region-less
+                // wording instead — same treatment `classifyDecodingError` gives it.
+                logger.warning("Empty-body \(response.statusCode) but no region name available for user message.")
+                return regionlessInvalidResponseError()
+            }
+            return APIError.invalidResponseData(regionName: regionName)
 
         case .networkFailure:
             if isCellularDataRestricted {
@@ -110,15 +129,21 @@ public enum ErrorClassifier {
 
     private static func classifyDecodingError(_ error: Error, regionName: String?) -> Error {
         guard let regionName else {
-            let message = OBALoc(
-                "api_error.decoding_failure",
-                value: "The server returned unexpected data. This usually means the server is experiencing problems. Please try again shortly.",
-                comment: "An error shown when the server returns data the app can't understand, indicating a likely server-side issue."
-            )
-            return UnstructuredError(message)
+            return regionlessInvalidResponseError()
         }
 
-        return APIError.serverUnavailable(regionName: regionName, statusCode: nil)
+        return APIError.invalidResponseData(regionName: regionName)
+    }
+
+    /// The unusable-payload message for the two paths that reach it without a
+    /// region name to specialize the copy with.
+    private static func regionlessInvalidResponseError() -> Error {
+        let message = OBALoc(
+            "api_error.decoding_failure",
+            value: "The server returned data this app can't read. That's usually a problem with the stop or agency feed. Please try again shortly.",
+            comment: "An error shown when the server returns a body the app cannot decode and no region name is available to specialize the copy."
+        )
+        return UnstructuredError(message)
     }
 
     // MARK: - Helpers

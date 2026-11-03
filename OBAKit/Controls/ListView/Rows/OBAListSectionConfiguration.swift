@@ -5,6 +5,8 @@
 //  Created by Alan Chu on 6/20/21.
 //
 
+import UIKit
+
 nonisolated public struct OBAListSectionConfiguration: Equatable {
     public enum ListAppearance: Equatable {
         case plain
@@ -19,7 +21,7 @@ nonisolated public struct OBAListSectionConfiguration: Equatable {
     // MARK: - Initializers
     public init(appearance: ListAppearance = .plain, backgroundColor: UIColor? = nil) {
         self.appearance = appearance
-        self.backgroundColor = nil
+        self.backgroundColor = backgroundColor
     }
 
     static public func appearance(_ appearance: ListAppearance) -> Self {

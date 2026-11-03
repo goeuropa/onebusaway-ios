@@ -43,7 +43,7 @@ class MapViewController: UIViewController,
 
         hover.stackView.addArrangedSubview(HoverBarSeparator())
         hover.stackView.addArrangedSubview(toggleMapTypeButton)
-        setMapTypeButtonImage(toggleMapTypeButton, mapType: viewModel.mapType)
+        updateMapTypeButton(mapType: viewModel.mapType)
 
         if application.features.obaco == .running {
             hover.stackView.addArrangedSubview(HoverBarSeparator())
@@ -53,7 +53,23 @@ class MapViewController: UIViewController,
         hover.stackView.addArrangedSubview(HoverBarSeparator())
         hover.stackView.addArrangedSubview(myTripButton)
 
+        configureLargeContentViewer(on: hover, buttons: [locationButton, toggleMapTypeButton, weatherButton, myTripButton])
+
         return hover
+    }()
+
+    /// The hover bar's controls as system toolbar items, for a vertical bar. See
+    /// `MapViewController+VerticalBar.swift`.
+    lazy var verticalBarItems: MapToolbarItems = {
+        let items = MapToolbarItems(
+            location: locationButton,
+            mapLayers: toggleMapTypeButton,
+            weather: weatherButton,
+            myTrip: myTripButton,
+            showsWeather: application.features.obaco == .running
+        )
+        items.setLocationAvailable(application.locationService.isLocationUseAuthorized)
+        return items
     }()
 
     // MARK: - Data
@@ -70,6 +86,12 @@ class MapViewController: UIViewController,
     // MARK: - Surveys
 
     private var surveyCardView: SurveyLauncherCardView?
+
+    // MARK: - On-demand dock
+
+    lazy var onDemandProbeController = OnDemandProbeController.make(application: application)
+    var onDemandDockHost: OnDemandDockHostController?
+    var tripPlannerFallback = TripPlannerFallbackContext()
 
     // MARK: - Init
 
@@ -106,6 +128,10 @@ class MapViewController: UIViewController,
 
     // MARK: - UIViewController
 
+    public override func loadView() {
+        view = MapContainerView()
+    }
+
     public override func viewDidLoad() {
         super.viewDidLoad()
 
@@ -123,6 +149,7 @@ class MapViewController: UIViewController,
         mapStatusView.addInteraction(UILargeContentViewerInteraction(delegate: self))
 
         floatingPanel.addPanel(toParent: self)
+        installOnDemandDock()
 
         let appearance = UITabBarAppearance()
         appearance.configureWithDefaultBackground()
@@ -140,10 +167,10 @@ class MapViewController: UIViewController,
             toolbar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: ThemeMetrics.controllerMargin),
             toolbar.widthAnchor.constraint(equalToConstant: 42.0),
             locationButton.heightAnchor.constraint(equalTo: locationButton.widthAnchor),
-            weatherButton.heightAnchor.constraint(equalTo: weatherButton.widthAnchor),
             toggleMapTypeButton.heightAnchor.constraint(equalTo: toggleMapTypeButton.widthAnchor),
             myTripButton.heightAnchor.constraint(equalTo: myTripButton.widthAnchor)
         ])
+        observeVerticalBarEdge()
 
         // Status pill: centered horizontally, anchored to safe area top.
         // Max width prevents overflow on long status text or large Dynamic Type.
@@ -199,6 +226,7 @@ class MapViewController: UIViewController,
         application.mapRegionManager.refreshStopAnnotationCallouts()
 
         navigationController?.setNavigationBarHidden(true, animated: false)
+        updateControlsPlacement(animated: false)
 
         updateVisibleMapRect()
         layoutMapMargins()
@@ -210,7 +238,8 @@ class MapViewController: UIViewController,
 
         viewModel.start()
         updateVoiceover()
-        showMapLayersNudgeIfNeeded()
+        showMapLayersTipIfNeeded()
+        showExternallyRequestedContent()
         Task { @MainActor [weak viewModel] in await viewModel?.checkForSurveyPrompt() }
     }
 
@@ -218,10 +247,14 @@ class MapViewController: UIViewController,
         super.viewWillDisappear(animated)
 
         navigationController?.setNavigationBarHidden(false, animated: false)
+        // Pushed pages bring their own bar items; they shouldn't inherit the map's.
+        navigationController?.setToolbarHidden(true, animated: false)
 
         // A rider who dismisses a stop sheet and immediately switches tabs shouldn't be
         // chased by an alert from a screen they've left.
         cancelScheduledFeedbackPrompt()
+
+        mapLayersTipPresenter.stop()
     }
 
     // MARK: - Surveys
@@ -271,6 +304,7 @@ class MapViewController: UIViewController,
             card.alpha = 1
             card.transform = .identity
         }
+        updateOnDemandDockContext()
     }
 
     private func handleMapSurveyTakeSurvey(_ survey: Survey) {
@@ -288,7 +322,7 @@ class MapViewController: UIViewController,
         } else {
             let surveyVC = SurveyViewController(survey: survey, surveyService: application.surveyService)
             let navigation = UINavigationController(rootViewController: surveyVC)
-            present(navigation, animated: true)
+            topmostPresentedController.present(navigation, animated: true)
             dismissMapSurveyCard()
         }
     }
@@ -308,6 +342,7 @@ class MapViewController: UIViewController,
         }, completion: { _ in
             card.removeFromSuperview()
         })
+        updateOnDemandDockContext()
     }
 
     private func showMapExternalSurveyError() {
@@ -317,7 +352,7 @@ class MapViewController: UIViewController,
             preferredStyle: .alert
         )
         alert.addAction(UIAlertAction(title: Strings.ok, style: .default))
-        present(alert, animated: true)
+        topmostPresentedController.present(alert, animated: true)
     }
 
     // MARK: - User Location
@@ -330,10 +365,12 @@ class MapViewController: UIViewController,
 
     func centerMapOnUserLocation() {
         guard isLoadedAndOnScreen else { return }
-        let userLocation = mapRegionManager.mapView.userLocation
+
+        let mapView = visibleMapView
+        let userLocation = mapView.userLocation
         guard userLocation.isValid else { return }
 
-        mapRegionManager.mapView.setCenterCoordinate(
+        mapView.setCenterCoordinate(
             centerCoordinate: userLocation.coordinate,
             zoomLevel: viewModel.zoomLevelForCurrentLocation(),
             animated: true
@@ -349,9 +386,17 @@ class MapViewController: UIViewController,
     // MARK: - Status View Handlers
 
     @objc private func handleMapStatusTap(_ sender: UITapGestureRecognizer) {
-        if viewModel.showZoomWarning {
+        // The stops zoom target (~1 km tall) is inside the rental window too, so
+        // one zoom serves both hints.
+        //
+        // Branch on what the pill shows, not on the view model: while a stop sheet
+        // is up or in route mode the zoom hints stand down and a location warning
+        // can show in their place, and tapping that must open its alert rather
+        // than zoom the map behind it.
+        switch mapStatusView.indicator {
+        case .zoomInForStops, .zoomInForRentals:
             didTapZoomInForStops()
-        } else {
+        default:
             didTapMapStatus(sender)
         }
     }
@@ -371,39 +416,25 @@ class MapViewController: UIViewController,
     @objc func didTapMapStatus(_ sender: Any) {
         guard isLoadedAndOnScreen else { return }
         let mapStatusViewState = mapStatusView.state(for: application.locationService)
-        guard let alert = MapStatusView.alert(for: mapStatusViewState) else { return }
 
-        var keepLocationOffButton: UIAlertAction {
-            return UIAlertAction(title: OBALoc("locationservices_alert_keepoff.button", value: "Keep Location Off", comment: ""), style: .default)
-        }
-
-        var goToSettingsButton: UIAlertAction {
-            let title = OBALoc("locationservices_alert_gotosettings.button", value: "Turn On in Settings", comment: "")
-            return UIAlertAction(title: title, style: .default, handler: { _ in
-                UIApplication.shared.open(URL(string: UIApplication.openSettingsURLString)!)
-            })
-        }
-
+        // Where iOS can still prompt, raise the system prompt directly. A custom
+        // alert in front of it with a way out is what App Review rejects under
+        // guideline 5.1.1(iv); the rider declines in the system prompt instead.
         switch mapStatusViewState {
         case .notDetermined:
-            alert.addAction(title: Strings.continue) { _ in
-                self.application.locationService.requestInUseAuthorization()
-            }
-            alert.addAction(keepLocationOffButton)
-        case .locationServicesOff:
-            alert.addAction(goToSettingsButton)
-            alert.addAction(keepLocationOffButton)
+            application.locationService.requestInUseAuthorization()
         case .impreciseLocation:
-            alert.addAction(goToSettingsButton)
-            alert.addAction(title: OBALoc("locationservices_alert_request_precise_location_once.button", value: "Allow Once", comment: "")) { _ in
-                self.application.locationService.requestTemporaryFullAccuracyAuthorization(withPurposeKey: "MapStatusView")
+            application.locationService.requestTemporaryFullAccuracyAuthorization(withPurposeKey: MapStatusView.fullAccuracyPurposeKey)
+        case .locationServicesOff:
+            // iOS won't prompt again: offer Settings.
+            let alert = MapStatusView.locationServicesOffAlert { [weak self] in
+                guard let self, let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                self.application.open(url, options: [:], completionHandler: nil)
             }
-            alert.addAction(title: OBALoc("locationservices_alert_keep_precise_location_off.button", value: "Keep Precise Location Off", comment: ""), handler: nil)
+            topmostPresentedController.present(alert, animated: true)
         case .locationServicesUnavailable, .locationServicesOn:
-            // We shouldn't hit this state, but if we do, that's OK.
-            alert.addAction(UIAlertAction(title: Strings.ok, style: .default))
+            break
         }
-        self.present(alert, animated: true)
     }
 
     private lazy var locationButton: UIButton = {
@@ -429,17 +460,49 @@ class MapViewController: UIViewController,
     }()
 
     @objc private func showCurrentTrip() {
-        application.viewRouter.navigateToCurrentTrip(from: self)
+        application.viewRouter.navigateToCurrentTrip(from: topmostPresentedController)
     }
 
     // MARK: - Weather
 
     private lazy var weatherButton: UIButton = {
-        let button = UIButton(type: .system)
-        button.setTitle("—", for: .normal)
-        button.titleLabel?.adjustsFontSizeToFitWidth = true
+        var config = UIButton.Configuration.plain()
+        config.imagePlacement = .top
+        config.title = "—"
+        // The toolbar pins this button to 42pt (see the width constraint above),
+        // and `.plain()` ships nonzero horizontal insets that the old
+        // `UIButton(type: .system)` did not have. That left the title too little
+        // room: a two-digit temperature already wrapped onto three lines
+        // ("1", "8", "°"). Zero the horizontal insets only — the vertical ones
+        // still separate the icon from the temperature under `imagePlacement`.
+        // See: https://github.com/OneBusAway/onebusaway-ios/issues/1344
+        config.contentInsets.leading = 0
+        config.contentInsets.trailing = 0
+        let button = UIButton(configuration: config)
+        // The title can't grow past what fits in 42pt, so it stops at the largest
+        // non-accessibility size; beyond that the large content viewer (set up
+        // with the toolbar) shows it full size. The font has to be built against
+        // the button's own traits — `preferredFont(forTextStyle:)` alone reads the
+        // app-wide size and ignores this cap.
+        button.maximumContentSizeCategory = .extraExtraExtraLarge
+        button.configuration?.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { [weak button] incoming in
+            var outgoing = incoming
+            outgoing.font = UIFont.preferredFont(forTextStyle: .body, compatibleWith: button?.traitCollection).bold
+            return outgoing
+        }
+        // No `adjustsFontSizeToFitWidth` here, deliberately. Autoshrink only acts
+        // on a label pinned to one line, and a `UIButton.Configuration` title is
+        // not — so setting it shrinks nothing while reading as though the width
+        // problem were handled. `7f2c1b8b` added it in 2019, #1318's Configuration
+        // switch dropped it, and #1357 restored it; it has been inert since.
+        //
+        // It was never what fixed #1344 either: `18°` wrapped because `.plain()`
+        // insets ate the 42pt, which the block above corrects.
+        //
+        // Making it real needs `titleLabel?.numberOfLines = 1` alongside it, which
+        // trades wrapping for truncation when the scale floor still doesn't fit.
+        // That is a visible change to a 42pt toolbar button and wants a device.
         button.addTarget(self, action: #selector(showWeather), for: .touchUpInside)
-        button.titleLabel?.font = UIFont.preferredFont(forTextStyle: .body).bold
         button.accessibilityLabel = OBALoc("map_controller.show_weather_button", value: "Show Weather Forecast", comment: "Accessibility label for a button that provides the current forecast")
         return button
     }()
@@ -453,21 +516,38 @@ class MapViewController: UIViewController,
         host.modalPresentationStyle = .overFullScreen
         host.modalTransitionStyle = .crossDissolve
         host.view.backgroundColor = .clear
-        present(host, animated: true)
+        topmostPresentedController.present(host, animated: true)
     }
 
     private var weatherDisplay: WeatherDisplay? {
         didSet {
             if let display = weatherDisplay {
-                weatherButton.setTitle(display.buttonTitle, for: .normal)
+                // Configuration-based buttons ignore `setTitle`/`setImage`. Update
+                // the configuration only so the stacked icon + temp actually show.
+                var config = weatherButton.configuration ?? .plain()
+                config.image = UIImage(systemName: WeatherFormatter.systemImageName(for: display.header.iconName))?
+                    .withRenderingMode(.alwaysTemplate)
+                config.title = display.buttonTitle
+                weatherButton.configuration = config
+                weatherButton.accessibilityValue = display.buttonAccessibilityValue
+                weatherButton.largeContentTitle = display.buttonTitle
+                weatherButton.largeContentImage = config.image
                 weatherButton.isHidden = false
+                verticalBarItems.updateWeather(
+                    symbolName: WeatherFormatter.systemImageName(for: display.header.iconName),
+                    temperature: display.buttonTitle,
+                    accessibilityValue: display.buttonAccessibilityValue
+                )
             } else {
                 weatherButton.isHidden = true
+                verticalBarItems.updateWeather(symbolName: nil, temperature: nil, accessibilityValue: nil)
             }
         }
     }
 
     // MARK: - Long Press Gesture
+
+    private var longPressGesture: UILongPressGestureRecognizer!
 
     @objc private func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
         // Only handle the began state to avoid multiple pins
@@ -484,13 +564,13 @@ class MapViewController: UIViewController,
 
     // MARK: - Trip Planner
 
-    private var semiModalTripPlannerController: FloatingPanelController?
+    var semiModalTripPlannerController: FloatingPanelController?
 
-    private var tripPlanner: TripPlanner?
-    private var tripPlannerHostingController: UIViewController?
-    private var longPressGesture: UILongPressGestureRecognizer!
+    var tripPlanner: TripPlanner?
+    var tripPlannerHostingController: UIViewController?
+    var tripPlannerMapDelegate: TripPlannerMapDelegate?
 
-    private lazy var tripPlannerMapView: MKMapView = {
+    lazy var tripPlannerMapView: MKMapView = {
         let mapView = MKMapView.autolayoutNew()
         mapView.alpha = 0
         view.insertSubview(mapView, belowSubview: mapRegionManager.mapView)
@@ -498,177 +578,33 @@ class MapViewController: UIViewController,
         return mapView
     }()
 
-    private func showTripPlannerMapView() {
-        tripPlannerMapView.mapType = mapRegionManager.mapView.mapType
-
-        tripPlannerMapView.isHidden = false
-
-        UIView.animate(withDuration: 0.3) {
-            self.mapRegionManager.mapView.alpha = 0
-            self.tripPlannerMapView.alpha = 1
-        } completion: { _ in
-            self.mapRegionManager.mapView.isHidden = true
+    /// True while `tripPlannerMapView` is the map on screen. Set by
+    /// `showTripPlannerMapView()` and `hideTripPlannerMapView()`, which live in
+    /// `MapViewController+TripPlanner.swift` — hence internal, not `private(set)`.
+    var isShowingTripPlannerMap = false {
+        didSet {
+            // The zoom pills stand down in route mode; see `renderMapStatus()`.
+            if isViewLoaded, oldValue != isShowingTripPlannerMap { renderMapStatus() }
         }
     }
 
-    private func hideTripPlannerMapView() {
-        mapRegionManager.mapView.mapType = tripPlannerMapView.mapType
-        mapRegionManager.mapView.region = tripPlannerMapView.region
-
-        mapRegionManager.mapView.isHidden = false
-
-        UIView.animate(withDuration: 0.3) {
-            self.mapRegionManager.mapView.alpha = 1
-            self.tripPlannerMapView.alpha = 0
-        } completion: { _ in
-            self.tripPlannerMapView.isHidden = true
-        }
-    }
-
-    private func buildTripPlanner(region: Region) -> TripPlanner? {
-        // GraphQL (OTP 2.x) is the preferred trip-planning API whenever the region
-        // provides it; OTP 1.x REST is the fallback. Only the GraphQL service can
-        // support vehicle rental features.
-        let serverURL: URL
-        let apiService: OTPKit.APIService
-        if let graphQLURL = region.openTripPlannerGraphQLURL {
-            serverURL = graphQLURL
-            apiService = GraphQLAPIService(baseURL: graphQLURL)
-        } else if let restURL = region.openTripPlannerURL {
-            serverURL = restURL
-            apiService = RestAPIService(baseURL: restURL)
-        } else {
-            return nil
-        }
-
-        var enabledModes: [TransportMode] = [.transit, .walk, .bike, .car]
-        if region.isBikeshareEnabled {
-            // The capability filter in OTPKit hides these again if the service
-            // can't actually plan rental trips (e.g. the REST fallback).
-            enabledModes.append(contentsOf: [.transitBikeRental, .bikeRental])
-        }
-
-        let searchRect = application.currentRegion?.serviceRect ?? mapRegionManager.mapView.visibleMapRect
-
-        let config = OTPConfiguration(
-            otpServerURL: serverURL,
-            enabledTransportModes: enabledModes,
-            themeConfiguration: .init(
-                primaryColor: Color(uiColor: ThemeColors().brand)
-            ),
-            searchRegion: MKCoordinateRegion(searchRect)
-        )
-
-        let mapViewProvider = MKMapViewAdapter(mapView: tripPlannerMapView)
-
-        let tripPlanner = TripPlanner(
-            otpConfig: config,
-            apiService: apiService,
-            mapProvider: mapViewProvider,
-            notificationCenter: application.notificationCenter
-        )
-
-        return tripPlanner
-    }
-
-    /// Presents the trip planner.
-    /// - Parameters:
-    ///   - destination: Optional prefilled destination.
-    ///   - viaPoint: Optional coordinate every planned trip must pass through — used by
-    ///     "Plan a trip using this bike" with the vehicle's location.
-    ///   - preselectedMode: Optional transport mode to preselect, e.g. `.transitBikeRental`.
-    func showTripPlanner(destination: MKMapItem? = nil, viaPoint: CLLocationCoordinate2D? = nil, preselectedMode: TransportMode? = nil) {
-        guard let currentRegion = application.regionsService.currentRegion,
-              currentRegion.supportsOTP,
-              application.userDataStore.isTripPlanningEnabled(for: currentRegion) else {
-            return
-        }
-
-        // Get current location for origin
-        var origin: Location?
-        if let currentLocation = application.locationService.currentLocation {
-            origin = Location(
-                title: "Current Location",
-                subTitle: "Your current location",
-                latitude: currentLocation.coordinate.latitude,
-                longitude: currentLocation.coordinate.longitude
-            )
-        }
-
-        // Convert MKMapItem destination to Location if provided
-        var destinationLocation: Location?
-        if let destination {
-            destinationLocation = Location(
-                title: destination.name ?? "Destination",
-                subTitle: destination.placemark.title ?? "",
-                latitude: destination.placemark.coordinate.latitude,
-                longitude: destination.placemark.coordinate.longitude
-            )
-        }
-
-        guard let tripPlanner = buildTripPlanner(region: currentRegion) else { return }
-
-        subscribeToTripPlannerNotifications()
-
-        let tripPlannerView = tripPlanner.createTripPlannerView(
-            origin: origin,
-            destination: destinationLocation,
-            viaPoint: viaPoint,
-            transportMode: preselectedMode
-        ) { [weak self] in
-            guard let self else { return }
-            self.dismissTripPlannerController()
-        }
-
-        self.floatingPanel.move(to: .tip, animated: true)
-
-        let hostingController = UIHostingController(rootView: tripPlannerView)
-        hostingController.view.backgroundColor = .clear
-
-        let semiModal = createSemiModalPanel(childController: hostingController)
-        semiModal.addPanel(toParent: self)
-        self.semiModalTripPlannerController = semiModal
-        self.tripPlanner = tripPlanner
-        self.tripPlannerHostingController = hostingController
-    }
-
-    private func dismissTripPlannerController() {
-        guard let tripPlannerHostingController else { return }
-        dismissModalController(tripPlannerHostingController)
-
-        self.semiModalTripPlannerController = nil
-        self.tripPlannerHostingController = nil
-        self.tripPlanner = nil
-        hideTripPlannerMapView()
-
-        unsubscribeFromTripPlannerNotifications()
-    }
-
-    private func subscribeToTripPlannerNotifications() {
-        application.notificationCenter.addObserver(self, selector: #selector(itinerariesUpdated), name: Notifications.itinerariesUpdated, object: nil)
-        application.notificationCenter.addObserver(self, selector: #selector(tripStarted), name: Notifications.tripStarted, object: nil)
-    }
-
-    private func unsubscribeFromTripPlannerNotifications() {
-        application.notificationCenter.removeObserver(self, name: Notifications.itinerariesUpdated, object: nil)
-        application.notificationCenter.removeObserver(self, name: Notifications.tripStarted, object: nil)
-    }
-
-    @objc private func itinerariesUpdated(_ note: NSNotification) {
-        semiModalTripPlannerController?.move(to: .full, animated: true)
-    }
-
-    @objc private func tripStarted(_ note: NSNotification) {
-        showTripPlannerMapView()
-
-        semiModalTripPlannerController?.move(to: .tip, animated: true)
+    /// The map the rider is actually looking at. `tripPlannerMapView` stands in for
+    /// the main map for the duration of route mode, so anything that moves or reads
+    /// "the map" has to ask which of the two is on screen. See #1441.
+    ///
+    /// Keyed on `isShowingTripPlannerMap` rather than on either map's `isHidden`:
+    /// `tripPlannerMapView` is lazy and starts life with `isHidden == false`, so an
+    /// `isHidden` test would name the wrong map until the first planned trip ends,
+    /// and would build the map merely to ask the question.
+    var visibleMapView: MKMapView {
+        isShowingTripPlannerMap ? tripPlannerMapView : mapRegionManager.mapView
     }
 
     // MARK: - Map Type
     public lazy var toggleMapTypeButton: UIButton = {
         let button = UIButton(type: .system)
         button.addTarget(self, action: #selector(toggleMapType), for: .touchUpInside)
-        button.accessibilityLabel = OBALoc("map_controller.map_type.accessibility_label", value: "Map type", comment: "Voiceover text indicating that this button toggles the base map type.")
+        button.accessibilityLabel = MapTypeButtonPresentation.accessibilityLabel
 
         button.addSubview(mapLayerBadge)
         NSLayoutConstraint.activate([
@@ -685,14 +621,19 @@ class MapViewController: UIViewController,
     /// lever for the Map sheet: layer state is readable without opening anything.
     lazy var mapLayerBadge: UILabel = {
         let label = UILabel.autolayoutNew()
-        label.font = .systemFont(ofSize: 10, weight: .bold)
-        label.textColor = .white
+        // Scales with Dynamic Type, capped where a digit still fits the badge on
+        // a 42pt button; the large content viewer covers the sizes beyond.
+        label.font = UIFontMetrics(forTextStyle: .caption2).scaledFont(for: .systemFont(ofSize: 10, weight: .bold), maximumPointSize: 13)
+        label.adjustsFontForContentSizeCategory = true
+        label.textColor = MapTypeButtonPresentation.badgeTextColor
         label.textAlignment = .center
         label.backgroundColor = ThemeColors.shared.brand
         label.layer.cornerRadius = 7.5
         label.layer.masksToBounds = true
         label.isHidden = true
         label.isUserInteractionEnabled = false
+        // The count is folded into the button's accessibility value instead.
+        label.isAccessibilityElement = false
         return label
     }()
 
@@ -702,19 +643,17 @@ class MapViewController: UIViewController,
         presentMapSheet()
     }
 
-    private func setMapTypeButtonImage(_ button: UIButton, mapType: MapBaseType) {
-        if mapType == .standard {
-            button.setImage(UIImage(systemName: "map"), for: .normal)
-            button.accessibilityValue = OBALoc("map_controller.map_type.standard.accessibility_value", value: "standard", comment: "Voiceover text indicating the current map type as the standard base map.")
-        } else {
-            button.setImage(UIImage(systemName: "globe"), for: .normal)
-            button.accessibilityValue = OBALoc("map_controller.map_type.hybrid.accessibility_value", value: "hybrid", comment: "Voiceover text indicating the current map type as the hybrid base map (satellite view with labels).")
-        }
-    }
-
     // MARK: - Map Layers
 
-    var rentalLayerCoordinator: RentalLayerCoordinator?
+    /// Retained here because `RegionsService` holds its delegates weakly.
+    var mapLayerRegistrar: MapLayerRegistrar?
+
+    /// Mirrors the coordinator's published rentals onto the map view. Retained here
+    /// because `RentalLayerCoordinator` no longer knows about `MKMapView`, so the
+    /// syncer is the UIKit-side bridge and must be retained by the view controller.
+    var rentalAnnotationSyncer: RentalAnnotationSyncer?
+
+    var rentalLayerCoordinator: RentalLayerCoordinator? { mapLayerRegistrar?.rentalCoordinator }
 
     /// The region `StopRouteFocusMapLayer` was last (re)registered for, so
     /// `configureMapLayers()` can tell an actual region change (rebuild, with a
@@ -722,7 +661,9 @@ class MapViewController: UIViewController,
     /// region — which happens routinely and must not tear the layer down.
     var stopRouteFocusLayerRegionIdentifier: Int?
 
-    // The layer/sheet/nudge machinery lives in MapViewController+MapLayers.swift.
+    let mapLayersTipPresenter = TipPresenter(tip: MapLayersTip())
+
+    // The layer/sheet/tip machinery lives in MapViewController+MapLayers.swift.
 
     // MARK: - Application State
 
@@ -740,6 +681,14 @@ class MapViewController: UIViewController,
             let resignedActiveAt = resignedActiveAt,
             abs(resignedActiveAt.timeIntervalSinceNow) > 600
         else {
+            return
+        }
+
+        // Same rule as launch: don't yank a rider in another city onto GPS
+        // just because the app sat in the background for ten minutes (#615).
+        if let region = application.regionsService.currentRegion,
+           let location = application.locationService.currentLocation,
+           !region.contains(location: location) {
             return
         }
 
@@ -761,12 +710,58 @@ class MapViewController: UIViewController,
     ///   - annotation: The annotation the stop was opened from, if any. Deselected when the
     ///     stop sheet closes so the map doesn't keep a pin highlighted for a dismissed sheet.
     func show(stop: Stop, deselecting annotation: MKAnnotation? = nil) {
-        present(stopController: application.viewRouter.makeStopController(stop: stop, showToolbarOnBottom: true), deselecting: annotation)
+        guard prefersPushedStopPage else {
+            present(stopController: application.viewRouter.makeStopController(stop: stop, showToolbarOnBottom: true), deselecting: annotation)
+            return
+        }
+        prepareMapForPushedStopPage(deselecting: annotation)
+        application.viewRouter.navigateTo(stop: stop, from: self)
     }
 
     /// Displays the specified stop by ID.
     func show(stopID: StopID) {
-        present(stopController: application.viewRouter.makeStopController(stopID: stopID, showToolbarOnBottom: true))
+        guard prefersPushedStopPage else {
+            present(stopController: application.viewRouter.makeStopController(stopID: stopID, showToolbarOnBottom: true))
+            return
+        }
+        prepareMapForPushedStopPage(deselecting: nil)
+        application.viewRouter.navigateTo(stopID: stopID, from: self)
+    }
+
+    /// `true` while VoiceOver is running, where the Stop page opens as a full-screen push
+    /// instead of the map's half-detent sheet.
+    ///
+    /// A partial-height FloatingPanel over a live map is a poor modal for VoiceOver — the map
+    /// behind it stays in the accessibility tree, and the detents, swipe-to-dismiss, and
+    /// collapse-to-`.tip` behaviors are drag gestures VoiceOver can't perform. The pushed
+    /// presentation the router builds is a standard, opaque screen with a nav-bar back button
+    /// and contained focus, and it skips the sheet path's map-focus wiring (route highlight,
+    /// recentering, tab-bar hiding, `stopSheetStopID`) — map-visual bookkeeping that means
+    /// nothing while a pushed screen covers the map, exactly as the legacy push path skips it.
+    ///
+    /// Read at open time only: a sheet already onscreen when VoiceOver is switched on is left
+    /// as-is.
+    private var prefersPushedStopPage: Bool {
+        UIAccessibility.isVoiceOverRunning
+    }
+
+    /// Clears the map of what the sheet path would have replaced, because a full-screen push
+    /// covers it just as thoroughly.
+    ///
+    /// A sheet left open behind the push is not merely stale scenery: `stopSheetStopID` stays
+    /// set, so every other marker is held down as a gray dot and the zoom pill stays hidden for
+    /// the rest of the session, and its route-focus layer and refresh timer keep running behind
+    /// a screen nobody can see. Reachable whenever VoiceOver is switched on with a sheet already
+    /// up — the one case `prefersPushedStopPage` leaves as-is — and the next stop the rider
+    /// opens then pushes over it.
+    ///
+    /// Deselecting for the same reason: leaving the tapped pin selected only strands a highlight
+    /// for the rider to find on the way back.
+    private func prepareMapForPushedStopPage(deselecting annotation: MKAnnotation?) {
+        dismissStopSheetForReplacement()
+
+        guard let annotation else { return }
+        mapRegionManager.mapView.deselectAnnotation(annotation, animated: false)
     }
 
     /// Routes a stop screen to the presentation that suits it: the redesigned Stop page comes
@@ -944,7 +939,8 @@ class MapViewController: UIViewController,
     private var stopFocusCancellables = Set<AnyCancellable>()
 
     /// Owns the half-detent panel that shows the redesigned Stop page over the map.
-    private lazy var stopSheet = StopSheetPresenter()
+    /// Internal so trip-planner tests can put a sheet up the same way a map pin does.
+    lazy var stopSheet = StopSheetPresenter()
 
     /// The stop whose sheet is up, or nil between presentations — the single
     /// switch behind both of the things the map does differently while a sheet
@@ -960,6 +956,7 @@ class MapViewController: UIViewController,
             guard oldValue != stopSheetStopID else { return }
             mapRegionManager.stopSheetSelection = stopSheetStopID
             renderMapStatus()
+            updateOnDemandDockContext()
         }
     }
 
@@ -1028,7 +1025,8 @@ class MapViewController: UIViewController,
 
     // MARK: - Overlays
 
-    private let mapStatusView = MapStatusView.autolayoutNew()
+    /// Internal for tests.
+    let mapStatusView = MapStatusView.autolayoutNew()
 
     /// Sets the margins for the map view to keep the scale and legal info within the viewable area.
     /// Call this when you modify top level UI.
@@ -1044,6 +1042,14 @@ class MapViewController: UIViewController,
 
     private var semiModalPanel: FloatingPanelController?
 
+    /// A search, map item, or trip planner panel the rider opened over the map.
+    var isShowingRiderActivityPanel: Bool {
+        mapPanelController.inSearchMode
+            || semiModalPanel != nil
+            || semiModalMapItemController != nil
+            || semiModalTripPlannerController != nil
+    }
+
     private func createFloatingPanelSurfaceAppearance() -> SurfaceAppearance {
         let appearance = SurfaceAppearance()
         appearance.cornerRadius = ThemeMetrics.cornerRadius
@@ -1051,8 +1057,14 @@ class MapViewController: UIViewController,
         return appearance
     }
 
-    private func createSemiModalPanel(childController: UIViewController) -> FloatingPanelController {
-        let panel = FloatingPanelController()
+    /// `OBAFloatingPanelController` rather than a plain `FloatingPanelController`
+    /// for its grabber: a labelled element with Expand and Collapse actions, the
+    /// only way a VoiceOver or Switch Control user can resize the card. Not
+    /// `MapViewController` as delegate — its delegate methods are written for the
+    /// main map panel and would impose its layout here; callers that need panel
+    /// events (the trip planner) set their own.
+    func createSemiModalPanel(childController: UIViewController) -> OBAFloatingPanelController {
+        let panel = OBAFloatingPanelController(application, delegate: nil)
         panel.surfaceView.appearance = createFloatingPanelSurfaceAppearance()
 
         // Set a content view controller.
@@ -1081,15 +1093,16 @@ class MapViewController: UIViewController,
         semiModalPanel?.removePanelFromParent(animated: false)
 
         let panel = createSemiModalPanel(childController: childController)
-        panel.addPanel(toParent: self)
+        addSemiModalPanel(panel)
 
         semiModalPanel = panel
+        updateOnDemandDockContext()
     }
 
     // MARK: - Floating Panel Controller
 
     /// The floating panel controller, which displays a drawer at the bottom of the map.
-    private lazy var floatingPanel: OBAFloatingPanelController = {
+    lazy var floatingPanel: OBAFloatingPanelController = {
         let panel = OBAFloatingPanelController(application, delegate: self)
         panel.isRemovalInteractionEnabled = false
         panel.surfaceView.appearance = createFloatingPanelSurfaceAppearance()
@@ -1134,6 +1147,7 @@ class MapViewController: UIViewController,
         if mapPanelController.inSearchMode && floatingPanelPositionIsCollapsed {
             mapPanelController.exitSearchMode()
         }
+        updateOnDemandDockContext()
     }
 
     func updateVoiceover() {
@@ -1143,7 +1157,7 @@ class MapViewController: UIViewController,
             floatingPanel.move(to: .half, animated: true)
 
             if !floatingPanel.userHasSeenFullSheetVoiceoverChange {
-                self.present(floatingPanel.fullSheetVoiceoverAlert(), animated: true)
+                topmostPresentedController.present(floatingPanel.fullSheetVoiceoverAlert(), animated: true)
                 floatingPanel.userHasSeenFullSheetVoiceoverChange = true
             }
         }
@@ -1174,6 +1188,7 @@ class MapViewController: UIViewController,
         else {
             controller.dismiss(animated: true, completion: nil)
         }
+        updateOnDemandDockContext()
     }
 
     // MARK: - Map Item Controller
@@ -1189,6 +1204,7 @@ class MapViewController: UIViewController,
             removeSemiModalPanel(existingController, animated: animated)
             semiModalMapItemController = nil
         }
+        updateOnDemandDockContext()
     }
 
     /// Presents a `MapItemController` with the provided `MKMapItem` as a semi-modal panel.
@@ -1208,20 +1224,26 @@ class MapViewController: UIViewController,
             removePinHandler = nil
         }
 
-        let viewModel = MapItemViewModel(mapItem: mapItem, application: application, delegate: self, removePinHandler: removePinHandler) { [weak self] in
-            guard let self else { return }
-
-            self.dismissExistingMapItemController(animated: true)
-            self.showTripPlanner(destination: mapItem)
-            self.semiModalPanel?.move(to: .tip, animated: false)
-        }
-
         self.floatingPanel.move(to: .tip, animated: true)
 
-        let mapItemController = MapItemViewController(viewModel)
+        let mapItemController = MapItemViewController(
+            application: application,
+            mapItem: mapItem,
+            delegate: self,
+            removePinHandler: removePinHandler,
+            planTripHandler: { [weak self] in
+                guard let self else { return }
+                self.dismissExistingMapItemController(animated: true)
+                self.showTripPlanner(destination: mapItem)
+                self.semiModalPanel?.move(to: .tip, animated: false)
+            },
+            coverageProbe: onDemandCoverageProbe,
+            openOnDemandDetail: { [weak self] match, check in self?.openOnDemandDetail(match, check: check) }
+        )
         let semiModal = createSemiModalPanel(childController: mapItemController)
-        semiModal.addPanel(toParent: self)
+        addSemiModalPanel(semiModal)
         self.semiModalMapItemController = semiModal
+        updateOnDemandDockContext()
     }
 
     // MARK: - Map Panel Controller
@@ -1258,160 +1280,11 @@ class MapViewController: UIViewController,
         } else if let currentTrackingScrollView = floatingPanel.trackingScrollView {
             floatingPanel.untrack(scrollView: currentTrackingScrollView)
         }
+        updateOnDemandDockContext()
     }
 
     func mapPanelController(_ controller: MapFloatingPanelController, moveTo state: FloatingPanelState, animated: Bool) {
         floatingPanel.move(to: state, animated: animated)
-    }
-
-    // MARK: - MapRegionDelegate
-
-    func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
-        // Layer-owned annotations (rental vehicles, rental clusters) present
-        // their own detail sheets.
-        if let annotation = view.annotation, presentLayerDetail(for: annotation, in: mapView) {
-            return
-        }
-
-        if let vehicleAnnotation = view.annotation as? StopVehicleAnnotation {
-            // The layer decides what a marker tap means — focus the route, or
-            // clear it. Which one depends on whether this is the marker focus is
-            // already standing on, so it needs the annotation, not just its route.
-            (mapRegionManager.mapLayer(id: StopRouteFocusMapLayer.layerID) as? StopRouteFocusMapLayer)?
-                .didSelectVehicle(vehicleAnnotation)
-            return
-        }
-
-        if let region = view.annotation as? Region {
-            let title = OBALoc("map_controller.change_region_alert.title", value: "Change Region?", comment: "Title of the alert that appears when the user is updating their current region manually.")
-            let messageFmt = OBALoc("map_controller.change_region_alert.message_fmt", value: "Would you like to change your region to %@?", comment: "Body of the alert that appears when the user is updating their current region manually.")
-            let alert = UIAlertController(title: title, message: String(format: messageFmt, region.name), preferredStyle: .alert)
-            alert.addAction(UIAlertAction.cancelAction)
-            alert.addAction(UIAlertAction(title: OBALoc("map_controller.change_region_alert.button", value: "Change Region", comment: "Change Region button on the alert that appears when the user is updating their current region manually."), style: .default, handler: { _ in
-                self.application.regionsService.automaticallySelectRegion = false
-                self.application.regionsService.currentRegion = region
-            }))
-
-            present(alert, animated: true) {
-                mapView.deselectAnnotation(view.annotation, animated: true)
-            }
-        } else if !view.canShowCallout, let stop = selectableStop(for: view.annotation) {
-            // No callout means there is no chevron to tap, so selection is the open gesture.
-            // `StopAnnotationView.updateCalloutVisibility()` owns that decision — don't duplicate
-            // its reasoning here, or the two will drift and leave annotations that select but
-            // never open.
-            application.analytics?.reportEvent(pageURL: "app://localhost/map", label: AnalyticsLabels.mapStopAnnotationTapped, value: nil)
-            show(stop: stop, deselecting: view.annotation)
-        } else if let annotation = view.annotation as? UserDroppedPin {
-            // Sheet presentation for user-dropped pins is handled via
-            // mapRegionManager(_:didSelectUserAnnotation:) delegate callback.
-            // Early return here prevents falling through to the MKPlacemark case.
-            mapView.setCenter(annotation.coordinate, animated: true)
-            return
-        } else if let placemark = view.annotation as? MKPlacemark {
-            let mapItem = MKMapItem(placemark: placemark)
-            displayMapItemController(mapItem)
-            mapView.deselectAnnotation(view.annotation, animated: true)
-        }
-    }
-
-    public func mapRegionManager(_ manager: MapRegionManager, didSelectUserAnnotation annotation: UserDroppedPin) {
-        presentMapItem(for: annotation)
-    }
-
-    private func presentMapItem(for userPin: UserDroppedPin) {
-        if let storedMapItem = mapRegionManager.mapItem(for: userPin) {
-            displayMapItemController(storedMapItem, userPin: userPin)
-        } else {
-            let placemark = MKPlacemark(coordinate: userPin.coordinate)
-            let mapItem = MKMapItem(placemark: placemark)
-            mapItem.name = userPin.title ?? "Dropped Pin"
-            displayMapItemController(mapItem, userPin: userPin)
-        }
-    }
-
-    func mapView(_ mapView: MKMapView, didDeselect view: MKAnnotationView) {
-        // nop.
-    }
-
-    func mapRegionManager(_ manager: MapRegionManager, customize stopAnnotationView: StopAnnotationView) {
-        if stopAnnotationView.interactions.count == 0 {
-            let interaction = UIContextMenuInteraction(delegate: self)
-            stopAnnotationView.addInteraction(interaction)
-        }
-    }
-
-    func mapView(_ mapView: MKMapView, annotationView view: MKAnnotationView, calloutAccessoryControlTapped control: UIControl) {
-        guard let stop = selectableStop(for: view.annotation) else { return }
-        application.analytics?.reportEvent(pageURL: "app://localhost/map", label: AnalyticsLabels.mapStopAnnotationTapped, value: nil)
-        show(stop: stop, deselecting: view.annotation)
-    }
-
-    /// The stop an annotation opens, for the two annotation types that render as a
-    /// `StopAnnotationView`. Bookmarked stops appear on the map as `Bookmark` rather than `Stop`
-    /// (see `MapRegionManager.displayUniqueStopAnnotations`), so anything that opens stops from
-    /// the map has to handle both or bookmarked stops quietly stop responding to taps.
-    private func selectableStop(for annotation: MKAnnotation?) -> Stop? {
-        switch annotation {
-        case let stop as Stop: return stop
-        case let bookmark as Bookmark: return bookmark.stop
-        default: return nil
-        }
-    }
-
-    public func mapRegionManager(_ manager: MapRegionManager, noSearchResults response: SearchResponse) {
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            await AlertPresenter.show(errorMessage: OBALoc("map_controller.no_search_results_found", value: "No search results were found.", comment: "A generic message shown when the user's search query produces no search results."), presentingController: self)
-        }
-    }
-
-    public func mapRegionManager(_ manager: MapRegionManager, disambiguateSearch response: SearchResponse) {
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            let searchResults = SearchResultsController(searchResponse: response, application: application, delegate: self)
-            let nav = UINavigationController(rootViewController: searchResults)
-            application.viewRouter.present(nav, from: self, isModal: true)
-        }
-    }
-
-    public func mapRegionManager(_ manager: MapRegionManager, showSearchResult response: SearchResponse) {
-        Task { @MainActor [weak self] in
-            guard let self, let result = response.results.first else { return }
-
-            switch result {
-            case let result as MKMapItem:
-                // Check if this MapItem is associated with a user-dropped pin
-                let userPin = manager.findUserPin(for: result)
-                displayMapItemController(result, userPin: userPin)
-            case let result as StopsForRoute:
-                let routeStopController = RouteStopsViewController(application: application, stopsForRoute: result, delegate: self)
-                showSemiModalPanel(childController: routeStopController)
-            case let result as Stop:
-                show(stop: result)
-            case let result as VehicleStatus:
-                if let convertible = TripConvertible(vehicleStatus: result) {
-                    let tripController = TripViewController(application: application, tripConvertible: convertible)
-                    application.viewRouter.navigate(to: tripController, from: self)
-                }
-                else {
-                    let msg = OBALoc("map_controller.vehicle_not_on_trip_error", value: "The vehicle you chose doesn't appear to be on a trip right now, which means we don't know how to show it to you.", comment: "This message appears when a searched-for vehicle doesn't have an assigned trip.")
-                    await AlertPresenter.show(errorMessage: msg, presentingController: self)
-                }
-            default:
-                fatalError()
-            }
-        }
-    }
-
-    public func mapRegionManager(_ manager: MapRegionManager, didRemoveUserAnnotation annotation: UserDroppedPin) {
-        // Dismiss any open map item controller when a pin is removed
-        dismissExistingMapItemController(animated: true)
-    }
-
-    @objc public func mapRegionManagerShowZoomInStatus(_ manager: MapRegionManager, showStatus: Bool) {
-        // EC6: Update ViewModel so both UIKit and future SwiftUI consumers share the same state.
-        viewModel.updateZoomWarning(showStatus)
     }
 
     // MARK: Loading Indicator
@@ -1455,7 +1328,9 @@ class MapViewController: UIViewController,
 
     // MARK: - LocationServiceDelegate
 
-    private var initialMapChangeMade = false
+    /// Internal so `showPendingRentalsIfNeeded()` can latch it: a deep-linked
+    /// camera must not be yanked to the device by the next GPS fix.
+    var initialMapChangeMade = false
 
     private var promptUserOnRegionMismatch = true
 
@@ -1465,13 +1340,36 @@ class MapViewController: UIViewController,
 
     /// Updates the visible area on the map view based on the user's selected `Region` and current location.
     private func updateVisibleMapRect() {
+        applyLaunchCamera(userLocation: application.locationService.currentLocation)
+    }
+
+    /// Frames GPS when it sits in the selected region; otherwise the region's
+    /// service rect (or last in-region viewport). The first location fix used
+    /// to call `programmaticallyUpdateVisibleMapRegion` unconditionally, which
+    /// is why a Taipei GPS with Puget Sound selected opened on Taipei (#615).
+    private func applyLaunchCamera(userLocation: CLLocation?) {
         guard let currentRegion = application.regionsService.currentRegion else { return }
 
-        if let location = application.locationService.currentLocation, promptUserOnRegionMismatch {
-            if currentRegion.contains(location: location) {
-                programmaticallyUpdateVisibleMapRegion(location: location)
+        switch LaunchMapCamera.target(
+            selectedRegion: currentRegion,
+            userLocation: userLocation,
+            lastVisibleMapRect: mapRegionManager.lastVisibleMapRect
+        ) {
+        case .userLocation:
+            if let userLocation {
+                programmaticallyUpdateVisibleMapRegion(location: userLocation)
             }
-            else {
+        case .mapRect(let rect, let showMismatch):
+            if !initialMapChangeMade {
+                mapRegionManager.mapView.visibleMapRect = rect
+                // Latch on mismatch so the next GPS callback cannot yank the
+                // camera to the device. No GPS yet: leave the latch open so a
+                // later in-region fix can still zoom in for stops.
+                if showMismatch {
+                    initialMapChangeMade = true
+                }
+            }
+            if showMismatch && promptUserOnRegionMismatch {
                 promptUserOnRegionMismatch = false
                 if let regionMismatchBulletin = RegionMismatchBulletin(application: application),
                    let uiApp = application.delegate?.uiApplication {
@@ -1479,12 +1377,6 @@ class MapViewController: UIViewController,
                     self.regionMismatchBulletin?.show(in: uiApp)
                 }
             }
-        }
-        else if let lastVisibleRegion = mapRegionManager.lastVisibleMapRect {
-            mapRegionManager.mapView.visibleMapRect = lastVisibleRegion
-        }
-        else {
-            mapRegionManager.mapView.visibleMapRect = currentRegion.serviceRect
         }
     }
 
@@ -1499,11 +1391,170 @@ class MapViewController: UIViewController,
     }
 
     public func locationService(_ service: LocationService, locationChanged location: CLLocation) {
-        programmaticallyUpdateVisibleMapRegion(location: location)
+        applyLaunchCamera(userLocation: location)
     }
 
-    // MARK: - Context Menus
+}
 
+// MARK: - MapRegionDelegate
+
+extension MapViewController {
+    func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
+        // Layer-owned annotations (rental vehicles, rental clusters) present
+        // their own detail sheets.
+        if let annotation = view.annotation, presentLayerDetail(for: annotation, in: mapView) {
+            return
+        }
+
+        if let vehicleAnnotation = view.annotation as? StopVehicleAnnotation {
+            // The layer decides what a marker tap means — focus the route, or
+            // clear it. Which one depends on whether this is the marker focus is
+            // already standing on, so it needs the annotation, not just its route.
+            (mapRegionManager.mapLayer(id: StopRouteFocusMapLayer.layerID) as? StopRouteFocusMapLayer)?
+                .didSelectVehicle(vehicleAnnotation)
+            return
+        }
+
+        if let cluster = view.annotation as? MKClusterAnnotation, StopCluster.isStopCluster(cluster) {
+            selectStopCluster(cluster, view: view, in: mapView)
+            return
+        }
+
+        if let region = view.annotation as? Region {
+            let title = OBALoc("map_controller.change_region_alert.title", value: "Change Region?", comment: "Title of the alert that appears when the user is updating their current region manually.")
+            let messageFmt = OBALoc("map_controller.change_region_alert.message_fmt", value: "Would you like to change your region to %@?", comment: "Body of the alert that appears when the user is updating their current region manually.")
+            let alert = UIAlertController(title: title, message: String(format: messageFmt, region.name), preferredStyle: .alert)
+            alert.addAction(UIAlertAction.cancelAction)
+            alert.addAction(UIAlertAction(title: OBALoc("map_controller.change_region_alert.button", value: "Change Region", comment: "Change Region button on the alert that appears when the user is updating their current region manually."), style: .default, handler: { _ in
+                self.application.regionsService.automaticallySelectRegion = false
+                self.application.regionsService.currentRegion = region
+            }))
+
+            topmostPresentedController.present(alert, animated: true) {
+                mapView.deselectAnnotation(view.annotation, animated: true)
+            }
+        } else if !view.canShowCallout, let stop = selectableStop(for: view.annotation) {
+            // No callout means there is no chevron to tap, so selection is the open gesture.
+            // `StopAnnotationView.updateCalloutVisibility()` owns that decision — don't duplicate
+            // its reasoning here, or the two will drift and leave annotations that select but
+            // never open.
+            application.analytics?.reportEvent(pageURL: "app://localhost/map", label: AnalyticsLabels.mapStopAnnotationTapped, value: nil)
+            show(stop: stop, deselecting: view.annotation)
+        } else if let annotation = view.annotation as? UserDroppedPin {
+            // Sheet presentation for user-dropped pins is handled via
+            // mapRegionManager(_:didSelectUserAnnotation:) delegate callback.
+            // Early return here prevents falling through to the MKPlacemark case.
+            mapView.setCenter(annotation.coordinate, animated: true)
+            return
+        } else if let placemark = view.annotation as? MKPlacemark {
+            let mapItem = MKMapItem(placemark: placemark)
+            displayMapItemController(mapItem)
+            mapView.deselectAnnotation(view.annotation, animated: true)
+        }
+    }
+
+    public func mapRegionManager(_ manager: MapRegionManager, didSelectUserAnnotation annotation: UserDroppedPin) {
+        presentMapItem(for: annotation)
+    }
+
+    private func presentMapItem(for userPin: UserDroppedPin) {
+        if let storedMapItem = mapRegionManager.mapItem(for: userPin) {
+            displayMapItemController(storedMapItem, userPin: userPin)
+        } else {
+            let placemark = MKPlacemark(coordinate: userPin.coordinate)
+            let mapItem = MKMapItem(placemark: placemark)
+            mapItem.name = userPin.title ?? UserDroppedPin.defaultTitle
+            displayMapItemController(mapItem, userPin: userPin)
+        }
+    }
+
+    func mapView(_ mapView: MKMapView, didDeselect view: MKAnnotationView) {
+        // nop.
+    }
+
+    func mapRegionManager(_ manager: MapRegionManager, customize stopAnnotationView: StopAnnotationView) {
+        if stopAnnotationView.interactions.count == 0 {
+            let interaction = UIContextMenuInteraction(delegate: self)
+            stopAnnotationView.addInteraction(interaction)
+        }
+    }
+
+    func mapView(_ mapView: MKMapView, annotationView view: MKAnnotationView, calloutAccessoryControlTapped control: UIControl) {
+        guard let stop = selectableStop(for: view.annotation) else { return }
+        application.analytics?.reportEvent(pageURL: "app://localhost/map", label: AnalyticsLabels.mapStopAnnotationTapped, value: nil)
+        show(stop: stop, deselecting: view.annotation)
+    }
+
+    /// The stop an annotation opens, for the two annotation types that render as a
+    /// `StopAnnotationView`. Bookmarked stops appear on the map as `Bookmark` rather than `Stop`
+    /// (see `MapRegionManager.displayUniqueStopAnnotations`), so anything that opens stops from
+    /// the map has to handle both or bookmarked stops quietly stop responding to taps.
+    private func selectableStop(for annotation: MKAnnotation?) -> Stop? {
+        switch annotation {
+        case let stop as Stop: return stop
+        case let bookmark as Bookmark: return bookmark.stop
+        default: return nil
+        }
+    }
+
+    public func mapRegionManager(_ manager: MapRegionManager, noSearchResults response: SearchResponse) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await AlertPresenter.show(errorMessage: OBALoc("map_controller.no_search_results_found", value: "No search results were found.", comment: "A generic message shown when the user's search query produces no search results."), presentingController: topmostPresentedController)
+        }
+    }
+
+    public func mapRegionManager(_ manager: MapRegionManager, disambiguateSearch response: SearchResponse) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let searchResults = SearchResultsController(searchResponse: response, application: application, delegate: self)
+            let nav = UINavigationController(rootViewController: searchResults)
+            application.viewRouter.present(nav, from: topmostPresentedController, isModal: true)
+        }
+    }
+
+    public func mapRegionManager(_ manager: MapRegionManager, showSearchResult response: SearchResponse) {
+        Task { @MainActor [weak self] in
+            guard let self, let result = response.results.first else { return }
+
+            switch result {
+            case let result as MKMapItem:
+                // Check if this MapItem is associated with a user-dropped pin
+                let userPin = manager.findUserPin(for: result)
+                displayMapItemController(result, userPin: userPin)
+            case let result as StopsForRoute:
+                let routeStopController = RouteStopsViewController(application: application, stopsForRoute: result, delegate: self)
+                showSemiModalPanel(childController: routeStopController)
+            case let result as Stop:
+                show(stop: result)
+            case let result as VehicleStatus:
+                if let convertible = TripConvertible(vehicleStatus: result) {
+                    let tripController = TripViewController(application: application, tripConvertible: convertible)
+                    application.viewRouter.navigate(to: tripController, from: self)
+                }
+                else {
+                    let msg = OBALoc("map_controller.vehicle_not_on_trip_error", value: "The vehicle you chose doesn't appear to be on a trip right now, which means we don't know how to show it to you.", comment: "This message appears when a searched-for vehicle doesn't have an assigned trip.")
+                    await AlertPresenter.show(errorMessage: msg, presentingController: topmostPresentedController)
+                }
+            default:
+                fatalError()
+            }
+        }
+    }
+
+    public func mapRegionManager(_ manager: MapRegionManager, didRemoveUserAnnotation annotation: UserDroppedPin) {
+        // Dismiss any open map item controller when a pin is removed
+        dismissExistingMapItemController(animated: true)
+    }
+
+    @objc public func mapRegionManagerShowZoomInStatus(_ manager: MapRegionManager, showStatus: Bool) {
+        viewModel.updateZoomWarnings(stops: showStatus, rentals: manager.rentalZoomHintStatus)
+    }
+}
+
+// MARK: - Context Menus
+
+extension MapViewController {
     public func contextMenuInteraction(_ interaction: UIContextMenuInteraction, configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
         guard
             let annotationView = interaction.view as? MKAnnotationView,
@@ -1542,7 +1593,6 @@ class MapViewController: UIViewController,
             didTapMapStatus(interaction)
         }
     }
-
 }
 
 // MARK: - ViewModel Binding
@@ -1555,20 +1605,22 @@ private extension MapViewController {
     }
 
     func bindMapStatus() {
-        // EC6: Observe zoom-warning state from ViewModel so UIKit and future SwiftUI share the same source of truth.
-        viewModel.$showZoomWarning
-            .sink { [weak self] _  in
-                guard let self else { return }
-                self.renderMapStatus()
-            }
+        // Redrawn on the next main-queue turn, not inside the change (#1547), for two
+        // reasons. `objectWillChange` fires before the new state lands, so a redraw
+        // from inside it draws the value being replaced. And drawing lays the map
+        // out, which can settle its region and update the warning again from inside
+        // the send, where Combine drops the nested value. Either way "Zoom in for
+        // stops" stayed up at street level with stops on screen. A redraw after the
+        // change reads the settled state, however many changes led to it, and
+        // `objectWillChange` covers every input without a list to keep in step.
+        viewModel.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.renderMapStatus() }
             .store(in: &cancellables)
 
-        viewModel.$locationAuthStatus
-            .sink { [weak self] _ in
-                guard let self else { return }
-                self.renderMapStatus()
-            }
-            .store(in: &cancellables)
+        // Not a status binding, but `viewDidLoad`'s other observers live in the class
+        // body, which is at SwiftLint's `type_body_length` limit.
+        application.notificationCenter.addObserver(self, selector: #selector(rentalsDeepLinkPending(_:)), name: .rentalsDeepLinkPending, object: nil)
     }
 
     func bindMapType() {
@@ -1581,7 +1633,15 @@ private extension MapViewController {
                 // the value changes through any path (VM toggle, external
                 // defaults edit, cross-view sync).
                 mapRegionManager.mapView.mapType = mapType.mkMapType
-                setMapTypeButtonImage(toggleMapTypeButton, mapType: mapType)
+                // Route mode swaps in `tripPlannerMapView` and hides the main map,
+                // so a change made mid-trip has to reach the map the rider can see
+                // too. Gated on the flag rather than applied unconditionally: the
+                // trip map is lazy, and setting a property on it would build it for
+                // riders who never plan a trip. See #1451.
+                if isShowingTripPlannerMap {
+                    tripPlannerMapView.mapType = mapType.mkMapType
+                }
+                updateMapTypeButton(mapType: mapType)
             }
             .store(in: &cancellables)
     }
@@ -1592,12 +1652,46 @@ private extension MapViewController {
         // top of the route lines the sheet came up to show, to tell the rider about
         // stops they are no longer looking for. Location warnings still surface —
         // those are actionable, and tapping the pill is how you act on them.
+        // The rental hint follows the same rule, for the same reason.
+        //
+        // Both stay down in route mode too. The warnings describe the main map,
+        // which is hidden behind the trip planner's then, and tapping one would zoom
+        // that hidden map.
+        let showsZoomHints = stopSheetStopID == nil && !isShowingTripPlannerMap
         mapStatusView.configure(
             for: locationState,
-            zoomInStatus: viewModel.showZoomWarning && stopSheetStopID == nil
+            zoomInStatus: viewModel.showZoomWarning && showsZoomHints,
+            rentalZoomInStatus: viewModel.showRentalZoomHint && showsZoomHints
         )
         locationButton.isHidden = !application.locationService.isLocationUseAuthorized
+        verticalBarItems.setLocationAvailable(application.locationService.isLocationUseAuthorized)
         layoutMapMargins()
+    }
+}
+
+// MARK: - On-demand dock context
+
+/// Kept out of the class body (SwiftLint `type_body_length`); in this file so
+/// it can read the private state behind the dock's visibility rule.
+extension MapViewController {
+    var isSurveyCardShown: Bool { surveyCardView != nil }
+
+    /// A panel being removed is still parented until its hide animation ends,
+    /// but its state is `.hidden` from the start.
+    var hasSemiModalPanelPresented: Bool {
+        [semiModalPanel, semiModalMapItemController, semiModalTripPlannerController]
+            .contains { panel in panel.map { $0.parent != nil && $0.state != .hidden } ?? false }
+    }
+
+    var isSearchListShown: Bool { mapPanelController.inSearchMode }
+
+    /// `stopSheetStopID`, not `stopSheet.isPresenting`, which the property's
+    /// own documentation calls unreliable.
+    var isStopSheetPresented: Bool { stopSheetStopID != nil }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        layoutOnDemandDock()
     }
 }
 

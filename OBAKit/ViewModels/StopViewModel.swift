@@ -7,15 +7,14 @@
 //  LICENSE file in the root directory of this source tree.
 //
 
+// swiftlint:disable file_length
+
 import Foundation
 import Combine
 import CoreLocation
+import UIKit
 import UserNotifications
 import OBAKitCore
-
-extension Notification.Name {
-    static let alarmFired = Notification.Name("OBA.AlarmFired")
-}
 
 /// Shared ViewModel for the stop arrivals/departures screen.
 ///
@@ -70,6 +69,10 @@ class StopViewModel: ObservableObject {
     /// The arrivals/departures fetched from the server.
     @Published private(set) var stopArrivals: StopArrivals?
 
+    /// On-demand services this stop references, for the on-demand card; see `StopOnDemandServicesLoader`.
+    @Published private(set) var onDemandServices: [OnDemandService] = []
+    private(set) lazy var onDemandLoader = StopOnDemandServicesLoader { [weak self] in self?.onDemandServices = $0 }
+
     /// `true` while a network request is in-flight.
     @Published private(set) var isLoading = false
 
@@ -100,6 +103,17 @@ class StopViewModel: ObservableObject {
     /// `true` when a bookmark's stop ID no longer resolves.
     @Published private(set) var isBrokenBookmark = false
 
+    /// `true` when the server has no stop at this ID — a literal 404, or the
+    /// `null` body many OBA servers send instead.
+    ///
+    /// Distinct from `isBrokenBookmark`, which is the subset of this with a
+    /// bookmark to repair. A stop opened from a deep link, a search result or a
+    /// map pin has no bookmark, but the page still has to reach a terminal state:
+    /// without this flag the absence of arrivals is indistinguishable from a
+    /// fetch still in flight, and `StopPageContent.showsLoadingState` spins
+    /// forever (#1336).
+    @Published private(set) var stopIsMissing = false
+
     /// User-saved preferences for this stop (sort order, hidden routes).
     @Published private(set) var stopPreferences: StopPreferences
 
@@ -127,6 +141,10 @@ class StopViewModel: ObservableObject {
     /// write through this single index (§4.7).
     @Published private(set) var alarmsByDepartureID: [String: Alarm] = [:]
 
+    /// Bumped when `Formatters.timeZone` changes so clock rows (and the zone
+    /// badge) redraw after a late `agencies-with-coverage` response.
+    @Published private(set) var formattersTimeZoneGeneration = 0
+
     /// Non-nil after an alarm create/cancel fails; consumer shows a toast/alert.
     @Published private(set) var alarmError: Error?
 
@@ -135,14 +153,28 @@ class StopViewModel: ObservableObject {
     /// and then calls `clearAlarmPermissionDenied()`.
     @Published private(set) var alarmPermissionDenied = false
 
-    /// Briefly `true` after a Live Activity is successfully started, consumed by the
-    /// SwiftUI stop page to show a non-blocking toast. Auto-resets after 2 seconds.
-    @Published private(set) var liveActivityStarted = false
+    /// The text of a transient confirmation the SwiftUI stop page shows as a
+    /// non-blocking toast, or `nil` for none. Auto-clears after `toastDwell`.
+    ///
+    /// Carries the message rather than naming the occasion: a Live Activity
+    /// starting, a proximity alert being set and the same alert being cancelled
+    /// all want the same capsule with different words, and a `Bool` per occasion
+    /// would be a third copy of one overlay.
+    @Published private(set) var transientToast: String?
 
-    /// The pending auto-dismiss for the Live Activity toast. Each new signal
-    /// supersedes (cancels) it so every confirmation gets its full display
-    /// window — see `signalLiveActivityStarted()`.
-    private var liveActivityToastDismissTask: Task<Void, Never>?
+    /// The pending auto-dismiss for `transientToast`. Each new signal supersedes
+    /// (cancels) it so every confirmation gets its full display window — see
+    /// `signalToast(_:)`.
+    private var transientToastDismissTask: Task<Void, Never>?
+
+    /// The unexpired destination proximity alert set on this stop, or `nil`.
+    ///
+    /// Read from the manager rather than stored: the alerts live in
+    /// `UserDataStore`, which anything holding the store can mutate, and they
+    /// expire 24 hours after they were set. `activeAlert(for:)` already filters
+    /// expired ones out, so the menu falls back to "Alert Me" on its own without
+    /// this class running a timer.
+    @Published private(set) var proximityAlert: ProximityAlert?
 
     /// The in-flight one-shot survey fetch started by `refreshSurveys()`.
     ///
@@ -158,6 +190,19 @@ class StopViewModel: ObservableObject {
     /// Cache for trip-panel approach timelines, invalidated on each refresh.
 
     private var alarmFiredCancellable: AnyCancellable?
+    private var userDefaultsCancellable: AnyCancellable?
+    private var formattersTimeZoneCancellable: AnyCancellable?
+    private var proximityAlertsCancellable: AnyCancellable?
+
+    /// Snapshot of the three values behind the header's walk/bike chips and the
+    /// chronological divider, so `syncBikeStateFromDefaults()` can tell a real
+    /// change from an unrelated settings write.
+    private struct BikeState: Equatable {
+        let walkingSpeed: Double
+        let bikeSpeed: Double
+        let bikeModeEnabled: Bool
+    }
+    private var lastBikeState: BikeState?
 
     // MARK: - Init Context
 
@@ -222,6 +267,41 @@ class StopViewModel: ObservableObject {
             .publisher(for: .alarmFired)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.rebuildAlarmIndex() }
+
+        // Settings is presented modally from More, so this VM can outlive a
+        // filter change. Re-read the persisted value; skip the write path so
+        // we don't echo defaults back at ourselves (#1273).
+        //
+        // The header's walk/bike chips and the chronological divider are plain
+        // computed properties, not `@Published` — a Bike Mode toggle in Settings
+        // needs the same fan-out to reach them. `syncBikeStateFromDefaults()`
+        // shares this one subscription rather than adding a second, and is a
+        // no-op unless one of the three bike-relevant values actually moved —
+        // same shape as `syncArrivalDepartureFilterFromDefaults`'s guard, so an
+        // unrelated settings write doesn't invalidate the stop page.
+        userDefaultsCancellable = NotificationCenter.default
+            .publisher(for: UserDefaults.didChangeNotification, object: environment.userDefaults)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.syncArrivalDepartureFilterFromDefaults()
+                self?.syncBikeStateFromDefaults()
+            }
+        lastBikeState = currentBikeState
+
+        formattersTimeZoneCancellable = NotificationCenter.default
+            .publisher(for: .formattersTimeZoneDidChange, object: environment.formatters)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.formattersTimeZoneGeneration += 1 }
+
+        // Posted by `UserDataStore` on every proximity-alert add, delete and
+        // expiry — including the ones this page didn't cause, such as a geofence
+        // firing in the background and cancelling its own one-shot alert.
+        proximityAlertsCancellable = NotificationCenter.default
+            .publisher(for: .proximityAlertsDidChange)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshProximityAlert() }
+
+        refreshProximityAlert()
     }
 
     /// Backward-compatible entry point for existing callers that pass `Application` directly.
@@ -239,7 +319,7 @@ class StopViewModel: ObservableObject {
         refreshTimer?.invalidate()
         statusTimer?.invalidate()
         surveyRefreshTask?.cancel()
-        liveActivityToastDismissTask?.cancel()
+        transientToastDismissTask?.cancel()
     }
 
     // MARK: - Lifecycle
@@ -248,6 +328,7 @@ class StopViewModel: ObservableObject {
     func start() async {
         startStatusTimer()
         startAutoRefresh()
+        refreshProximityAlert()
         await refresh()
     }
 
@@ -287,16 +368,30 @@ class StopViewModel: ObservableObject {
                     pendingExtensionMinutes = pendingAutoExtensionAmount()
                 }
             }
-        } catch APIError.requestNotFound {
+        } catch let error as APIError where error.indicatesMissingStop {
             operationError = nil
             isBrokenBookmark = bookmarkContext != nil
+            stopIsMissing = true
 
-            // With a bookmark behind it, a 404 is the broken-bookmark path: the page
-            // explains itself and offers a way out, and it isn't a failure the rider
-            // watched happen. Without one — a deep link, a search result, a map pin —
-            // the same 404 leaves the page with no arrivals, no error, and nothing to
-            // do, which is exactly the experience that shouldn't be followed by a
-            // request for five stars.
+            // A stop the server no longer has cannot have departures. Drop whatever an
+            // earlier refresh left behind so the page doesn't keep counting down to a
+            // bus that isn't coming — the same thing `BookmarkDataLoader` does for the
+            // card — and so the freshness label stops claiming a successful update.
+            stopArrivals = nil
+            lastUpdated = nil
+            updateStatus()
+            onDemandLoader.clear()
+
+            // With a bookmark behind it, a server that has no stop at this ID is the
+            // broken-bookmark path: the page explains itself and offers a way out, and
+            // it isn't a failure the rider watched happen. Without one — a deep link, a
+            // search result, a map pin — there is no bookmark to repair, so the page
+            // says the stop is gone and the miss still counts against the prompt.
+            //
+            // `indicatesMissingStop` covers both shapes the servers use — a literal 404
+            // and HTTP 200 with body `null` — so this agrees with the Bookmarks tab
+            // (#1336). An empty HTTP 200 is not one of them; it falls through to the
+            // general catch as the transient error it is.
             if bookmarkContext == nil {
                 environment.noteStopLoadFailed()
             }
@@ -322,6 +417,7 @@ class StopViewModel: ObservableObject {
     private func applySuccessfulFetch(stop: Stop, arrivals: StopArrivals) {
         operationError = nil
         isBrokenBookmark = false
+        stopIsMissing = false
         lastUpdated = Date()
         updateStatus()
         // Guard the @Published re-emit. The same VM is bound to a single stopID for
@@ -332,6 +428,7 @@ class StopViewModel: ObservableObject {
             self.stop = stop
         }
         stopArrivals = arrivals
+        onDemandLoader.refresh(for: stop, apiService: environment.apiService)
         rebuildAlarmIndex()
         recomputeCurrentSurvey()
         recordReviewSuccessIfNeeded(arrivals: arrivals)
@@ -513,6 +610,38 @@ class StopViewModel: ObservableObject {
         environment.setArrivalDepartureFilter(filter)
     }
 
+    /// Re-reads the persisted arrival/departure filter after an external write
+    /// (Settings). No-op when the published value already matches — this is the
+    /// hot path for `UserDefaults.didChangeNotification` fan-out.
+    private func syncArrivalDepartureFilterFromDefaults() {
+        let persisted = environment.effectiveArrivalDepartureFilter
+        if persisted != arrivalDepartureFilter {
+            arrivalDepartureFilter = persisted
+        }
+    }
+
+    private var currentBikeState: BikeState {
+        BikeState(
+            walkingSpeed: environment.walkingSpeedMetersPerSecond,
+            bikeSpeed: environment.bikeSpeedMetersPerSecond,
+            bikeModeEnabled: environment.bikeModeEnabled
+        )
+    }
+
+    /// `headerWalkTime`/`headerBikeTime`/`walkTime` are plain computed properties,
+    /// not `@Published`, so a Bike Mode toggle (or a speed re-sync) made in
+    /// Settings needs an explicit nudge to reach the stop page on this same
+    /// `UserDefaults.didChangeNotification` fan-out. No-op unless one of the
+    /// three values actually moved, so an unrelated settings write — same hot
+    /// path as `syncArrivalDepartureFilterFromDefaults` — doesn't invalidate it.
+    private func syncBikeStateFromDefaults() {
+        let current = currentBikeState
+        if current != lastBikeState {
+            lastBikeState = current
+            objectWillChange.send()
+        }
+    }
+
     /// `true` when the user has never saved preferences for this stop, so the
     /// page may seed its sort mode from the app-wide last-used mode. A stop whose
     /// preferences were saved — including one deliberately set back to
@@ -595,10 +724,23 @@ class StopViewModel: ObservableObject {
     }
 
     private func analyticsDistanceToStop(_ stop: Stop) -> String {
-        guard let userLocation = environment.currentUserLocation else {
-            return "User Distance: 03200-INFINITY"
+        Self.analyticsDistanceBucket(userLocation: environment.currentUserLocation, stopLocation: stop.location)
+    }
+
+    /// A fix at or above this accuracy (meters) is too coarse to bucket. Matches Android.
+    static let analyticsLocationAccuracyThreshold: CLLocationAccuracy = 50
+
+    /// The `User Distance` bucket reported with a stop view. With no fix, a fix
+    /// without valid accuracy, or one too coarse to trust, this is `UNKNOWN` rather
+    /// than `03200-INFINITY`, so "far away" and "location unknown" stay separate.
+    /// The labels must match Android exactly so the dashboards group them together.
+    static func analyticsDistanceBucket(userLocation: CLLocation?, stopLocation: CLLocation) -> String {
+        guard let userLocation,
+              userLocation.horizontalAccuracy >= 0,
+              userLocation.horizontalAccuracy < analyticsLocationAccuracyThreshold else {
+            return "User Distance: UNKNOWN"
         }
-        let distance = userLocation.distance(from: stop.location)
+        let distance = userLocation.distance(from: stopLocation)
         switch distance {
         case ..<50:   return "User Distance: 00000-00050m"
         case ..<100:  return "User Distance: 00050-00100m"
@@ -656,19 +798,44 @@ class StopViewModel: ObservableObject {
             statusText = ""
             return
         }
-        statusText = String(format: Strings.updatedAtFormat, environment.formatters.timeAgoInWords(date: lastUpdated))
+        statusText = environment.formatters.updatedText(since: lastUpdated)
     }
 
     // MARK: - Stop Page: Walk Time
 
-    /// Walk time from the user's current location to this stop; the single
-    /// source for the header chip and the chronological walk line (§4.5).
-    var walkTime: WalkTimeInfo? {
+    /// Travel time to this stop at an arbitrary speed. Shared by the header's
+    /// walk/bike chips and the mode-aware chronological split.
+    private func travelTime(atSpeed speed: Double) -> WalkTimeInfo? {
         WalkTimeInfo.compute(
             from: environment.currentUserLocation,
             to: stop?.location,
-            speedMetersPerSecond: environment.walkingSpeedMetersPerSecond
+            speedMetersPerSecond: speed
         )
+    }
+
+    /// Travel time using the mode the user has selected — Bike Mode swaps in the
+    /// cycling speed. Drives the chronological reachable/missed split and the
+    /// walk-line divider (§4.5).
+    var walkTime: WalkTimeInfo? {
+        travelTime(atSpeed: environment.effectiveTravelVelocityMetersPerSecond)
+    }
+
+    /// Walk time at the user's walking speed — always shown on the header's walk
+    /// chip, independent of whether Bike Mode is enabled.
+    var headerWalkTime: WalkTimeInfo? {
+        travelTime(atSpeed: environment.walkingSpeedMetersPerSecond)
+    }
+
+    /// Bike time at the user's cycling speed — always shown on the header's bike
+    /// chip, independent of whether Bike Mode is enabled.
+    var headerBikeTime: WalkTimeInfo? {
+        travelTime(atSpeed: environment.bikeSpeedMetersPerSecond)
+    }
+
+    /// Whether `walkTime` above is currently reading bike speed — the chronological
+    /// divider's wording ("walk" vs. "bike") must match what actually produced its minutes.
+    var isBikeModeEnabled: Bool {
+        environment.bikeModeEnabled
     }
 
     // MARK: - Stop Page: Alarms
@@ -729,8 +896,10 @@ class StopViewModel: ObservableObject {
         }
     }
 
-    func cancelAlarm(for arrivalDeparture: ArrivalDeparture) async {
-        guard let alarm = alarm(for: arrivalDeparture) else { return }
+    /// - Returns: Whether the alarm is gone, so the caller can tell the rider.
+    @discardableResult
+    func cancelAlarm(for arrivalDeparture: ArrivalDeparture) async -> Bool {
+        guard let alarm = alarm(for: arrivalDeparture) else { return false }
         // Optimistic removal; restore on failure.
         alarmsByDepartureID[arrivalDeparture.id] = nil
         do {
@@ -747,16 +916,19 @@ class StopViewModel: ObservableObject {
             // re-assert the removal now that the alarm is actually deleted.
             alarmsByDepartureID[arrivalDeparture.id] = nil
             alarmError = nil
+            return true
         } catch APIError.requestNotFound {
             // The alarm already fired and was deleted server-side. The optimistic
             // removal already cleared the UI — just clean up the local store and
             // stay silent (no error banner).
             environment.deleteAlarm(alarm)
             alarmError = nil
+            return true
         } catch {
             Logger.error("Alarm cancel failed for \(arrivalDeparture.id): \(error)")
             alarmsByDepartureID[arrivalDeparture.id] = alarm
             alarmError = error
+            return false
         }
     }
 
@@ -791,27 +963,57 @@ class StopViewModel: ObservableObject {
         alarmPermissionDenied = false
     }
 
-    /// Briefly raises `liveActivityStarted` so the SwiftUI stop page can show a
-    /// non-blocking toast. Called by `StopPageViewController` after a successful
-    /// `Activity.request()`, and again when a duplicate Track attempt is
-    /// short-circuited — either way the user gets the same confirmation.
+    /// How long a toast stays up. Two seconds is a glance; under VoiceOver it
+    /// is less than the announcement takes to speak, and a Switch Control user
+    /// may need to scan to it, so assistive tech gets long enough to finish.
+    nonisolated static func toastDwell(isAssistiveTechRunning: Bool) -> Duration {
+        isAssistiveTechRunning ? .seconds(6) : .seconds(2)
+    }
+
+    /// Briefly shows `text` as a non-blocking toast on the SwiftUI stop page.
+    ///
+    /// Called after a successful `Activity.request()`, again when a duplicate
+    /// Track attempt is short-circuited — either way the user gets the same
+    /// confirmation — and by the proximity-alert flow on set and on cancel.
     ///
     /// Each signal supersedes the pending dismiss rather than racing it: without
     /// the cancellation, a signal arriving late in the previous toast's window
     /// would inherit that toast's imminent dismissal and vanish almost
-    /// immediately — leaving the duplicate tap looking like it did nothing.
-    func signalLiveActivityStarted() {
-        liveActivityToastDismissTask?.cancel()
-        liveActivityStarted = true
-        liveActivityToastDismissTask = Task { [weak self] in
+    /// immediately — leaving the second tap looking like it did nothing.
+    func signalToast(_ text: String) {
+        transientToastDismissTask?.cancel()
+        transientToast = text
+        let dwell = Self.toastDwell(isAssistiveTechRunning: UIAccessibility.isVoiceOverRunning || UIAccessibility.isSwitchControlRunning)
+        transientToastDismissTask = Task { [weak self] in
             do {
-                try await Task.sleep(for: .seconds(2))
+                try await Task.sleep(for: dwell)
+                // `cancel()` only interrupts the sleep while it is still
+                // suspended. Once it has resumed, this continuation is already
+                // queued on the main actor behind the newer signal that cancelled
+                // it — and that signal has set the text back. Clearing it here
+                // would dismiss the *new* toast a moment after it appeared, which
+                // is the behaviour the cancellation exists to prevent.
+                try Task.checkCancellation()
             } catch {
                 // Superseded by a newer signal; that signal's task owns the dismissal.
                 return
             }
-            self?.liveActivityStarted = false
+            self?.transientToast = nil
         }
+    }
+
+    /// Re-reads this stop's proximity alert from the manager.
+    ///
+    /// Called once at construction, on every `.proximityAlertsDidChange`, and by
+    /// the presenter after an arming attempt reported one was already set.
+    ///
+    /// Also on every `start()`, which is not redundant with the notification:
+    /// an alert reaching its 24-hour expiry mutates nothing and so posts
+    /// nothing, leaving this holding an alert `activeAlert(for:)` has already
+    /// stopped returning. Re-reading on each appearance is what flips the menu
+    /// back to "Alert Me" for a page left open overnight.
+    func refreshProximityAlert() {
+        proximityAlert = environment.activeProximityAlert(for: stopID)
     }
 
     /// Replaces the departure's existing alarm with one created outside the
@@ -872,33 +1074,10 @@ class StopViewModel: ObservableObject {
 
         var index: [String: Alarm] = [:]
         for departure in departures {
-            let candidate = ArrivalDepartureDeepLink(arrivalDeparture: departure, regionID: region.regionIdentifier)
-            if let match = alarmsByVisit[AlarmVisitIdentity(candidate)] {
+            if let match = alarmsByVisit[AlarmVisitIdentity(departure, regionID: region.regionIdentifier)] {
                 index[departure.id] = match
             }
         }
         alarmsByDepartureID = index
-    }
-
-    /// The trip visit an alarm was armed on. Deliberately narrower than
-    /// `ArrivalDepartureDeepLink`'s own equality, which also compares `vehicleID`
-    /// and `title`: both change the moment a scheduled trip goes real-time and the
-    /// feed assigns it a coach, which would drop a live alarm out of the index —
-    /// flipping the row back to "Set an alarm" and letting the rider arm a second,
-    /// uncancellable alarm on the same departure.
-    private struct AlarmVisitIdentity: Hashable {
-        let regionID: Int
-        let stopID: StopID
-        let tripID: TripIdentifier
-        let serviceDate: Date
-        let stopSequence: Int
-
-        init(_ deepLink: ArrivalDepartureDeepLink) {
-            self.regionID = deepLink.regionID
-            self.stopID = deepLink.stopID
-            self.tripID = deepLink.tripID
-            self.serviceDate = deepLink.serviceDate
-            self.stopSequence = deepLink.stopSequence
-        }
     }
 }

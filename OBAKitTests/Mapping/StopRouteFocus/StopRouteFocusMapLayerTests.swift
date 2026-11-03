@@ -295,6 +295,50 @@ final class StopRouteFocusMapLayerTests {
         #expect(recycled.detailCalloutAccessoryView is VehicleCalloutView)
     }
 
+    // MARK: - Accessibility
+
+    /// `StopVehicleAnnotation` suppresses its `title`, which is what MapKit labels
+    /// an annotation view from, so the marker was silent to VoiceOver.
+    @Test func `A configured vehicle marker is labelled with its route and vehicle`() throws {
+        let mapView = MKMapView()
+        let layer = makeLayer(mapView: mapView)
+        layer.begin(focus: StopMapFocus())
+        layer.update(model: twoVehicleModel(routeID: "H"))
+        let annotation = try #require(mapView.annotations.compactMap { $0 as? StopVehicleAnnotation }.first)
+
+        let view = PulsingVehicleAnnotationView(annotation: nil, reuseIdentifier: nil)
+        layer.configure(view, for: annotation)
+
+        let label = try #require(view.accessibilityLabel)
+        #expect(label.hasPrefix("Route "))
+        #expect(label.hasSuffix("Vehicle \(annotation.id)"))
+        #expect(view.accessibilityValue?.isEmpty == false)
+    }
+
+    @Test func `A vehicle whose departure didn't resolve is labelled by the vehicle alone`() throws {
+        let mapView = MKMapView()
+        let layer = makeLayer(mapView: mapView)
+        layer.begin(focus: StopMapFocus())
+        layer.update(model: twoVehicleModel(routeID: "H"))
+        let annotation = try #require(mapView.annotations.compactMap { $0 as? StopVehicleAnnotation }.first)
+
+        let view = PulsingVehicleAnnotationView(annotation: nil, reuseIdentifier: nil)
+        view.accessibilityValue = "stale"
+        layer.departureProvider = { _ in nil }
+        layer.configure(view, for: annotation)
+
+        #expect(view.accessibilityLabel == "Vehicle \(annotation.id)")
+        #expect(view.accessibilityValue == nil)
+    }
+
+    @Test func `The vehicle label joins route and headsign`() {
+        let label = StopRouteFocusMapLayer.accessibilityLabel(routeShortName: "8", headsign: "Seattle Center", vehicleID: "1234", formatters: Self.formatters)
+        #expect(label == "Route 8 - Seattle Center, Vehicle 1234")
+
+        let blankHeadsign = StopRouteFocusMapLayer.accessibilityLabel(routeShortName: "8", headsign: "", vehicleID: "1234", formatters: Self.formatters)
+        #expect(blankHeadsign == "Route 8, Vehicle 1234")
+    }
+
     @Test func `Update adds one vehicle annotation per drawn vehicle`() {
         #expect(Self.fixtureDeparture != nil)
         let mapView = MKMapView()
@@ -428,7 +472,7 @@ final class StopRouteFocusMapLayerTests {
         #expect(mapView.selectedAnnotations.contains { ($0 as? StopVehicleAnnotation) === annotation })
     }
 
-    @Test func `Update draws a casing and a core overlay per route with a shape`() async {
+    @Test func `Update draws a casing, a core and an arrows overlay per route with a shape`() async {
         let mapView = MKMapView()
         let layer = makeLayer(mapView: mapView)
         layer.begin(focus: StopMapFocus())
@@ -437,13 +481,45 @@ final class StopRouteFocusMapLayerTests {
         await layer.awaitPendingShapeWork()
 
         let overlays = mapView.overlays.compactMap { $0 as? RouteShapeOverlay }
-        #expect(overlays.count == 4)
+        #expect(overlays.count == 6)
         for routeID in ["H", "62"] {
-            let forRoute = overlays.filter { $0.routeID == routeID }
-            #expect(forRoute.count == 2)
-            #expect(forRoute.filter(\.isCasing).count == 1)
-            #expect(forRoute.filter { !$0.isCasing }.count == 1)
+            // Bottom to top, so the chevrons sit on the line.
+            #expect(overlays.filter { $0.routeID == routeID }.map(\.part) == [.casing, .core, .arrows])
         }
+    }
+
+    /// The line stays a plain `MKPolylineRenderer`, which MapKit draws as a vector at
+    /// the zoom the map shows. A subclass that draws for itself is drawn in raster
+    /// tiles, and its line swells and shrinks against the casing as they stretch.
+    @Test func `Every route's chevrons get a renderer of their own, leaving the line to MapKit`() throws {
+        let mapView = MKMapView()
+        let layer = makeLayer(mapView: mapView)
+        let coords = [CLLocationCoordinate2D(latitude: 47.6, longitude: -122.3),
+                      CLLocationCoordinate2D(latitude: 47.7, longitude: -122.4)]
+        let casing = RouteShapeOverlay.make(coordinates: coords, routeID: "H", part: .casing)
+        let core = RouteShapeOverlay.make(coordinates: coords, routeID: "H", part: .core)
+        let arrows = RouteShapeOverlay.make(coordinates: coords, routeID: "H", part: .arrows)
+
+        let arrowRenderer = try #require(layer.renderer(for: arrows, in: mapView) as? RouteArrowRenderer)
+        let coreRenderer = try #require(layer.renderer(for: core, in: mapView))
+        let casingRenderer = try #require(layer.renderer(for: casing, in: mapView))
+
+        #expect(arrowRenderer.lineWidth >= RouteArrowStyle.minimumLineWidth)
+        #expect(type(of: coreRenderer) == MKPolylineRenderer.self)
+        #expect(type(of: casingRenderer) == MKPolylineRenderer.self)
+    }
+
+    @Test func `The casing is the route color darkened, not white`() {
+        let mapView = MKMapView()
+        let layer = makeLayer(mapView: mapView)
+        let coords = [CLLocationCoordinate2D(latitude: 47.6, longitude: -122.3),
+                      CLLocationCoordinate2D(latitude: 47.7, longitude: -122.4)]
+        let casing = RouteShapeOverlay.make(coordinates: coords, routeID: "H", part: .casing)
+
+        let stroke = (layer.renderer(for: casing, in: mapView) as? MKPolylineRenderer)?.strokeColor
+
+        #expect(stroke != nil)
+        #expect(stroke != .white)
     }
 
     @Test func `end removes everything the layer added`() async {
@@ -466,11 +542,10 @@ final class StopRouteFocusMapLayerTests {
     @Test func `Renderer styles the casing wider than the core`() {
         let mapView = MKMapView()
         let layer = makeLayer(mapView: mapView)
-        var coords = [CLLocationCoordinate2D(latitude: 47.6, longitude: -122.3),
+        let coords = [CLLocationCoordinate2D(latitude: 47.6, longitude: -122.3),
                       CLLocationCoordinate2D(latitude: 47.7, longitude: -122.4)]
-        let casing = RouteShapeOverlay.make(coordinates: coords, routeID: "H", isCasing: true)
-        let core = RouteShapeOverlay.make(coordinates: coords, routeID: "H", isCasing: false)
-        _ = coords
+        let casing = RouteShapeOverlay.make(coordinates: coords, routeID: "H", part: .casing)
+        let core = RouteShapeOverlay.make(coordinates: coords, routeID: "H", part: .core)
 
         let casingWidth = (layer.renderer(for: casing, in: mapView) as? MKPolylineRenderer)?.lineWidth
         let coreWidth = (layer.renderer(for: core, in: mapView) as? MKPolylineRenderer)?.lineWidth
@@ -498,7 +573,7 @@ final class StopRouteFocusMapLayerTests {
         await layer.awaitPendingShapeWork()
 
         let overlaysBeforeToggle = mapView.overlays.compactMap { $0 as? RouteShapeOverlay }
-        #expect(overlaysBeforeToggle.count == 4)
+        #expect(overlaysBeforeToggle.count == 6)
         let addOverlaysCallCountBeforeToggle = mapView.addOverlaysCallCount
 
         focus.toggleFocus(routeID: "H")
@@ -515,16 +590,19 @@ final class StopRouteFocusMapLayerTests {
         // re-added) — pull them from the map itself, not fresh instances, so the
         // alpha assertion is about what `restyleOverlays()` actually left behind.
         let overlaysAfterToggle = mapView.overlays.compactMap { $0 as? RouteShapeOverlay }
-        #expect(overlaysAfterToggle.count == 4)
+        #expect(overlaysAfterToggle.count == 6)
 
-        let dimmedCore = overlaysAfterToggle.first { $0.routeID == "62" && !$0.isCasing }
-        let focusedCore = overlaysAfterToggle.first { $0.routeID == "H" && !$0.isCasing }
-        #expect(dimmedCore != nil && focusedCore != nil)
+        // The line and its chevrons dim together.
+        for part in [RouteLinePart.core, .arrows] {
+            let dimmed = overlaysAfterToggle.first { $0.routeID == "62" && $0.part == part }
+            let focused = overlaysAfterToggle.first { $0.routeID == "H" && $0.part == part }
+            #expect(dimmed != nil && focused != nil)
 
-        let dimmedAlpha = (layer.renderer(for: dimmedCore!, in: mapView) as? MKPolylineRenderer)?.alpha
-        let focusedAlpha = (layer.renderer(for: focusedCore!, in: mapView) as? MKPolylineRenderer)?.alpha
+            let dimmedAlpha = (layer.renderer(for: dimmed!, in: mapView) as? MKPolylineRenderer)?.alpha
+            let focusedAlpha = (layer.renderer(for: focused!, in: mapView) as? MKPolylineRenderer)?.alpha
 
-        #expect(dimmedAlpha! < focusedAlpha!)
+            #expect(dimmedAlpha! < focusedAlpha!)
+        }
     }
 
     @Test func `Shape pinning holds when the soonest departure rolls over to a different shapeID`() async {
@@ -542,7 +620,7 @@ final class StopRouteFocusMapLayerTests {
         await layer.awaitPendingShapeWork()
         #expect(await counter.count == 1)
         let overlaysAfterFirst = mapView.overlays.compactMap { $0 as? RouteShapeOverlay }
-        #expect(overlaysAfterFirst.count == 2)
+        #expect(overlaysAfterFirst.count == 3)
 
         // The soonest arrival for "H" rolled over to a different trip, with a
         // different shapeID. `drawnShapeIDsByRoute` should keep the line pinned
@@ -552,7 +630,7 @@ final class StopRouteFocusMapLayerTests {
 
         #expect(await counter.count == 1)
         let overlaysAfterSecond = mapView.overlays.compactMap { $0 as? RouteShapeOverlay }
-        #expect(overlaysAfterSecond.count == 2)
+        #expect(overlaysAfterSecond.count == 3)
         // Same overlay instances, not rebuilt — the line is literally unchanged,
         // not just numerically equal.
         #expect(Set(overlaysAfterSecond.map(ObjectIdentifier.init)) == Set(overlaysAfterFirst.map(ObjectIdentifier.init)))
@@ -585,7 +663,7 @@ final class StopRouteFocusMapLayerTests {
         await layer.awaitPendingShapeWork()
 
         #expect(await counter.count == 2)
-        #expect(mapView.overlays.compactMap { $0 as? RouteShapeOverlay }.count == 2)
+        #expect(mapView.overlays.compactMap { $0 as? RouteShapeOverlay }.count == 3)
     }
 
     // MARK: - Vehicle callout
@@ -719,6 +797,20 @@ final class StopRouteFocusMapLayerTests {
         layer.update(model: model(routeIDs: ["H"], vehicleRouteIDs: ["H"]))
 
         #expect(focus.isFocusable(routeID: "H"))
+    }
+
+    /// The fetch's task can't run until this test yields, so it lands after the
+    /// trip page has taken the map.
+    @Test func `A shape that arrives while suppressed draws nothing`() async {
+        let mapView = MKMapView()
+        let layer = makeLayer(mapView: mapView)
+        layer.begin(focus: StopMapFocus())
+        layer.update(model: model(routeIDs: ["H"], vehicleRouteIDs: []))
+
+        layer.setSuppressed(true)
+        await layer.awaitPendingShapeWork()
+
+        #expect(mapView.overlays.compactMap { $0 as? RouteShapeOverlay }.isEmpty)
     }
 
     @Test func `Ending the presentation clears suppression`() async {

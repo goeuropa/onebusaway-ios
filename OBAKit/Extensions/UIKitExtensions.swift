@@ -92,19 +92,42 @@ extension UIApplication {
     ///
     /// A replacement for the deprecated `UIApplication.windows` property.
     var keyWindowFromScene: UIWindow? {
-        activeWindows.first(where: \.isKeyWindow)
+        if let keyWindow = activeWindows.first(where: \.isKeyWindow) {
+            return keyWindow
+        }
+        return connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first(where: \.isKeyWindow)
     }
 
     var activeWindows: [UIWindow] {
-        // Get connected scenes
-        let windows = self.connectedScenes
-            // Keep only active scenes, onscreen and visible to the user
+        self.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
             .filter { $0.activationState == .foregroundActive }
-            // Keep only the first `UIWindowScene`
-            .first(where: { $0 is UIWindowScene })
-            // Get its associated windows
-            .flatMap({ $0 as? UIWindowScene })?.windows
+            .flatMap { $0.windows }
+    }
+}
 
-        return windows ?? []
+// MARK: - Vertical bars
+
+extension UITraitCollection {
+    /// Whether the system puts navigation bars, toolbars and the tab bar in a
+    /// vertical column on the side of the display, as on iPhone Duo. Reports the
+    /// system's preferred edge whether or not a bar is showing.
+    var presentsBarsVertically: Bool {
+        guard #available(iOS 27.1, *) else { return false }
+        return verticalBarEdge != .unspecified
+    }
+}
+
+extension UIViewController {
+    /// Calls `handler` when the traits behind `presentsBarsVertically` change.
+    /// Does nothing before iOS 27.1, where bars are never vertical.
+    func registerForVerticalBarChanges(_ handler: @escaping () -> Void) {
+        guard #available(iOS 27.1, *) else { return }
+        registerForTraitChanges(UITraitCollection.systemTraitsAffectingVerticalBarEdge) { (_: UIViewController, _) in
+            handler()
+        }
     }
 }

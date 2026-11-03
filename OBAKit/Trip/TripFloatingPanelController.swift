@@ -20,7 +20,15 @@ nonisolated struct TripProgressViewModel {
     let etaText: String?
     let progress: Float
 
-    init?(closestStopIndex: Int, totalStops: Int, userStopIndex: Int?, arrivalDepartureMinutes: Int?) {
+    /// - Parameters:
+    ///   - userStopIndex: The row carrying the rider's-stop marker: the boarding
+    ///     stop, or the destination a shared trip link named.
+    ///   - minutesStopIndex: The row `arrivalDepartureMinutes` counts down to:
+    ///     the boarding stop, or a shared destination once its own prediction
+    ///     has loaded. See `TripStopListModel.RiderStops.countdown`.
+    ///   - arrivalDepartureMinutes: Minutes until the vehicle reaches
+    ///     `minutesStopIndex`.
+    init?(closestStopIndex: Int, totalStops: Int, userStopIndex: Int?, minutesStopIndex: Int?, arrivalDepartureMinutes: Int?) {
         guard totalStops > 0 else { return nil }
         let currentStopNumber = closestStopIndex + 1
         progress = Float(currentStopNumber) / Float(totalStops)
@@ -32,6 +40,15 @@ nonisolated struct TripProgressViewModel {
             ),
             currentStopNumber, totalStops
         )
+
+        // The minutes are an ETA to the user's stop only when they were
+        // predicted for that stop. On a shared trip whose destination
+        // prediction hasn't loaded, they still belong to the boarding stop,
+        // which may be half an hour short of the marked one, so they are
+        // dropped and position alone decides the text. See #449.
+        let minutesAreForUserStop = userStopIndex == minutesStopIndex
+        let minutesToUserStop = minutesAreForUserStop ? arrivalDepartureMinutes : nil
+
         if let userStopIndex {
             if userStopIndex < closestStopIndex {
                 etaText = OBALoc(
@@ -45,7 +62,7 @@ nonisolated struct TripProgressViewModel {
                     value: "Arriving now",
                     comment: "Shown when the vehicle is arriving at the user's stop"
                 )
-            } else if let minutes = arrivalDepartureMinutes, minutes > 0 {
+            } else if let minutes = minutesToUserStop, minutes > 0 {
                 etaText = String(
                     format: OBALoc(
                         "trip_progress.eta_to_stop_fmt",
@@ -54,9 +71,11 @@ nonisolated struct TripProgressViewModel {
                     ),
                     minutes
                 )
-            } else if userStopIndex - closestStopIndex == 1 {
+            } else if minutesAreForUserStop, userStopIndex - closestStopIndex == 1 {
                 // The prediction is non-positive but the vehicle is at the adjacent
-                // stop, so "Arriving now" is justified by position alone.
+                // stop, so "Arriving now" is justified by position alone. Only for a
+                // prediction made for this stop: one stop short of a shared
+                // destination can still be a long ride. See #449.
                 etaText = OBALoc(
                     "trip_progress.arriving_now",
                     value: "Arriving now",
@@ -87,6 +106,7 @@ class TripFloatingPanelController: UIViewController,
 
     var tripDetails: TripDetails? {
         didSet {
+            destinationArrivalDeparture = nil
             if isLoadedAndOnScreen {
                 listView.applyData(animated: false)
                 updateProgressView()
@@ -98,6 +118,17 @@ class TripFloatingPanelController: UIViewController,
         didSet {
             if isLoadedAndOnScreen, let arrivalDeparture = tripConvertible?.arrivalDeparture {
                 stopArrivalView.arrivalDeparture = arrivalDeparture
+            }
+        }
+    }
+
+    /// The live arrival at the stop a shared trip link named as the sharer's
+    /// exit. `nil` on every other trip, and until it first loads. The progress
+    /// header counts down to it. See #449.
+    var destinationArrivalDeparture: ArrivalDeparture? {
+        didSet {
+            if isLoadedAndOnScreen {
+                updateProgressView()
             }
         }
     }
@@ -165,7 +196,14 @@ class TripFloatingPanelController: UIViewController,
     }
 
     // MARK: - Public Methods
-    public func highlightStopInList(_ matchingStop: Stop) {
+    /// Scrolls the trip stop list to `matchingStop`'s row and, by default, blinks it.
+    /// - Parameters:
+    ///   - matchingStop: The stop whose row should be brought into view.
+    ///   - stopIndex: When the trip revisits a stop, disambiguates which visit to scroll to.
+    ///   - blinksAfterScroll: Pass `false` when the caller is about to push another view
+    ///     controller. The blink is delayed until scrolling settles, so it would play
+    ///     underneath the pushed page and be finished before the rider returned to see it.
+    public func highlightStopInList(_ matchingStop: Stop, stopIndex: Int? = nil, blinksAfterScroll: Bool = true) {
         let data = self.items(for: listView)
 
         var matchingIndexPath: IndexPath?
@@ -173,20 +211,23 @@ class TripFloatingPanelController: UIViewController,
             for (itemIndex, item) in section.contents.enumerated() {
                 guard let tripStop = item.as(TripStopViewModel.self),
                       tripStop.stop.id == matchingStop.id else { continue }
+                if let stopIndex, tripStop.stopIndex != stopIndex { continue }
                 matchingIndexPath = IndexPath(item: itemIndex, section: sectionIndex)
                 break
             }
         }
 
-        if let matchingIndexPath = matchingIndexPath {
-            listView.scrollToItem(at: matchingIndexPath, at: .top, animated: true)
+        guard let matchingIndexPath else { return }
 
-            // There's no completionHandler for scrollToItem, so just wait 3/4 of
-            // a second for scrolling to hopefully finish.
-            // Note: If 750ms passes, but the cell is still not visible, then the `blink` won't appear.
-            scrollBlinkThrottler.throttle(deadline: .now() + .milliseconds(750)) { [weak self] in
-                (self?.listView.cellForItem(at: matchingIndexPath) as? OBAListViewCell)?.blink()
-            }
+        listView.scrollToItem(at: matchingIndexPath, at: .top, animated: true)
+
+        guard blinksAfterScroll else { return }
+
+        // There's no completionHandler for scrollToItem, so just wait 3/4 of
+        // a second for scrolling to hopefully finish.
+        // Note: If 750ms passes, but the cell is still not visible, then the `blink` won't appear.
+        scrollBlinkThrottler.throttle(deadline: .now() + .milliseconds(750)) { [weak self] in
+            (self?.listView.cellForItem(at: matchingIndexPath) as? OBAListViewCell)?.blink()
         }
     }
 
@@ -282,9 +323,15 @@ class TripFloatingPanelController: UIViewController,
     // MARK: - Helpers
 
     /// Returns the index of the vehicle's closest stop within the trip's stop list, or nil if unavailable.
+    ///
+    /// Uses the same loop-aware resolution as the SwiftUI trip page (#1425) —
+    /// not bare `firstIndex` on `closestStopID`.
     private func closestStopIndex(in tripDetails: TripDetails) -> Int? {
-        guard let closestStopID = tripDetails.status?.closestStopID else { return nil }
-        return tripDetails.stopTimes.firstIndex { $0.stopID == closestStopID }
+        TripStopListModel.vehicleStopIndex(
+            in: tripDetails.stopTimes,
+            closestStopID: tripDetails.status?.closestStopID,
+            arrivalDeparture: tripConvertible?.arrivalDeparture
+        )
     }
 
     // MARK: - ListAdapterDataSource (Data Loading)
@@ -361,8 +408,8 @@ class TripFloatingPanelController: UIViewController,
         parentTripViewController?.showStopOnMap(tripStop)
     }
 
-    private func showOnList(_ tripStop: TripStopTime) {
-        highlightStopInList(tripStop.stop)
+    private func showOnList(_ tripStop: TripStopViewModel) {
+        highlightStopInList(tripStop.stop, stopIndex: tripStop.stopIndex)
     }
 
     private func serviceAlertsListSection(_ alerts: [ServiceAlert]) -> OBAListViewSection {
@@ -393,6 +440,11 @@ class TripFloatingPanelController: UIViewController,
         }
 
         let closestStopIdx = closestStopIndex(in: tripDetails)
+        let riderStops = TripStopListModel.riderStops(
+            in: tripDetails.stopTimes,
+            arrivalDeparture: arrivalDeparture,
+            sharedDestinationStopID: parentTripViewController?.destinationStopID
+        )
 
         // Stop times
         let selectTripStopAction: OBAListViewAction<TripStopViewModel> = { [unowned self] item in self.onSelectTripStop(item) }
@@ -402,6 +454,9 @@ class TripFloatingPanelController: UIViewController,
                 arrivalDeparture: arrivalDeparture,
                 stopIndex: index,
                 closestStopIndex: closestStopIdx,
+                userStopIndex: riderStops.userStopIndex,
+                boardingMarkerIndex: riderStops.boardingMarkerIndex,
+                rideIndices: riderStops.rideIndices,
                 onSelectAction: selectTripStopAction
             ).typeErased
         }
@@ -429,15 +484,22 @@ class TripFloatingPanelController: UIViewController,
         }
 
         let arrivalDeparture = tripConvertible?.arrivalDeparture
-        let userStopIndex = arrivalDeparture.flatMap { ad in
-            tripDetails.stopTimes.firstIndex { $0.stopID == ad.stopID }
-        }
+        let riderStops = TripStopListModel.riderStops(
+            in: tripDetails.stopTimes,
+            arrivalDeparture: arrivalDeparture,
+            sharedDestinationStopID: parentTripViewController?.destinationStopID
+        )
+        let countdown = riderStops.countdown(
+            boardingMinutes: arrivalDeparture?.arrivalDepartureMinutes,
+            destinationMinutes: destinationArrivalDeparture?.arrivalDepartureMinutes
+        )
 
         guard let vm = TripProgressViewModel(
             closestStopIndex: currentIndex,
             totalStops: tripDetails.stopTimes.count,
-            userStopIndex: userStopIndex,
-            arrivalDepartureMinutes: arrivalDeparture?.arrivalDepartureMinutes
+            userStopIndex: riderStops.userStopIndex,
+            minutesStopIndex: countdown.stopIndex,
+            arrivalDepartureMinutes: countdown.minutes
         ) else {
             tripProgressWrapper.isHidden = true
             return
@@ -532,7 +594,7 @@ final class TripProgressView: UIView {
     }()
 
     private let etaLabel: UILabel = {
-        let label = UILabel.obaLabel(font: .preferredFont(forTextStyle: .caption1), textColor: ThemeColors.shared.brand)
+        let label = UILabel.obaLabel(font: .preferredFont(forTextStyle: .caption1), textColor: ThemeColors.shared.brandTint)
         label.setContentHuggingPriority(.required, for: .horizontal)
         label.setContentCompressionResistancePriority(.required, for: .horizontal)
         label.textAlignment = .right

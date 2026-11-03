@@ -28,6 +28,10 @@ class ScheduleForStopViewModel: ObservableObject {
     let stopID: StopID
     let application: Application
 
+    /// Bumped at the start of each fetch so a cancelled request cannot clear
+    /// `isLoading` or set `error` after a newer fetch has begun.
+    private var fetchGeneration = 0
+
     /// The stop name, if available from schedule data
     var stopName: String {
         return scheduleData?.stop?.name ?? stopID
@@ -89,8 +93,15 @@ class ScheduleForStopViewModel: ObservableObject {
 
     // MARK: - Initialization
 
-    init(stopID: StopID, application: Application, initialDate: Date = Date()) {
+    /// Initializes a view model for a stop's schedule.
+    /// - Parameters:
+    ///   - stopID: The stop ID to display schedules for.
+    ///   - routeID: Optional route ID to pre-select upon opening.
+    ///   - application: The application environment object.
+    ///   - initialDate: The date to load the schedule for, defaulting to today.
+    init(stopID: StopID, routeID: RouteID? = nil, application: Application, initialDate: Date = Date()) {
         self.stopID = stopID
+        self.selectedRouteID = routeID
         self.application = application
         self.selectedDate = initialDate
     }
@@ -104,12 +115,14 @@ class ScheduleForStopViewModel: ObservableObject {
             return
         }
 
+        fetchGeneration += 1
+        let generation = fetchGeneration
         isLoading = true
         error = nil
-        defer { isLoading = false }
 
         do {
             let response = try await apiService.getScheduleForStop(stopID: stopID, date: selectedDate)
+            guard generation == fetchGeneration, !Task.isCancelled else { return }
             scheduleData = response.entry
 
             // Validation - If the previously selected route doesn't exist on this new date, switch to the first available one.
@@ -119,8 +132,12 @@ class ScheduleForStopViewModel: ObservableObject {
             } else if selectedRouteID == nil {
                 selectedRouteID = response.entry.stopRouteSchedules.first?.routeID
             }
+            isLoading = false
         } catch {
+            guard generation == fetchGeneration else { return }
+            guard !error.isCancellation else { return }
             self.error = error
+            isLoading = false
         }
     }
 

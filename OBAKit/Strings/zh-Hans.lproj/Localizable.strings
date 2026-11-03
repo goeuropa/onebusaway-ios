@@ -46,8 +46,14 @@
 /* Toggle label that starts a Live Activity widget on the Lock Screen when an alarm is set. */
 "alarm_time_picker.track_on_lock_screen" = "在锁定屏幕上追踪";
 
-/* Placeholder shown in release builds when a sheet route is pushed but has no view registered. */
+/* VoiceOver announcement after the rider removes a departure alarm. */
+"alarms.a11y_removed" = "已移除闹钟";
+
+/* Placeholder shown when a sheet route is pushed but its screen has not been built yet. */
 "app_sheet.unimplemented_route.placeholder" = "此页面即将推出。";
+
+/* Shown when the rider taps a link or notification for a stop that belongs to a transit region other than the currently selected one. */
+"application.stop_in_other_region" = "此站点位于与您当前使用的地区不同的地区，因此无法打开。";
 
 /* Filter option to show all departures regardless of real-time data availability */
 "arrival_departure_filter.all_departures" = "所有班次";
@@ -58,8 +64,26 @@
 /* Filter option to show only departures with scheduled data and no real-time information */
 "arrival_departure_filter.scheduled_only" = "仅时刻表";
 
-/* Action to start a Live Activity for a specific bookmark */
-"bookmarks_controller.context_menu.track_live_activity" = "追踪";
+/* Shown on a trip bookmark card with the estimated arrival time at the bookmark's destination stop, based on real-time data. 1st placeholder is the destination stop's name, 2nd is the time, e.g. 'Arrives Pine St at 5:41 PM'. */
+"bookmark_card.destination.arrives_fmt" = "Arrives %1$@ at %2$@";
+
+/* Shown on a trip bookmark card with the scheduled arrival time at the bookmark's destination stop, when no real-time data is available. 1st placeholder is the destination stop's name, 2nd is the time. */
+"bookmark_card.destination.arrives_scheduled_fmt" = "Arrives %1$@ at %2$@ (scheduled)";
+
+/* Shown on a trip bookmark card while the arrival time at the bookmark's destination stop is loading. The placeholder is the destination stop's name. */
+"bookmark_card.destination.loading_fmt" = "Loading arrival at %@…";
+
+/* Shown on a trip bookmark card when none of the upcoming trips on the route stop at the bookmark's destination stop. The placeholder is the destination stop's name. */
+"bookmark_card.destination.not_served_fmt" = "Upcoming trips don't stop at %@";
+
+/* Context menu action that pins a bookmark to the top of the home sheet's bookmarks section. */
+"bookmarks_controller.context_menu.pin" = "置顶";
+
+/* Action to start a Live Activity, which follows the next arrival for a specific bookmark on the Lock Screen */
+"bookmarks_controller.context_menu.track_live_activity" = "在锁定屏幕上追踪";
+
+/* Context menu action that removes a bookmark's pin, returning it to the normal ordering. */
+"bookmarks_controller.context_menu.unpin" = "取消置顶";
 
 /* The title to display to confirm the user's action to delete a bookmark. */
 "bookmarks_controller.delete_bookmark.actionsheet.title" = "删除书签";
@@ -69,6 +93,9 @@
 
 /* Shown on a bookmark card when arrival data has loaded but there are no departures in the near future */
 "bookmarks_controller.no_upcoming_departures" = "暂无即将发车的班次";
+
+/* VoiceOver suffix announcing that a bookmark row is pinned. */
+"bookmarks_controller.pinned.a11y_label" = "已置顶";
 
 /* A menu item that allows the user to sort their bookmarks by distance from the user. */
 "bookmarks_controller.sort_menu.sort_by_distance" = "按距离排序";
@@ -161,7 +188,7 @@
 "custom_region_builder_controller.server_validation_error_fmt" = "无法连接到 %1$@ 上兼容的交通 API 服务器。请检查基础 URL 并重试。\n\n%2$@";
 
 /* An explanation of dragging the map to highlight the service area of a custom region. */
-"custom_region_builder_controller.service_area_section.explanation" = "Drag the map to the approximate service area of this region.";
+"custom_region_builder_controller.service_area_section.explanation" = "拖动地图，使其大致覆盖此地区的服务范围。";
 
 /* Title of the Service Area header. */
 "custom_region_builder_controller.service_area_section.header_title" = "服务地区";
@@ -170,31 +197,31 @@
 "data_migration_bulletin.action_button" = "继续";
 
 /* Title for the DataMigrationBulletinPage. */
-"data_migration_bulletin.data_upgrade_title" = "Data Upgrade";
+"data_migration_bulletin.data_upgrade_title" = "数据升级";
 
 /* Dismissal button title for the DataMigrationBulletinPage. */
-"data_migration_bulletin.dismiss_button" = "Not Now";
+"data_migration_bulletin.dismiss_button" = "以后再说";
 
 /* An error message that appears when the user needs to have data migrated, but is not connected to the Internet. */
 "data_migration_bulletin.errors.no_api_service_available" = "请检查网络连接后重新尝试。";
 
 /* An error message that appears when the data migrator runs but no data can be migrated. */
-"data_migration_bulletin.errors.no_data_to_migrate" = "No data to upgrade";
+"data_migration_bulletin.errors.no_data_to_migrate" = "没有需要升级的数据";
 
 /* An error message that appears when the data migrator runs without a pending migration. */
-"data_migration_bulletin.errors.no_migration_pending" = "No data migration is pending";
+"data_migration_bulletin.errors.no_migration_pending" = "没有待迁移的数据";
 
 /* First bullet point of DataMigrationBulletinPage explanation */
-"data_migration_bulletin.explanation_1" = "Upgrade your Recent Stops and Bookmarks to work with the latest version of the app, you only need to do this once.";
+"data_migration_bulletin.explanation_1" = "请升级您的“最近浏览过的车站”和书签，以便在最新版本的应用中使用。此操作只需进行一次。";
 
 /* Second bullet point of DataMigrationBulletinPage explanation */
-"data_migration_bulletin.explanation_2" = "You will not be able to see your Recent Stops or Bookmarks until you upgrade.";
+"data_migration_bulletin.explanation_2" = "升级完成前，您将无法查看“最近浏览过的车站”或书签。";
 
 /* Third bullet point of DataMigrationBulletinPage explanation */
-"data_migration_bulletin.explanation_3" = "Upgrading may take a bit of time, and a Wi-Fi or mobile connection is required during the upgrade.";
+"data_migration_bulletin.explanation_3" = "升级可能需要一些时间，升级期间需要连接无线局域网或蜂窝网络。";
 
 /* This comment is displayed after the user's data is upgraded in the DataMigrationBulletinPage. */
-"data_migration_bulletin.finished_loading" = "Data Upgrade Complete!";
+"data_migration_bulletin.finished_loading" = "数据升级完成！";
 
 /* Data migration report label for showing the number of failed migration tasks. Plural forms live in Localizable.stringsdict; the value above is only the not-found fallback. */
 "data_migration_bulletin.report_summary_number_of_failures" = "%d项失败";
@@ -203,10 +230,43 @@
 "data_migration_bulletin.report_summary_number_of_successes" = "%d项成功";
 
 /* Title for the Summary section of a data migration report */
-"data_migration_bulletin.report_summary_title" = "Summary";
+"data_migration_bulletin.report_summary_title" = "摘要";
 
 /* Button title to let the user view a data migration report. */
-"data_migration_bulletin.view_report_button" = "View Report";
+"data_migration_bulletin.view_report_button" = "查看报告";
+
+/* Error shown when the boarding stop cannot be found in the trip's stop list. */
+"destination_stop_picker.error_boarding_stop_not_found" = "无法确定您在本次车程中的上车站点。";
+
+/* Error shown when the API service is unavailable in the destination stop picker. */
+"destination_stop_picker.error_no_service" = "无法连接到公交服务。";
+
+/* Title shown while loading the list of stops for destination selection. */
+"destination_stop_picker.loading_title" = "正在加载站点";
+
+/* Body text shown when there are no stops available after the boarding stop. */
+"destination_stop_picker.no_stops_body" = "本次车程没有剩余站点。";
+
+/* Title shown when there are no stops available after the boarding stop. */
+"destination_stop_picker.no_stops_title" = "没有可用站点";
+
+/* Button to retry loading stops after an error. */
+"destination_stop_picker.retry_button" = "重试";
+
+/* Section header prompting user to select their destination stop. */
+"destination_stop_picker.select_destination_header" = "您在哪里下车？";
+
+/* VoiceOver label for the navigation bar button that shares the trip when no destination could be loaded. */
+"destination_stop_picker.share_without_destination_a11y_label" = "不选择目的地站点，直接分享车程";
+
+/* Short navigation bar button that shares the trip without a destination stop, used where the full phrase will not fit. */
+"destination_stop_picker.share_without_destination_bar_button" = "仍然分享";
+
+/* Button shown when a trip has no remaining stops, letting the user share the trip without picking a destination. */
+"destination_stop_picker.share_without_destination_button" = "不选目的地直接分享";
+
+/* Navigation bar title for the destination stop picker when sharing a trip. */
+"destination_stop_picker.title" = "选择目的地";
 
 /* Body of the donation widget that appears on the stop view controller */
 "donation_cell.body" = "本App目前完全由志愿者开发，我们需要您的帮助来资助未来的开发工作。";
@@ -235,6 +295,21 @@
 /* Title of the button that lets the user add a new Bookmark Group. */
 "edit_bookmark_controller.add_group_button_title" = "添加书签分类";
 
+/* Default name for a trip bookmark with a destination stop. 1st placeholder is the boarding stop's name, 2nd is the destination stop's name, 3rd is the route's short name, e.g. 'Pine St → Main St (10)'. */
+"edit_bookmark_controller.destination_default_name_fmt" = "%1$@ → %2$@ (%3$@)";
+
+/* Value of the Destination Stop row on the Add Bookmark screen when no destination stop has been chosen. */
+"edit_bookmark_controller.destination_row.none" = "None";
+
+/* Title of the row on the Add Bookmark screen that opens the list of stops to choose the trip's destination from. */
+"edit_bookmark_controller.destination_row.title" = "Destination Stop";
+
+/* Footer under the destination stop row on the Add Bookmark screen. */
+"edit_bookmark_controller.destination_section.footer" = "Optional. Choose where you get off to also see when this trip arrives there.";
+
+/* Header above the destination stop on the Add/Edit Bookmark screen. */
+"edit_bookmark_controller.destination_section.header_title" = "Destination";
+
 /* Indicates that the user wants to create a duplicate bookmark. */
 "edit_bookmark_controller.duplicate_alert.affirmative_button" = "复制并新建";
 
@@ -249,6 +324,23 @@
 
 /* Title of the Bookmark Name header. */
 "edit_bookmark_controller.name_section.header_title" = "书签名称";
+
+/* Button on the Add Bookmark screen that clears the chosen destination stop. */
+"edit_bookmark_controller.remove_destination_button" = "Remove Destination";
+
+
+/* Header above the read-only Stop ID on the Edit Bookmark screen. */
+"edit_bookmark_controller.stop_id_section.header_title" = "站点 ID";
+
+/* Footer under the Stop ID row on the Edit Bookmark screen. */
+"edit_bookmark_controller.stop_id_section.footer" = "加载此书签到站信息时使用。点按即可复制。";
+
+/* Title of the read-only Stop ID row on the Edit Bookmark screen. */
+"edit_bookmark_controller.stop_id_row.title" = "站点 ID";
+
+/* VoiceOver hint for the read-only Stop ID row on the Edit Bookmark screen. Activating the row copies the stop ID. */
+"edit_bookmark_controller.stop_id_row.accessibility_hint" = "复制站点 ID。";
+
 
 /* Don't add this bookmark to a group. */
 "edit_bookmark_controller.no_group_row" = "（未分类）";
@@ -316,8 +408,14 @@
 /* A voiceover title describing that the card's visibility taking up the minimum amount of screen. */
 "floating_panel.controller.position.minimized" = "已最小化";
 
-/* Placeholder text inside the disabled search bar on the home sheet, shown while search is unimplemented. */
-"home_sheet.search_bar.coming_soon" = "搜索功能即将推出";
+/* Body for the home sheet's empty state, shown when there are no nearby stops, no recent stops, and no bookmarks. */
+"home_sheet.empty_set.body" = "附近的车站、您查看过的车站以及您的书签将显示在这里。";
+
+/* Title for the home sheet's empty state, shown when there are no nearby stops, no recent stops, and no bookmarks. */
+"home_sheet.empty_set.title" = "这里还没有内容";
+
+/* VoiceOver hint for a home sheet section header, which opens that section's full list. */
+"home_sheet.section_header.a11y_hint" = "显示此部分的所有项目。";
 
 /* Alert message for Live Activity error. \"Settings\" is the iOS Settings app. */
 "live_activity.error.message" = "请在“设置”中检查“实时活动”的相关设置。";
@@ -334,26 +432,13 @@
 /* Description of why we need location services */
 "location_permission_bulletin.description_text" = "请允许本App使用您的定位信息，以便更好地帮您找到附近的公交车站。";
 
-/* Button the user can tap on to decline access to their location. */
-"location_permission_bulletin.do_not_use_location_button_text" = "暂不";
 
 /* Title of the alert that appears to request your location. */
 "location_permission_bulletin.title" = "您好！";
 
-/* Button the user taps to grant access to their location. */
-"location_permission_bulletin.use_location_button_text" = "使用我的位置";
 
 /* No comment provided by engineer. */
 "locationservices_alert_gotosettings.button" = "前往“设置”页面打开定位分享";
-
-/* Body of the alert prompting the user to grant precise location. */
-"locationservices_alert_imprecise.message" = "您将可以在地图上看到自己的位置和周围的公交车站，帮您更轻易地找到要去的乘车站。";
-
-/* Title of the alert prompting the user to upgrade from approximate to precise location. %@ is the app name. */
-"locationservices_alert_imprecise.title" = "%@在使用您的详细定位信息时可以提供最佳服务";
-
-/* No comment provided by engineer. */
-"locationservices_alert_keep_precise_location_off.button" = "继续拒绝分享详细定位";
 
 /* No comment provided by engineer. */
 "locationservices_alert_keepoff.button" = "继续拒绝分享定位";
@@ -363,9 +448,6 @@
 
 /* Title of the alert prompting the user to turn on location services. %@ is the app name. */
 "locationservices_alert_off.title" = "%@在使用您的定位信息时可以提供最佳服务";
-
-/* No comment provided by engineer. */
-"locationservices_alert_request_precise_location_once.button" = "允许一次";
 
 /* Message shown when there are no logs to display */
 "log_viewer_controller.no_logs" = "暂无日志。";
@@ -403,6 +485,9 @@
 /* Map controller for centering the map on the user's current location. */
 "map_controller.center_user_location" = "使地图居中于当前位置";
 
+/* Name given to a pin the user dropped on the map by long-pressing it, when the location has no better name. Also read by VoiceOver. */
+"map_controller.dropped_pin_title" = "已放置的大头针";
+
 /* Change Region button on the alert that appears when the user is updating their current region manually. */
 "map_controller.change_region_alert.button" = "更改地区";
 
@@ -412,11 +497,20 @@
 /* Title of the alert that appears when the user is updating their current region manually. */
 "map_controller.change_region_alert.title" = "确定要更改地区？";
 
+/* Voiceover text for the button that opens the Map settings sheet, which covers the base map, points of interest, transit layers and other travel modes. */
+"map_controller.map_settings.accessibility_label" = "地图设置";
+
 /* Voiceover text indicating that this button toggles the base map type. */
 "map_controller.map_type.accessibility_label" = "地图类型";
 
+/* Voiceover value combining the base map type with the number of enabled map layers. %1$@ is the base map type, %2$d is the layer count. Plural forms live in Localizable.stringsdict; the value above is only the not-found fallback. */
+"map_controller.map_type.accessibility_value_with_layers_fmt" = "%1$@，已开启 %2$d 个图层";
+
 /* Voiceover text indicating the current map type as the hybrid base map (satellite view with labels). */
 "map_controller.map_type.hybrid.accessibility_value" = "混合";
+
+/* Voiceover text indicating the current map type as the satellite base map. */
+"map_controller.map_type.satellite.accessibility_value" = "卫星";
 
 /* Voiceover text indicating the current map type as the standard base map. */
 "map_controller.map_type.standard.accessibility_value" = "标准";
@@ -429,6 +523,12 @@
 
 /* Accessibility label for a button that provides the current forecast */
 "map_controller.show_weather_button" = "显示天气预报";
+
+/* Title of the list shown when tapping a map pin that groups several stops at the same location. */
+"map_controller.stop_cluster_picker.title" = "选择站点";
+
+/* VoiceOver hint for a map pin that groups several nearby stops. Activating it opens a list of those stops to choose from. */
+"map_controller.stop_cluster.accessibility_hint" = "列出此处的站点。";
 
 /* This message appears when a searched-for vehicle doesn't have an assigned trip. */
 "map_controller.vehicle_not_on_trip_error" = "您选择的公交车辆并未被安排出行，所以我们无法为您显示它。";
@@ -467,6 +567,9 @@
 /* Button to remove a dropped pin from the map */
 "map_item_controller.remove_pin" = "移除大头针";
 
+/* Name shown in the trip planner for a destination that has no name of its own, such as a point on the map. */
+"map_item_controller.destination_fallback_title" = "目的地";
+
 /* Accessibility label for remove pin button */
 "map_item_controller.remove_pin_accessibility" = "从地图上移除此大头针";
 
@@ -487,12 +590,11 @@
 
 /* Displayed in the map status view at the top of the map when the user must zoom in to see stops on the map */
 "map_status_view.zoom_in_for_stops" = "放大地图以查看车站";
+/* Displayed in the map status view at the top of the map when a bikes or scooters layer is on but the map is zoomed out too far to show rental vehicles */
+"map_status_view.zoom_in_for_rentals" = "放大地图以查看单车和滑板车";
 
 /* Title of the alert shown when location services are disabled for the app. */
-"map_status_alert.location_services_off.title" = "Location Services Off";
-
-/* Title of the alert shown when the user has restricted the app to reduced-accuracy location. */
-"map_status_alert.precise_location_off.title" = "Precise Location Off";
+"map_status_alert.location_services_off.title" = "定位服务已关闭";
 
 /* Header for a section that shows the user information about this app. */
 "more_controller.about_app" = "关于这个App";
@@ -585,6 +687,9 @@
 /* Title for the empty set indicator on the Nearby controller */
 "nearby_controller.empty_set.title" = "附近没有公交车站";
 
+/* How far a nearby stop is from the rider, read by VoiceOver after the stop's name. e.g. '500 feet away' */
+"nearby_stops.accessibility_distance_fmt" = "距离%@";
+
 /* Body for the empty set indicator on the Nearby Stops controller. */
 "nearby_stops_controller.empty_set.body" = "这附近没有其他的公交车站。";
 
@@ -596,6 +701,42 @@
 
 /* The title of the Nearby Stops controller. */
 "nearby_stops_controller.title" = "附近的车站";
+
+/* Body shown on the Nearby Stops index sheet when no map viewport, device location, or region is available to search around. */
+"nearby_stops_sheet.no_location.body" = "移动地图或开启定位服务，即可查看附近的公交车站。";
+
+/* Siri response when the requested bookmark was deleted or belongs to a different region. */
+"next_departures_intent.bookmark_unavailable" = "该书签在你当前的地区不可用。";
+
+/* Siri asks which trip bookmark to report departures for when the user has more than one. */
+"next_departures_intent.choose_bookmark" = "哪个书签？";
+
+/* Siri response naming the next departure. {Route short name} to {Headsign} departs {'now' or 'in X minutes'}. */
+"next_departures_intent.first_departure_fmt" = "开往%2$@的%1$@路%3$@出发。";
+
+/* Siri response: a vehicle departs in {X} minutes. Plural forms in Localizable.stringsdict. */
+"next_departures_intent.in_minutes_fmt" = "%d分钟后";
+
+/* Siri response listing the departures after the next one. {List of 'in X minutes'} */
+"next_departures_intent.later_departures_fmt" = "之后还有%@的班次。";
+
+/* Siri response when departures could not be fetched. {Bookmark name} */
+"next_departures_intent.load_failed_fmt" = "无法加载%@的离站信息。请检查网络连接后重试。";
+
+/* Siri response when the user asks for their next departures but has no trip bookmarks in the current region. */
+"next_departures_intent.no_bookmarks" = "你还没有收藏任何行程。请先在站点将线路添加为书签。";
+
+/* Siri response when a bookmarked trip has no upcoming departures. {Bookmark name} */
+"next_departures_intent.no_departures_fmt" = "未来一小时内%@没有离站班次。";
+
+/* Siri response when the user asks for their next departures before the app knows their region. */
+"next_departures_intent.no_region" = "请先在应用中选择一个公交地区。";
+
+/* Siri response: a vehicle departs now. Completes 'Route 550 to Seattle departs {now}'. */
+"next_departures_intent.now" = "现在";
+
+/* Joins two complete Siri sentences: {first departure sentence} {later departures sentence}. Use the language's separator between sentences; Chinese uses none. */
+"next_departures_intent.sentences_join_fmt" = "%1$@%2$@";
 
 /* Vehicle occupancy is very high */
 "occupancy_status.crushed_standing_room_only" = "站立空间非常拥挤";
@@ -690,9 +831,6 @@
 /* Button the user taps to grant access to their location. */
 "onboarding.location.primary_button" = "使用我的位置";
 
-/* Button the user can tap on to decline access to their location. */
-"onboarding.location.secondary_button" = "暂不";
-
 /* Title of the location onboarding screen */
 "onboarding.location.title" = "查看你周围的交通";
 
@@ -711,17 +849,8 @@
 /* Footnote of the notifications onboarding screen */
 "onboarding.notifications.footnote" = "仅限重要的全区域提醒。没有垃圾信息 — 其余内容由你在设置中自行控制。";
 
-/* Decline button when the notifications step appears alone */
-"onboarding.notifications.maybe_later_button" = "以后再说";
-
 /* Badge shown when the notifications step appears alone for existing users */
 "onboarding.notifications.new_badge" = "新";
-
-/* Decline button on the notifications onboarding screen */
-"onboarding.notifications.not_now_button" = "暂不";
-
-/* Primary button on the notifications onboarding screen */
-"onboarding.notifications.primary_button" = "开启通知";
 
 /* Title of the notifications onboarding screen */
 "onboarding.notifications.title" = "提前了解服务中断情况";
@@ -729,11 +858,17 @@
 /* Accessibility label for the onboarding progress bar */
 "onboarding.progress.accessibility_label" = "引导进度";
 
-/* Body of the region onboarding screen */
+/* VoiceOver value of the onboarding progress bar, e.g. Step 1 of 3. {current step} of {total steps} */
+"onboarding.progress.accessibility_value_fmt" = "第%1$d步，共%2$d步";
+
+/* Body of the region onboarding screen when the region was detected from the rider's location */
 "onboarding.region.body" = "我们找到了离你最近的交通网络。";
 
-/* Body of the region onboarding screen when no location is available */
-"onboarding.region.body_no_location" = "选择你乘坐的交通网络。";
+/* Body of the region onboarding screen prompting the rider to choose a transit network */
+"onboarding.region.body_choose" = "选择你乘坐的交通网络。";
+
+/* Label on the region card when the region was already selected by app configuration or an earlier launch rather than detected from the rider's location */
+"onboarding.region.current_label" = "当前地区";
 
 /* Label on the detected-region card */
 "onboarding.region.detected_label" = "在你附近检测到";
@@ -743,6 +878,9 @@
 
 /* Link to the full region picker */
 "onboarding.region.see_all_button" = "查看所有地区";
+
+/* Label on the region card when the rider chose the region from the list rather than it being detected from their location */
+"onboarding.region.selected_label" = "你的选择";
 
 /* Title of the region onboarding screen */
 "onboarding.region.title" = "你的地区";
@@ -759,20 +897,11 @@
 /* Title of the first onboarding screen; the argument is the app name */
 "onboarding.welcome.title_fmt" = "欢迎使用%@";
 
-/* Reachability bulletin shown when the user has disabled cellular data for this app in iOS Settings. Both substituted values are the app name. */
-"reachability_bulletin.description.cellular_data_restricted_fmt" = "%1$@当前无法访问蜂窝移动数据。请前往“设置”>“蜂窝网络”，为%2$@开启蜂窝移动数据，或连接到Wi-Fi网络。";
+/* Body of the destination alert notification. %@ is the name of the rider's destination stop. */
+"proximity_alert.notification.body_fmt" = "您即将到达%@。";
 
-/* Reachability bulletin for a cellular connection that can't access the Internet. */
-"reachability_bulletin.description.cellular_no_internet" = "我们无法通过您的手机移动数据连接到互联网。\r\n\r\n请尝试使用无线网络WiFi或者移动到一个新的地点。";
-
-/* Reachability bulletin for a phone with no connection. */
-"reachability_bulletin.description.not_connected" = "我们无法连接到互联网。请尝试使用无线网络WiFi或者手机数据连接。";
-
-/* Reachability bulletin for a WiFi network that can't access the Internet. */
-"reachability_bulletin.description.wifi_no_internet" = "我们无法通过您的无线网络WiFi连接到互联网。\r\n\r\n请尝试关闭WiFi或者使用一个不同的网络。";
-
-/* Title of the alert that appears when the app can't connect to the server. */
-"reachability_bulletin.title" = "无法连接到互联网";
+/* Title of the notification shown when the rider nears the stop they set a destination alert on. */
+"proximity_alert.notification.title" = "即将到达您的站点";
 
 /* Title for a confirmation alert displayed before the user deletes all of their recent stops. */
 "recent_stops.confirmation_alert.title" = "您确定要删除所有最近浏览过的公交车站吗？";
@@ -808,22 +937,22 @@
 "region_mismatch_bulletin.update_map_button_fmt" = "在地图上显示%@";
 
 /* Help text displayed on a custom (user-created) region. */
-"region_picker.custom_region_help_text" = "Custom region";
+"region_picker.custom_region_help_text" = "自定义地区";
 
 /* Help text displayed on an experimental region. */
-"region_picker.experimental_region_help_text" = "Experimental region";
+"region_picker.experimental_region_help_text" = "实验性地区";
 
 /* Help text displayed on an inactive region. */
-"region_picker.inactive_region_help_text" = "Inactive region";
+"region_picker.inactive_region_help_text" = "未启用的地区";
 
 /* Title of a button that shows a region creation view controller. */
-"region_picker.new_custom_region_button" = "New Custom Region";
+"region_picker.new_custom_region_button" = "新建自定义地区";
 
 /* Title of a toggle that shows experimental (beta) regions. */
-"region_picker.show_experimental_regions_toggle" = "Show Experimental";
+"region_picker.show_experimental_regions_toggle" = "显示实验性地区";
 
 /* Title of a toggle that shows inactive regions. */
-"region_picker.show_inactive_regions_toggle" = "Show Inactive";
+"region_picker.show_inactive_regions_toggle" = "显示未启用的地区";
 
 /* Title of the Region Picker Item, which lets the user choose a new region from the map. */
 "region_picker.title" = "选择地区";
@@ -834,6 +963,9 @@
 /* Title of the Report Problem view controller. */
 "report_problem.title" = "报告一个问题";
 
+/* Title of the sheet listing the members of a rental cluster. Plural forms live in Localizable.stringsdict; the value above is only the not-found fallback. */
+"rental_cluster.title_fmt" = "这里有 %d 辆车";
+
 /* Report a problem with the stop at {Stop Name} */
 "report_problem_controller.report_stop_problem_fmt" = "报告%@车站的问题";
 
@@ -841,7 +973,7 @@
 "report_problem_controller.stop_problem.header" = "该车站有问题";
 
 /* A table header in the 'Report Problem' view controller. */
-"report_problem_controller.vehicle_problem.header" = "在该车站停靠的一辆公交车有问题";
+"report_problem_controller.trip_problem.header" = "行程问题";
 
 /* Error when location is unavailable in the route picker. */
 "route_picker.error_no_location" = "无法获取位置。请开启定位服务以查找附近的线路。";
@@ -860,6 +992,9 @@
 
 /* Title for the route picker screen where the user selects their transit route. */
 "route_picker.title" = "选择您的线路";
+
+/* Title shown when a route's stop list could not be loaded or is empty. */
+"route_stops_sheet.empty.title" = "无站点";
 
 /* Label for date picker in schedule view */
 "schedule_view.date" = "日期";
@@ -945,6 +1080,18 @@
 /* The title of the Search Results controller. */
 "search_results_controller.title" = "搜索结果";
 
+/* Title shown when a disambiguation sheet has no results to show. */
+"search_results_sheet.empty.title" = "无结果";
+
+/* Header showing how many results a search matched, e.g. '12 results'. %d is the number of results. Plural forms live in Localizable.stringsdict; the value above is only the not-found fallback. */
+"search_results_sheet.result_count_fmt" = "%d 个结果";
+
+/* Error shown when a tapped search result cannot be turned into something to display. */
+"search_results_sheet.unresolvable_result" = "无法打开此搜索结果。";
+
+/* Accessibility label for the button that clears the search query. */
+"search_sheet.clear_query" = "清除";
+
 /* The transit agencies affected by this service alert. */
 "service_alert_controller.affected_agencies" = "受此影响的公交公司";
 
@@ -962,6 +1109,9 @@
 
 /* Directs the user to tap on the link that comes at the end of the string. Learn more: <HYPERLINK IS INSERTED HERE> */
 "service_alert_controller.learn_more_fmt" = "了解更多%@";
+
+/* 设置 > 辅助功能 > 缩小新车站和行程页面的间距 */
+"settings_controller.accessibility_section.compact_stop_trip" = "紧凑车站和行程页";
 
 /* Settings > Accessibility section > Always show full sheet on Voiceover */
 "settings_controller.accessibility_section.default_full_sheet_voiceover" = "旁白开启时显示全屏";
@@ -984,11 +1134,38 @@
 /* Settings section title for controlling which arrivals/departures are shown */
 "settings_controller.arrival_display_section.title" = "到站与离站信息显示";
 
+/* Settings > Arrival Display > Toggle that shows the Arriving at XX:XX via route banner when opening a stop from a trip */
+"settings_controller.arrival_display_section.transfer_banner" = "显示换乘到达横幅";
+
+/* Settings > Arrival & Departure Display > Footer describing the transfer banner and region time zone toggles */
+"settings_controller.arrival_display_section.footer" = "换乘横幅：从行程打开车站时，时间相对你到达该站显示。区域时区：时钟时间使用交通区域时区，手机时区不同时会显示简短标记。两者互不影响。";
+
+/* Settings > Arrival & Departure Display > Opt-in toggle for displaying arrival clocks in the transit region's time zone */
+"settings_controller.arrival_display_section.region_time_zone" = "以区域时区显示时间";
+
 /* Title for the departure filter selection alert */
 "settings_controller.arrival_filter.selector_title" = "显示班次";
 
 /* Title for the departure filter setting row */
 "settings_controller.arrival_filter.title" = "显示班次";
+
+/* Settings > Bike Mode section title */
+"settings_controller.bike_mode_section.title" = "骑行模式";
+
+/* Settings > Bike Mode section footer */
+"settings_controller.bike_mode_section.footer" = "在到站时间估算、预计到达时间和车站页面中使用更快的出行速度。";
+
+/* Settings > Bike Mode section footer identifying the Apple Health integration; the argument is the app name */
+"settings_controller.bike_mode_section.healthkit_footer_fmt" = "%@ 可以从“健康”App 读取你的骑行速度。它从不向“健康”写入数据。";
+
+/* Settings > Bike Mode > on/off toggle */
+"settings_controller.bike_mode.title" = "骑行模式";
+
+/* Settings > Bike Mode section > HealthKit toggle */
+"settings_controller.bike_mode.use_healthkit" = "使用“健康”App数据";
+
+/* Settings > Bike Mode > HealthKit denial or no-data toast */
+"settings_controller.bike_mode.healthkit_unavailable" = "无法从“健康”App同步骑行速度。将使用标准骑行速度。";
 
 /* Settings > Debug section > Refresh regions on every launch */
 "settings_controller.debug_section.always_refresh_regions" = "启动应用时刷新地区信息";
@@ -998,6 +1175,9 @@
 
 /* Settings > Debug section title */
 "settings_controller.debug_section.title" = "排错";
+
+/* Settings > Experimental section > Toggle that merges overlapping stop pins on the map into a single numbered pin */
+"settings_controller.experimental_section.cluster_stops" = "在地图上合并相邻车站";
 
 /* Settings > Experimental section > Map panel toggle */
 "settings_controller.experimental_section.map_panel" = "使用地图面板体验";
@@ -1065,6 +1245,9 @@
 /* Settings > Walking Speed section > HealthKit toggle */
 "settings_controller.walking_speed.use_healthkit" = "使用“健康”App数据";
 
+/* Settings > Walking Speed section footer identifying the Apple Health integration; the argument is the app name */
+"settings_controller.walking_speed_section.healthkit_footer_fmt" = "%@ 可以从“健康”App 读取你的步行速度，以估算你走到车站所需的时间。它从不向“健康”写入数据。";
+
 /* Settings > Walking Speed section title */
 "settings_controller.walking_speed_section.title" = "步行速度";
 
@@ -1082,6 +1265,9 @@
 
 /* An error message displayed when a stop is shown by tapping on a bookmark—and the bookmark doesn't seem to point to a valid stop any longer. This problem will occur when a transit agency changes its stop IDs, perhaps as part of an annual transit system realignment. */
 "stop_controller.bad_bookmark_error_message" = "此书签已失效。公交公司或许对线路做出了调整。请尝试删除此书签后重新创建一个书签。";
+
+/* Title of the error shown when a stop is opened from a bookmark that no longer points to a valid stop. */
+"stop_controller.bad_bookmark_error_title" = "失效的书签";
 
 /* A string listing the data providers (agencies) for this stop's data. It contains one or more providers separated by commas. e.g. Data provided by King County Metro, Sound Transit */
 "stop_controller.data_attribution_format" = "数据由%@提供";
@@ -1110,6 +1296,9 @@
 /* Button to reveal departures that leave before the rider's transfer arrival. Parameter is the count of hidden departures. Plural forms live in Localizable.stringsdict; the value above is only the not-found fallback. */
 "stop_controller.transfer_show_earlier_departures_fmt" = "显示%d个更早的班次";
 
+/* Title of a transit stop in Shortcuts and Siri when the app has no name for it. The parameter is the stop's ID, such as 1_75403. */
+"stop_entity.fallback_title_fmt" = "车站 %@";
+
 /* Spoken suffix on the currently-focused route chip. */
 "stop_header.chip.highlighted" = "在地图上高亮显示";
 
@@ -1128,8 +1317,20 @@
 /* Title of the alert shown when the user tries to set a departure alarm but notifications are denied in Settings. */
 "stop_page.alarm_permission_denied.title" = "通知已关闭";
 
+/* Divider between departures you'd miss on a bike and ones you can still catch. %d is the bike time in minutes. */
+"stop_page.bike_divider_fmt" = "骑行%d分钟 — 以下班次可赶上";
+
+/* VoiceOver description of the bike divider. %d is bike minutes. */
+"stop_page.bike_divider_a11y_fmt" = "此分隔线以上的班次会在您骑行%d分钟到达车站之前离站";
+
+/* Bike chip on the header card. %d is the bike time in minutes. */
+"stop_page.bike_chip_minutes_fmt" = "骑行%d分钟";
+
 /* Shown in place of the minutes countdown when the vehicle is departing now */
 "stop_page.countdown.now" = "现在";
+
+/* Title of the prompt shown when the rider taps the stop header's walk or bike time and the region has a trip planner. */
+"stop_page.directions_prompt.title" = "要在应用内获取前往此车站的路线吗？";
 
 /* Empty state shown when every route at the stop is hidden by the user's filter. */
 "stop_page.empty.all_filtered" = "此车站的所有线路均已被筛选隐藏";
@@ -1163,6 +1364,7 @@
 
 /* VoiceOver label for a grouped route card */
 "stop_page.grouped.a11y_fmt" = "%1$@号公交线路，开往%2$@，下一班将在%3$d分钟后离站，%4$@。另外加载了%5$d个班次。";
+"stop_page.grouped.a11y_arrives_fmt" = "%1$@号公交线路，开往%2$@，下一班将在%3$d分钟后到站，%4$@。另外加载了%5$d个班次。";
 
 /* VoiceOver custom action on a grouped route card's header that cancels the alarm already set for the next departure. */
 "stop_page.grouped.a11y_remove_alarm" = "移除闹钟";
@@ -1170,17 +1372,18 @@
 /* VoiceOver custom action on a grouped route card's header that creates an alarm for the next departure. */
 "stop_page.grouped.a11y_set_alarm" = "设置闹钟";
 
-/* VoiceOver label for one expanded departure row inside a grouped route card: route, headsign, minutes, status. */
-"stop_page.grouped.expanded_row.a11y_fmt" = "%1$@号公交线路，开往%2$@，将在%3$d分钟后离站，%4$@";
 
 /* Caption above the upcoming-departure minute chips on a grouped route card at accessibility text sizes. */
 "stop_page.grouped.next_departures" = "后续班次";
 
+/* VoiceOver hint on the stop header's bike-time button when the region has a trip planner. */
+"stop_page.header.bike_trip_planner_a11y_hint" = "在应用内规划前往此车站的骑行路线。";
+
 /* VoiceOver hint on the header card's walk-time button. */
 "stop_page.header.walk_a11y_hint" = "打开前往此车站的步行导航。";
 
-/* Button in the trip panel to start a Live Activity for this departure on the Lock Screen and Dynamic Island */
-"stop_page.live_activity.track" = "追踪";
+/* VoiceOver hint on the stop header's walk-time button when the region has a trip planner. */
+"stop_page.header.walk_trip_planner_a11y_hint" = "在应用内规划前往此车站的步行路线。";
 
 /* Extends the departure time window */
 "stop_page.load_more" = "加载更多";
@@ -1194,17 +1397,9 @@
 /* Stop page mode toggle: grouped by route */
 "stop_page.mode.route" = "线路";
 
-/* Opens the full trip screen */
-"stop_page.panel.full_trip" = "查看完整车程";
 
-/* Trip panel live strip. %@ is the vehicle id. */
-"stop_page.panel.live_vehicle_fmt" = "实时 · 车辆%@";
 
-/* Body of the schedule-only notice; must communicate uncertainty (§4.1/§4.4) */
-"stop_page.panel.scheduled_body" = "尚未收到这辆车的实时信号——以下是它的计划到站时间。实际可能提前、延迟，甚至不来。";
 
-/* Title of the schedule-only notice */
-"stop_page.panel.scheduled_title" = "仅为计划时间";
 
 /* Button revealing recently departed trips. %d is the count. */
 "stop_page.past_toggle_fmt" = "已离站 · %d";
@@ -1218,11 +1413,56 @@
 /* VoiceOver label for the button revealing recently departed trips. %d is the count. Plural forms live in Localizable.stringsdict; the value above is only the not-found fallback. */
 "stop_page.past_toggle_show_a11y_fmt" = "显示%d个已离站的班次";
 
+/* Body of the alert shown when location is denied for the app. %@ is the app name. */
+"stop_page.proximity_alert.location_denied.message_fmt" = "若要接收接近提醒，请在“设置”中允许%@使用定位。";
+
+/* Title of the alert shown when the rider tries to set a nearby alert but location is denied for the app. */
+"stop_page.proximity_alert.location_denied.title" = "定位已关闭";
+
+/* Body of the alert shown when location access is restricted on the device. */
+"stop_page.proximity_alert.location_restricted.message" = "接近提醒需要定位权限，该权限可能受此设备上的某项设置限制。";
+
+/* Title of the alert shown when location may be limited by a device restriction the rider does not control. */
+"stop_page.proximity_alert.location_restricted.title" = "定位不可用";
+
+/* Body of the alert asking the rider to widen location access from While Using to Always. %@ is the app name. */
+"stop_page.proximity_alert.location_when_in_use.message_fmt" = "%@仅在打开时才能访问位置。接近提醒还需要后台位置权限，这样手机放在口袋里也能提醒你。";
+
+/* Title of the alert shown when the rider has granted location only While Using, which nearby alerts cannot work with. */
+"stop_page.proximity_alert.location_when_in_use.title" = "始终允许定位";
+
+/* Stop Location menu action that takes down the approach notification already set on this stop. */
+"stop_page.proximity_alert.menu.cancel" = "取消接近提醒";
+
+/* Stop Location menu action that sets a notification for when the rider approaches this stop. */
+"stop_page.proximity_alert.menu.set" = "接近时提醒我";
+
+/* Body of the alert shown when notifications are denied. %@ is the app name. */
+"stop_page.proximity_alert.notifications_denied.message_fmt" = "接近提醒以通知形式送达。请在“设置”中允许%@发送通知。";
+
+/* Title of the alert shown when the rider tries to set a nearby alert but notifications are denied in Settings. */
+"stop_page.proximity_alert.notifications_denied.title" = "通知已关闭";
+
+/* Button that opens the system Settings app so the rider can grant what a nearby alert needs. */
+"stop_page.proximity_alert.open_settings" = "打开“设置”";
+
+/* Body of the alert shown when the app is already monitoring every region iOS allows. %1$@ is the app name and %2$d is the number of regions. */
+"stop_page.proximity_alert.region_limit.message_fmt" = "iOS 只允许%1$@同时监视 %2$d 个地点。请先取消一个，再添加新的。";
+
+/* Title of the alert shown when iOS will not monitor another region because the app is already at its limit. */
+"stop_page.proximity_alert.region_limit.title" = "提醒过多";
+
+/* Toast confirming the rider's nearby alert for this stop was taken down. */
+"stop_page.proximity_alert.toast.cancelled" = "已取消接近提醒";
+
+/* Toast confirming a nearby alert was set. %@ is the name of the stop. */
+"stop_page.proximity_alert.toast.set_fmt" = "接近%@时我们会提醒你";
 /* VoiceOver suffix indicating a departure alarm is active */
 "stop_page.row.a11y_alarm_set" = "已设置闹钟";
 
 /* VoiceOver label for a departure row: route, headsign, minutes, status. */
 "stop_page.row.a11y_fmt" = "%1$@号公交线路，开往%2$@，将在%3$d分钟后离站，%4$@";
+"stop_page.row.a11y_arrives_fmt" = "%1$@号公交线路，开往%2$@，将在%3$d分钟后到站，%4$@";
 
 /* VoiceOver clause appended to a departure row that's upcoming but not reachable on foot before it leaves. */
 "stop_page.row.a11y_missed" = "很可能赶不上——此班次的离站时间早于您步行到车站所需的时间";
@@ -1235,6 +1475,9 @@
 
 /* Context menu action opening the full trip screen */
 "stop_page.row.show_trip" = "查看车程详情";
+
+/* VoiceOver label for the button that returns the stop page's departure list to the top. */
+"stop_page.scroll_to_top" = "滚动到顶部";
 
 /* Fallback title for a service alert that has no summary text. */
 "stop_page.service_alert_fallback" = "服务通知";
@@ -1269,14 +1512,8 @@
 /* Adherence label for a departure with no real-time signal; deliberately avoids claiming the bus is on time. */
 "stop_page.status.schedule_data" = "时刻表数据";
 
-/* Gap marker in the approach timeline. %d is the number of elided stops between the vehicle and the stops shown. Plural forms live in Localizable.stringsdict; the value above is only the not-found fallback. */
-"stop_page.timeline.skipped_stops_fmt" = "%d个车站";
 
-/* Vehicle-position marker. %d is minutes to the user's stop. */
-"stop_page.timeline.vehicle_here_fmt" = "车辆在此 · 还有%d分钟";
 
-/* Marker on the user's stop in the approach timeline */
-"stop_page.timeline.your_stop" = "· 您的车站";
 
 /* Walk chip on the header card. %d is the walk time in minutes. */
 "stop_page.walk_chip_minutes_fmt" = "步行%d分钟";
@@ -1362,6 +1599,15 @@
 /* Title of the row that will show stops that are near this one. */
 "stops_controller.nearby_stops" = "附近的车站";
 
+/* Section heading in the stop screen's More menu, over the Add Bookmark and Service Alerts items. */
+"stops_controller.menu.file_title" = "文件";
+
+/* Section heading in the stop screen's More menu, over the nearby stops, walking directions and trip planning items. */
+"stops_controller.menu.location_title" = "位置";
+
+/* Section heading in the stop screen's More menu, over the Report a Problem item. */
+"stops_controller.menu.help_title" = "帮助";
+
 /* Button that launches the 'Report Problem' UI. */
 "stops_controller.report_problem" = "报告一个问题";
 
@@ -1387,7 +1633,13 @@
 "survey_cell.next_button" = "下一步";
 
 /* Button that opens an external survey in the browser */
-"survey_cell.open_external_survey_button" = "打开问卷";
+"external_survey_button.open_survey" = "打开问卷";
+
+/* Button that opens an external feedback form in the browser */
+"external_survey_button.share_feedback" = "分享反馈";
+
+/* Button that opens an external sign-up form in the browser */
+"external_survey_button.sign_up" = "报名";
 
 /* Message shown when an external survey link cannot be opened */
 "survey_launcher.external_survey_error.message" = "无法打开此问卷链接。请稍后重试。";
@@ -1418,9 +1670,6 @@
 
 /* OK button on survey alerts */
 "survey_vc.ok_button" = "OK";
-
-/* Button that opens an external survey in the browser */
-"survey_vc.open_external_survey_button" = "打开问卷";
 
 /* Section header for survey questions */
 "survey_vc.questions_section_title" = "问题";
@@ -1461,11 +1710,26 @@
 /* Describes the previous trip of this vehicle. e.g. Starts as 10 - Downtown Seattle */
 "trip_details_controller.starts_as_fmt" = "以%@为名启程";
 
+/* Shown beside a Retry button when loading the trip's stop list failed. */
+"trip_page.stops_failed" = "无法加载此行程的站点。";
+
+/* Alert message when trip sharing fails. */
+"trip_sharing.share_error.message" = "准备车程链接时出错。请重试。";
+
+/* Alert title when trip sharing fails. */
+"trip_sharing.share_error.title" = "无法分享";
+
 /* A formatted string for displaying a vehicle's ID on the trip status map. e.g. 'Vehicle ID: 12345' */
 "trip_status_annotation.title_fmt" = "服务车辆编号：%@";
 
 /* Shown on the map when the user taps on a vehicle to indicate we don't know the vehicle's ID. */
 "trip_status_annotation.vehicle_id_unavailable" = "服务车辆编号未知";
+
+/* Voiceover text explaining that this stop is where the rider boarded the vehicle */
+"trip_stop.boarding_stop.accessibility_label" = "上车站";
+
+/* Voiceover text explaining that this stop is not part of the shared ride */
+"trip_stop.outside_ride.accessibility_label" = "不属于共享行程";
 
 /* Voiceover text explaining that this stop is the user's destination */
 "trip_stop.user_destination.accessibility_label" = "您的目的地";
@@ -1554,14 +1818,23 @@
 /* A label for blind or low-vision users on the UI element that describes how long it takes to walk to the stop. */
 "walk_time_view.accessibility_label" = "步行到车站的时间";
 
+/* A label for blind or low-vision users on the UI element that describes how long it takes to bike to the stop. */
+"walk_time_view.accessibility_label_bike" = "骑行到车站的时间";
+
 /* Accessibility string with placeholders for distance from stop, walking time to stop, and predicted arrival time. e.g. 1.2 miles. Takes 17 minutes to walk, arriving at 9:41 am */
 "walk_time_view.accessibility_value" = "距离车站%1$@。需要步行%2$@，可以在%3$@抵达车站。";
 
-/* Format string with placeholders for distance from stop, walking time to stop, and predicted arrival time. e.g. 1.2 miles, 17m: arriving at 09:41 A.M. */
-"walk_time_view.distance_time_fmt" = "距离车站%1$@，需要步行%2$@：预计在%3$@抵达车站。";
+/* Accessibility string with placeholders for distance from stop, biking time to stop, and predicted arrival time. e.g. 1.2 miles. Takes 6 minutes to bike, arriving at 9:41 am */
+"walk_time_view.accessibility_value_bike" = "距离车站%1$@。需要骑行%2$@，可以在%3$@抵达车站。";
+
+/* Format string with placeholders for distance from stop, travel time to stop, and predicted arrival time. e.g. 1.2 miles, 17m: arriving at 09:41 A.M. */
+"walk_time_view.distance_time_fmt" = "距离车站%1$@，需要%2$@：预计在%3$@抵达车站。";
 
 /* Accessibility label for the transfer arrival banner shown when navigating to a connecting stop. */
 "walk_time_view.transfer_accessibility_label" = "换乘到站时间";
+
+/* Spoken value for the map weather control. First %@ is the temperature, second is the weather condition. */
+"weather.button_accessibility_value_format" = "%1$@，%2$@";
 
 /* Format for the chance-of-rain percentage on the weather card header. %d is the integer percent. */
 "weather.chance_of_rain_format" = "降雨概率：%d%%";
@@ -1575,6 +1848,9 @@
 /* Bare percentage shown in the precipitation stat on the weather card. %d is the integer percent. */
 "weather.percent_format" = "%d%%";
 
+/* VoiceOver label for a weather card stat: {stat name}: {value}, e.g. Wind speed: 10 mph. Use the language's colon convention. */
+"weather.stat.a11y_fmt" = "%1$@：%2$@";
+
 /* VoiceOver label for the feels-like temperature stat on the weather card. */
 "weather.stat.feels_like" = "体感温度";
 
@@ -1583,3 +1859,565 @@
 
 /* VoiceOver label for the wind speed stat on the weather card. */
 "weather.stat.wind" = "风速";
+
+/* An explanation of the optional Umami analytics fields of a custom region. */
+"custom_region_builder_controller.analytics_section.explanation" = "可选。Umami 分析服务器的地址以及该地区的网站 ID。两个字段都填写后才会启用分析；留空则停用。";
+/* Title of the Analytics header. */
+"custom_region_builder_controller.analytics_section.header_title" = "数据分析";
+/* Placeholder for the Umami analytics website ID field. */
+"custom_region_builder_controller.analytics_section.website_id_placeholder" = "网站 ID";
+/* An explanation of the optional Obaco sidecar server URL field of a custom region. */
+"custom_region_builder_controller.sidecar_section.explanation" = "可选。Obaco（OneBusAway.co）辅助服务器的地址，它为闹钟、问卷等功能提供支持。默认为\"https://\"。";
+/* Title of the Sidecar Server header. */
+"custom_region_builder_controller.sidecar_section.header_title" = "辅助服务器";
+/* Placeholder for the optional comment field on the ghost bus form. */
+"ghost_bus_report.comment.placeholder" = "还有其他需要告诉我们的吗？（非必填）";
+/* Header over the trip summary on the ghost bus form. */
+"ghost_bus_report.context.header" = "报告内容";
+/* Label for the route being reported on the ghost bus form. */
+"ghost_bus_report.context.route" = "线路";
+/* Label for the scheduled time on the ghost bus form. */
+"ghost_bus_report.context.scheduled" = "计划时间";
+/* Label for the stop being reported on the ghost bus form. */
+"ghost_bus_report.context.stop" = "车站";
+/* Label for the vehicle ID on the ghost bus form. */
+"ghost_bus_report.context.vehicle" = "车辆";
+/* Error message when the server rejects a duplicate ghost bus report. */
+"ghost_bus_report.error.already_reported" = "本次车程似乎已从本设备报告过。";
+/* Footer under the submit button on the ghost bus form. Says who receives the report, and that location goes with it only when the rider shares it. %@ is the app name. Must not call the report anonymous: it carries the app's persistent user identifier. */
+"ghost_bus_report.footer_recipients_fmt" = "您的报告（以及您选择分享的位置）将发送给 %@ 和交通运营机构，以帮助改进服务。";
+/* Toggle on the ghost bus form for including the rider's location with the report. */
+"ghost_bus_report.share_location" = "分享我的定位";
+/* Submit button on the ghost bus form. */
+"ghost_bus_report.submit" = "提交报告";
+/* Title of the ghost bus report sheet. */
+"ghost_bus_report.title" = "报告未到站车辆";
+/* Header over the wait-duration picker on the ghost bus form. */
+"ghost_bus_report.wait.header" = "超过计划时间";
+/* Label for the wait-duration picker on the ghost bus form. */
+"ghost_bus_report.wait.label" = "您等了多久？";
+/* Wait-duration choice on the ghost bus form. */
+"ghost_bus_report.wait.minutes_fmt" = "%d分钟";
+/* Longest wait-duration choice on the ghost bus form. */
+"ghost_bus_report.wait.thirty_plus" = "30分钟以上";
+/* Map sheet row for the rental bikes layer */
+"map_layers.bikes" = "共享单车";
+/* Map sheet row for the transit stops layer */
+"map_layers.bus_stops" = "站点";
+/* Reason shown on a dimmed rental layer row when its server is unreachable */
+"map_layers.rental_unavailable" = "当前不可用";
+/* Shown on a rental vehicle's sheet when the vehicle has left the feed while the sheet was open, e.g. because someone else rented it */
+"map_layers.rental_gone" = "该车辆已不可用";
+/* Map sheet row for the rental scooters layer */
+"map_layers.scooters" = "共享滑板车";
+/* Map sheet row for the layer drawing a selected stop's routes and live vehicles. */
+"map_layers.stop_routes" = "线路与车辆";
+/* Map sheet row for the layer drawing the trip the rider is following. */
+"map_layers.trip_focus" = "追踪的车程";
+/* Basemap style: satellite imagery with labels */
+"map_sheet.basemap_hybrid" = "混合";
+/* Basemap style: satellite imagery */
+"map_sheet.basemap_satellite" = "卫星";
+/* Basemap style: standard street map */
+"map_sheet.basemap_standard" = "标准";
+/* Map sheet section for display options like Points of Interest */
+"map_sheet.display_group" = "地图显示";
+/* Map sheet row label for the rental minimum-range filter */
+"map_sheet.minimum_range" = "最低续航里程";
+/* Range filter menu option imposing no minimum range */
+"map_sheet.minimum_range_any" = "不限";
+/* Map sheet group header for non-transit mobility layers */
+"map_sheet.other_modes_group" = "其他出行方式";
+/* Button restoring the default map layer configuration */
+"map_sheet.reset" = "重置";
+/* Map sheet row, and the title of the screen it opens, listing the routes that serve the stops currently loaded on the map. */
+"map_sheet.routes_on_map" = "地图上的线路";
+/* Empty state on the Routes on Map screen when no stops with routes are loaded for the visible map area. */
+"map_sheet.routes_on_map_empty" = "地图的这一区域没有线路";
+/* Footer under the Routes on Map row explaining what picking a route does and how to undo it. */
+"map_sheet.routes_on_map_footer" = "只显示一条线路的走向和车站。关闭该线路即可重新看到所有车站。";
+/* VoiceOver hint on a route row in the Routes on Map list. */
+"map_sheet.routes_on_map_row_hint" = "在地图上只显示这条线路。";
+/* Empty state on the Routes on Map screen when the map is zoomed out too far to load stops. */
+"map_sheet.routes_on_map_zoomed_out" = "放大地图以查看服务此区域的线路";
+/* Map sheet toggle for Apple MapKit Points of Interest (restaurants, shops, etc.) */
+"map_sheet.shows_points_of_interest" = "兴趣点";
+/* Title of the Map sheet */
+"map_sheet.title" = "地图";
+/* Map sheet group header for transit layers */
+"map_sheet.transit_group" = "公共交通";
+/* Header for More-tab rows that open tutorial, phone, or text links configured by the agency. */
+"more_controller.agency_contact.header" = "联系与帮助";
+/* Opens a tel: link to call the transit agency from the More tab. */
+"more_controller.call_agency" = "致电交通局";
+/* Opens an sms: (or web) link for the agency's text information service. */
+"more_controller.text_agency" = "发送消息给交通局";
+/* Opens the agency's tutorial or user-manual page from the More tab. */
+"more_controller.tutorials" = "使用教程";
+/* Number of rental vehicles available at a station */
+"rental_annotation.vehicles_available_fmt" = "%d辆可用";
+/* Label for a rental vehicle's battery charge */
+"rental_detail.battery" = "电量";
+/* Label for the number of bikes available at a station */
+"rental_detail.bikes_available" = "可借单车";
+/* Label for the number of scooters available at a station that only holds scooters */
+"rental_detail.scooters_available" = "滑板车";
+/* Label for the number of rental vehicles available at a station whose vehicle types are mixed or unknown */
+"rental_detail.vehicles_available" = "可用";
+/* Label for the number of open docks at a station */
+"rental_detail.docks_available" = "空余车位";
+/* Label for whether dropping off a vehicle is currently allowed */
+"rental_detail.dropoff" = "还车";
+/* Value shown when pickup or dropoff is not currently allowed */
+"rental_detail.no" = "否";
+/* Shown for a rental vehicle or station that is not operative */
+"rental_detail.not_in_service" = "暂停服务";
+/* Button opening the rental operator's app or website */
+"rental_detail.open_in_fmt" = "在%@中打开";
+/* VoiceOver hint on the button opening a rental operator's app. %@ is the operator, e.g. Lime. */
+"rental_detail.open_in_hint_fmt" = "打开 %@；如未安装，则打开其 App Store 页面。";
+/* Button opening a rental operator's app when the operator's name is unknown */
+"rental_detail.open_rental_app" = "打开租车应用";
+/* Label for whether picking up a vehicle is currently allowed */
+"rental_detail.pickup" = "取车";
+/* Primary action on the rental vehicle sheet */
+"rental_detail.plan_trip" = "使用这辆车规划行程";
+/* Label for a rental vehicle's propulsion type */
+"rental_detail.propulsion" = "动力类型";
+/* Rental vehicle propulsion: combustion */
+"rental_detail.propulsion_combustion" = "燃油";
+/* Rental vehicle propulsion: electric */
+"rental_detail.propulsion_electric" = "电动";
+/* Rental vehicle propulsion: human-powered */
+"rental_detail.propulsion_human" = "人力";
+/* Label for a rental vehicle's estimated remaining range */
+"rental_detail.range" = "续航里程";
+/* Warning shown when rental data is older than the layer's freshness window */
+"rental_detail.stale_warning" = "此数据可能已过时。";
+/* Feed freshness line; the argument is a relative time like '12 seconds ago' */
+"rental_detail.updated_fmt" = "更新于 %@";
+/* Estimated walking time to a rental vehicle */
+"rental_detail.walk_time_fmt" = "步行%d分钟";
+/* Settings > Debug section > Name identifying this device for test push notifications */
+"settings_controller.debug_section.test_device_description" = "测试设备名称";
+/* Placeholder example for the test device name field */
+"settings_controller.debug_section.test_device_description.placeholder" = "例如：Aaron 的 iPhone";
+/* Settings > Map section > Show Apple MapKit Points of Interest */
+"settings_controller.map_section.shows_points_of_interest" = "兴趣点";
+/* Title of the message shown when the server has no stop at the requested ID. */
+"stop_controller.stop_not_found_title" = "未找到车站";
+/* VoiceOver announcement posted when the Departure Type filter changes which departures are visible. */
+"stop_page.a11y.filter_changed" = "班次筛选条件已更改";
+/* VoiceOver announcement when the Past disclosure is closed. */
+"stop_page.a11y.past_hidden" = "已离站的班次已隐藏";
+/* VoiceOver announcement when the Past disclosure is opened. %d is the count. Plural forms live in Localizable.stringsdict; the value above is only the not-found fallback. */
+"stop_page.a11y.past_shown_fmt" = "正在显示%d个已离站的班次";
+/* VoiceOver announcement posted when a rider-initiated refresh finishes and the departure times have been updated. */
+"stop_page.a11y.refreshed" = "班次信息已更新";
+/* VoiceOver announcement posted when the route filter is turned off. */
+"stop_page.a11y.routes_all" = "正在显示所有线路";
+/* VoiceOver announcement posted when the route filter is turned on. */
+"stop_page.a11y.routes_filtered" = "正在显示已筛选的线路";
+/* VoiceOver-only heading that anchors the departures list in the Headings rotor, and the title of the rotor itself; not shown on screen. */
+"stop_page.departures_heading" = "班次";
+/* Empty state shown when the server has no stop at the requested ID and there is no bookmark to repair — the rider arrived from a deep link, a search result or a map pin. */
+"stop_page.empty.stop_not_found" = "此车站已不在交通局的数据中，可能已被移动或删除。";
+/* VoiceOver clause appended to a departure row that matches the rider's inbound transfer trip. */
+"stop_page.row.a11y_transfer_trip" = "您的换乘车程";
+/* Bottom-toolbar item on the Stop page that opens the Add Bookmark screen. */
+"stop_page.toolbar.bookmark" = "加入书签";
+/* Stop Location menu action that opens the trip planner with this stop as the origin. */
+"stops_controller.directions_from_here" = "从这里出发";
+/* Stop Location menu action that opens the trip planner with this stop as the destination. */
+"stops_controller.directions_to_here" = "到这里去";
+/* Header above the trip's full stop list. %d is the number of stops. Plural forms live in Localizable.stringsdict; this value is only the not-found fallback. */
+"trip_page.all_stops_fmt" = "全部%d个车站";
+/* VoiceOver label for the trip page's back button. %@ is the name of the screen it goes back to, usually a stop, e.g. 'Back to 3rd Ave & Pike St'. */
+"trip_page.back_to_fmt" = "返回%@";
+/* Short caption on the trip page button that bookmarks this trip. Keep it to one short word: it shares a row with three other buttons. */
+"trip_page.bookmark" = "书签";
+/* VoiceOver label for the trip page's header card: route, headsign, minutes until arrival, status. */
+"trip_page.card.a11y_fmt" = "%1$@号公交线路，开往%2$@，将在%3$d分钟后到站，%4$@";
+/* VoiceOver label for the trip page's header card when the trip was reached without a stop, so there is no arrival time. */
+"trip_page.card.a11y_no_arrival_fmt" = "%1$@号公交线路，开往%2$@";
+/* Trip card line shown in place of the vehicle's distance once its next stop is the rider's stop. */
+"trip_page.card.arriving_at_stop" = "即将到达您的车站";
+/* VoiceOver version of the trip card's distance line. %1$@ is a distance like '1.2 mi', %2$d the number of stops in between. Plural forms live in Localizable.stringsdict; this value is only the not-found fallback. */
+"trip_page.card.distance_stops_a11y_fmt" = "距离%1$@，还有%2$d站";
+/* Trip card line: how far the vehicle is from the rider's stop. %1$@ is a distance like '1.2 mi', %2$d the number of stops in between. Plural forms live in Localizable.stringsdict; this value is only the not-found fallback. */
+"trip_page.card.distance_stops_fmt" = "距离%1$@ · %2$d站";
+/* Confirmation shown after a ghost bus report (a scheduled bus that never came) is submitted. */
+"trip_page.ghost_bus_report_sent" = "谢谢！您的报告已发送。";
+/* Error shown when a ghost bus report can't be submitted because the region's Obaco service is unreachable. */
+"trip_page.ghost_bus_report_unavailable" = "由于报告服务当前不可用，此报告无法提交。请稍后重试。";
+/* Trip page button that starts a Live Activity, which follows this trip's arrival on the Lock Screen and Dynamic Island. */
+"trip_page.live_activity_start" = "在锁定屏幕上追踪";
+/* Shown in place of the trip page's Track on Lock Screen button once a Live Activity is running for this trip. */
+"trip_page.live_activity_tracking" = "正在锁定屏幕上追踪";
+/* How stale the vehicle's reported position is. %@ is a relative time like '12s ago'. */
+"trip_page.position_updated_fmt" = "位置更新于 %@";
+/* Trip page button cancelling this trip's arrival alarm. */
+"trip_page.remove_alarm" = "移除闹钟";
+/* Trip page menu item for reporting a scheduled vehicle that never arrived. */
+"trip_page.report_ghost_bus" = "报告未到站车辆";
+/* Short caption on the trip page button opening the route's schedule. Keep it to one short word: it shares a row with three other buttons. */
+"trip_page.schedule" = "时刻表";
+/* VoiceOver clause on a stop the vehicle has already served. */
+"trip_page.stop_list.a11y_passed" = "已过站";
+/* VoiceOver label for a collapsed run of stops between the vehicle and the rider's stop, e.g. '5 stops before your stop'. Plural forms live in Localizable.stringsdict; this value is only the not-found fallback. */
+"trip_page.stop_list.a11y_run_approaching_fmt" = "距您的车站还有%d站";
+/* VoiceOver label for a collapsed run of stops the vehicle has passed, e.g. '12 passed stops'. Plural forms live in Localizable.stringsdict; this value is only the not-found fallback. */
+"trip_page.stop_list.a11y_run_passed_fmt" = "已过%d站";
+/* VoiceOver time range of a collapsed run of stops. %1$@ is the first stop's time, %2$@ the last's, e.g. '9:52 AM to 10:22 AM'. */
+"trip_page.stop_list.a11y_run_time_range_fmt" = "%1$@至%2$@";
+/* VoiceOver clause on the final stop of the trip. */
+"trip_page.stop_list.a11y_terminal" = "终点站";
+/* VoiceOver clause on the stop the vehicle is currently at. */
+"trip_page.stop_list.a11y_vehicle_here" = "车辆已到站";
+/* VoiceOver clause on the rider's own stop. */
+"trip_page.stop_list.a11y_your_stop" = "您的车站";
+/* Count in a collapsed run of stops on the trip page, e.g. '12 stops'. %d is the number of stops. Plural forms live in Localizable.stringsdict; this value is only the not-found fallback. */
+"trip_page.stop_list.run_count_fmt" = "%d站";
+/* A collapsed run of stops on the trip page: %1$@ is the count ('12 stops'), %2$@ the time range ('9:52 AM – 10:22 AM'). */
+"trip_page.stop_list.run_summary_fmt" = "%1$@ • %2$@";
+/* Time range of a collapsed run of stops on the trip page. %1$@ is the first stop's time, %2$@ the last's. */
+"trip_page.stop_list.run_time_range_fmt" = "%1$@ – %2$@";
+/* Header above the trip's stop list before the stops are known. */
+"trip_page.stops_header" = "车站";
+/* Shown while the trip's stop list is being fetched. */
+"trip_page.stops_loading" = "正在加载本次车程的车站……";
+/* Shown when the trip's details came back with no stops in them. */
+"trip_page.stops_unavailable" = "本次车程的车站列表当前不可用。";
+/* Identifies a vehicle by its ID on the trip page, e.g. 'Vehicle 6821'. */
+"trip_page.vehicle_label_fmt" = "车辆 %@";
+/* VoiceOver label for the trip page button opening the route's schedule. */
+"trip_page.view_schedule" = "查看时刻表";
+/* Shown when the vehicle is arriving at the user's stop */
+"trip_progress.arriving_now" = "即将到站";
+/* Estimated time of arrival to the user's stop. e.g. ~8 min to your stop */
+"trip_progress.eta_to_stop_fmt" = "距您的车站约%d分钟";
+/* Shown when the vehicle has already passed the user's destination stop */
+"trip_progress.passed_your_stop" = "已过您的车站";
+/* Shows the current stop position. e.g. Stop 5 of 18 */
+"trip_progress.stop_count_fmt" = "第%1$d站，共%2$d站";
+/* Voiceover text explaining that the vehicle has already passed this stop */
+"trip_stop.passed_stop.accessibility_label" = "已过的车站";
+
+/* Accessibility label for the mic button that starts voice search. */
+"search_sheet.voice_search.start" = "语音搜索";
+/* Accessibility label for the mic button while voice search is listening. */
+"search_sheet.voice_search.stop" = "停止收听";
+/* Shown when the user denies speech/mic permission for voice search. */
+"voice_search.permission_denied" = "语音搜索需要麦克风或语音识别权限。";
+/* Shown when SFSpeechRecognizer cannot run. */
+"voice_search.unavailable" = "此设备不支持语音搜索。";
+
+/* Action on the agency action sheet that opens the agency's on-demand services */
+"agencies_controller.on_demand_services" = "按需服务";
+
+/* Reason shown on a dimmed on-demand zones layer row when the server is unreachable */
+"map_layers.on_demand_unavailable" = "当前不可用";
+
+/* Map sheet row for the on-demand (dial-a-ride) service zones layer */
+"map_layers.on_demand_zones" = "按需服务区域";
+
+/* Shown in place of a time window when a service runs all hours of its service days */
+"on_demand.all_hours" = "全部服务时段";
+
+/* Button that opens the agency's online booking page */
+"on_demand.book_online" = "在线预约";
+
+/* Booking deadline line. %1$@ is a formatted date and time (e.g. 'Today at 5:00 PM'), %2$@ is the travel date (e.g. 'Wed, Mar 11') */
+"on_demand.book_by_fmt" = "请在%1$@前预约%2$@的行程";
+
+/* Shown when every upcoming service day's booking deadline has passed */
+"on_demand.booking_closed" = "近期服务日的预约已截止";
+
+/* Section header on the on-demand service page with the booking deadline, phone number and links */
+"on_demand.booking_header" = "如何预约";
+
+/* Shown when the next service day cannot be booked yet. %@ is a formatted date and time */
+"on_demand.booking_opens_fmt" = "预约将于%@开放";
+
+/* Button that dials the booking phone number. %@ is the phone number as published */
+"on_demand.call_fmt" = "致电 %@";
+
+/* Title of the list of an agency's on-demand services */
+"on_demand.list_title" = "按需服务";
+
+/* Button that opens the agency's information page about the service */
+"on_demand.more_info" = "更多信息";
+
+/* Shown when a service can be booked at ride time */
+"on_demand.no_notice_required" = "无需提前预约";
+
+/* Empty state of the list of an agency's on-demand services */
+"on_demand.no_services" = "暂无按需服务";
+
+/* Header of the stop page card listing dial-a-ride services that cover this stop */
+"on_demand.section_title" = "按需服务";
+
+/* Section header on the on-demand service page listing service days and hours */
+"on_demand.when_header" = "服务时间";
+
+/* Eyebrow above the service name on the zone card */
+"on_demand.card.eyebrow" = "此处提供按需服务";
+
+/* Primary button on the zone card that dials the booking phone number */
+"on_demand.card.call_to_book" = "致电预约";
+
+/* Secondary button on the zone card that opens the service page */
+"on_demand.card.details" = "详情";
+
+/* Footer of the zone card; plural forms in Localizable.stringsdict */
+"on_demand.card.more_services" = "此处还有%d项服务";
+
+/* Card and picker status while running. %@ is the end time */
+"on_demand.status.open_until" = "开放中 · 至%@";
+
+/* Service page status while running. %@ is the end time */
+"on_demand.status.open_now_until" = "现在开放 · 至%@";
+
+/* Status of a service that runs continuously */
+"on_demand.status.open" = "运营中";
+
+/* Status of a service not running yet. %@ is a relative day and time */
+"on_demand.status.opens" = "%@开放";
+
+/* Short booking deadline. %@ is a relative day and time */
+"on_demand.status.book_by" = "%@前预约";
+
+/* Status of a service with no upcoming service day */
+"on_demand.status.closed" = "已关闭";
+
+/* Tag for a service booked the same day */
+"on_demand.tag.same_day" = "当天预约";
+
+/* Tag for a service booked a day or more ahead */
+"on_demand.tag.advance" = "提前预约";
+
+/* Tag for a service booked at ride time */
+"on_demand.tag.no_notice" = "无需提前预约";
+
+/* Tag for a service that requires rider certification */
+"on_demand.tag.eligibility" = "需要资格认证";
+
+/* Bar title when the rider is inside a zone that is open now */
+"on_demand.bar.inside" = "此处可上车";
+
+/* Bar title near a zone edge. %@ is a distance */
+"on_demand.bar.inside_near_edge.north" = "区域内 · 北侧边界%@";
+
+/* Bar title near a zone edge. %@ is a distance */
+"on_demand.bar.inside_near_edge.northeast" = "区域内 · 东北侧边界%@";
+
+/* Bar title near a zone edge. %@ is a distance */
+"on_demand.bar.inside_near_edge.east" = "区域内 · 东侧边界%@";
+
+/* Bar title near a zone edge. %@ is a distance */
+"on_demand.bar.inside_near_edge.southeast" = "区域内 · 东南侧边界%@";
+
+/* Bar title near a zone edge. %@ is a distance */
+"on_demand.bar.inside_near_edge.south" = "区域内 · 南侧边界%@";
+
+/* Bar title near a zone edge. %@ is a distance */
+"on_demand.bar.inside_near_edge.southwest" = "区域内 · 西南侧边界%@";
+
+/* Bar title near a zone edge. %@ is a distance */
+"on_demand.bar.inside_near_edge.west" = "区域内 · 西侧边界%@";
+
+/* Bar title near a zone edge. %@ is a distance */
+"on_demand.bar.inside_near_edge.northwest" = "区域内 · 西北侧边界%@";
+
+/* Bar title outside a zone. %@ is a distance */
+"on_demand.bar.outside.north" = "距区域北侧%@";
+
+/* Bar title outside a zone. %@ is a distance */
+"on_demand.bar.outside.northeast" = "距区域东北侧%@";
+
+/* Bar title outside a zone. %@ is a distance */
+"on_demand.bar.outside.east" = "距区域东侧%@";
+
+/* Bar title outside a zone. %@ is a distance */
+"on_demand.bar.outside.southeast" = "距区域东南侧%@";
+
+/* Bar title outside a zone. %@ is a distance */
+"on_demand.bar.outside.south" = "距区域南侧%@";
+
+/* Bar title outside a zone. %@ is a distance */
+"on_demand.bar.outside.southwest" = "距区域西南侧%@";
+
+/* Bar title outside a zone. %@ is a distance */
+"on_demand.bar.outside.west" = "距区域西侧%@";
+
+/* Bar title outside a zone. %@ is a distance */
+"on_demand.bar.outside.northwest" = "距区域西北侧%@";
+
+/* Page badge on the bar thumbnail. %1$d is the page, %2$d the count */
+"on_demand.bar.badge" = "%1$d/%2$d";
+
+/* Accessibility label of the bar's chevron when outside a zone */
+"on_demand.bar.a11y.show_edge" = "显示最近的区域边界";
+
+/* Accessibility label of the bar's thumbnail button */
+"on_demand.bar.a11y.zoom_out" = "显示整个区域";
+
+/* Accessibility label of the bar's phone button. %@ is the service name */
+"on_demand.bar.a11y.call" = "致电%@";
+
+/* Accessibility action on the bar that opens the picker */
+"on_demand.bar.a11y.more_services" = "此处所有服务";
+
+/* Picker title for the services containing the point; plural forms in Localizable.stringsdict */
+"on_demand.picker.title" = "此处有%d项服务";
+
+/* Picker title for every matched service; plural forms in Localizable.stringsdict */
+"on_demand.picker.title_nearby" = "附近有%d项服务";
+
+/* Picker subtitle. %@ is a locality */
+"on_demand.picker.subtitle_location" = "%@ · 您的位置";
+
+/* Picker subtitle. %@ is a locality */
+"on_demand.picker.subtitle_center" = "%@ · 地图中心";
+
+/* Picker subtitle. %@ is a locality */
+"on_demand.picker.subtitle_point" = "%@ · 已选地点";
+
+/* Picker subtitle when no locality is known */
+"on_demand.picker.your_location" = "您的位置";
+
+/* Picker subtitle when no locality is known */
+"on_demand.picker.map_center" = "地图中心";
+
+/* Picker subtitle when no locality is known */
+"on_demand.picker.selected_place" = "已选地点";
+
+/* Footer of the overlap picker */
+"on_demand.picker.footer" = "按最早可预约时间排序。";
+
+/* Location row when the rider's location is inside the zone */
+"on_demand.detail.location_inside" = "您的位置在此区域内";
+
+/* Location row when the rider's location is outside the zone */
+"on_demand.detail.location_outside" = "您的位置在此区域外";
+
+/* Location row for the map centre */
+"on_demand.detail.center_inside" = "地图中心在此区域内";
+
+/* Location row for the map centre */
+"on_demand.detail.center_outside" = "地图中心在此区域外";
+
+/* Location row for a dropped pin or planner endpoint */
+"on_demand.detail.point_inside" = "此地点在此区域内";
+
+/* Location row for a dropped pin or planner endpoint */
+"on_demand.detail.point_outside" = "此地点在此区域外";
+
+/* Sub line of the location row. %@ is a locality */
+"on_demand.detail.location_sub" = "在%@可上车";
+
+/* Service area sub line when the rider is inside. %@ is the area names */
+"on_demand.detail.includes_location" = "%@ — 包含您的位置";
+
+/* Section header listing service and drop-off areas */
+"on_demand.detail.where_header" = "位置";
+
+/* Row title for the pickup areas */
+"on_demand.detail.service_area" = "服务区域";
+
+/* Row title for the drop-off areas */
+"on_demand.detail.drop_off" = "下车地点";
+
+/* Fallback for unnamed areas; plural forms in Localizable.stringsdict */
+"on_demand.detail.zone_count" = "%d个区域";
+
+/* Hours column for weekdays without service */
+"on_demand.detail.no_service" = "无服务";
+
+/* Row that opens the service's url */
+"on_demand.detail.open_agency_website" = "打开机构网站";
+
+/* Header of the planner fallback card */
+"on_demand.planner.section" = "按需服务选项";
+
+/* First meta line of a qualifying planner fallback service */
+"on_demand.planner.serves_both" = "覆盖两个地点";
+
+/* Caption under the planner fallback cards */
+"on_demand.planner.caption" = "需要资格认证或仅覆盖单侧地点的服务已隐藏。";
+
+/* Link under the planner fallback caption */
+"on_demand.planner.show_all" = "在区域选择器中查看全部";
+
+/* Planner fallback when nothing qualifies and nothing is hidden */
+"on_demand.planner.empty" = "没有按需服务同时覆盖这两个地点。";
+
+/* Caption noting availability is evaluated at the current time */
+"on_demand.planner.status_now" = "显示的是当前状态。";
+
+/* Row under the planner fallback card when more than one service serves both locations; opens the picker with them. Plural forms live in Localizable.stringsdict; the value is only the not-found fallback. */
+"on_demand.planner.more_serving_both" = "还有%d项服务覆盖两个地点";
+
+/* Map item line when the place is inside a zone. %@ is the service name */
+"on_demand.address.inside" = "位于%@内";
+
+/* Map item line when the place is inside several zones; plural forms in Localizable.stringsdict */
+"on_demand.address.inside_more" = "位于%1$@及另外%2$d项";
+
+/* Map item line when the place is outside the nearest zone. %@ is the service name */
+"on_demand.address.outside" = "位于%@外";
+
+/* Layers sheet group header */
+"map_layers.group.transit" = "公交";
+
+/* Layers sheet group header */
+"map_layers.group.rentals" = "租赁";
+
+/* Layer tile subtitle when enabled */
+"map_layers.state.on" = "开启";
+
+/* Layer tile subtitle when disabled */
+"map_layers.state.off" = "关闭";
+
+/* Label before the rental range chips */
+"map_layers.min_range" = "最低续航";
+
+/* Button on an error notice that opens a page explaining the problem. */
+"error_toast.details" = "详细信息";
+
+/* Button that starts an email to the app's support team about an error. */
+"problem_details.contact_support" = "联系支持团队";
+
+/* Button that copies the technical details of an error to the clipboard. */
+"problem_details.copy_details" = "复制详细信息";
+
+/* Subject of a support email about an error. The first value is the app name, the second a short reference code like 7F3K-Q2. */
+"problem_details.email_subject_fmt" = "%1$@问题报告 %2$@";
+
+/* Section header above technical details meant for the support team. */
+"problem_details.for_support" = "供支持团队参考";
+
+
+/* Row label: app version, iOS version and device model. */
+"problem_details.row.app" = "App";
+
+/* Row label: the technical error code. */
+"problem_details.row.error" = "错误";
+
+/* Row label: a short reference code for this error that the rider can quote to support. Abbreviation of 'Reference'. */
+"problem_details.row.reference" = "参考号";
+
+/* Row label: the transit region in use. */
+"problem_details.row.region" = "地区";
+
+/* Row label: the web address of the request that failed. */
+"problem_details.row.request" = "请求";
+
+/* Row label: when the error happened. */
+"problem_details.row.time" = "时间";
+
+/* Footer under the technical details on the problem details page. */
+"problem_details.support_footer" = "此页面的截屏包含支持团队所需的全部信息，不含任何个人信息或您当前的位置信息。";
+
+/* Title of the page that explains an error in detail. */
+"problem_details.title" = "问题详情";

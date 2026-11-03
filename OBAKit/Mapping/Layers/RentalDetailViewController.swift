@@ -17,21 +17,25 @@ import UIKit
 /// Actions a rental detail surface can trigger. Implemented by `MapViewController`,
 /// which owns navigation and the trip planner.
 @MainActor protocol RentalLayerActionsDelegate: AnyObject {
-    /// "Plan a trip using this bike": open the trip planner with a via point at
-    /// the vehicle's coordinate and a rental mode preselected.
+    /// Whether the trip planner can open for the current region at all. False
+    /// hides "Plan a trip using this vehicle" rather than offering a button that
+    /// dismisses the sheet and then does nothing.
+    var rentalLayerOffersTripPlanning: Bool { get }
+
+    /// "Plan a trip using this vehicle": open the trip planner starting at the
+    /// vehicle, in bike-rental mode. See `RentalTripPlan`.
     func rentalLayer(planTripUsing rental: VehicleRental)
 
-    /// Open a rental deep link, falling back to the operator's web page or App
-    /// Store listing when the primary URI fails to open (e.g. a synthesized
-    /// custom scheme with no app installed). `networkID` is for analytics.
-    func rentalLayer(open url: URL, webFallback: URL?, networkID: String?)
+    /// Open a rental deep link through `RentalLinkOpener`, which owns the
+    /// fallbacks for when no app claims it. `networkID` is for analytics.
+    func rentalLayer(open target: RentalDeepLink.Target, networkID: String?)
 }
 
 // MARK: - Detail Sheet
 
 /// Bottom sheet for a single rental vehicle or station — same visual family as
 /// the stop page, so vehicles and stops behave identically.
-final class RentalDetailViewController: UIHostingController<RentalDetailView> {
+final class RentalDetailViewController: SheetHostingController<RentalDetailView> {
 
     init(
         rental: VehicleRental,
@@ -40,20 +44,27 @@ final class RentalDetailViewController: UIHostingController<RentalDetailView> {
         userLocation: CLLocation? = nil,
         actionsDelegate: RentalLayerActionsDelegate? = nil
     ) {
-        weak var delegate = actionsDelegate
+        weak let delegate = actionsDelegate
         super.init(rootView: RentalDetailView(
             rental: rental,
             fetchedAt: fetchedAt,
             staleAfter: staleAfter,
             userLocation: userLocation,
-            onPlanTrip: { delegate?.rentalLayer(planTripUsing: $0) },
-            onOpenURL: { delegate?.rentalLayer(open: $0, webFallback: $1, networkID: $2) }
+            onPlanTrip: Self.planTripAction(for: actionsDelegate),
+            onOpenLink: { delegate?.rentalLayer(open: $0, networkID: $1) }
         ))
     }
 
     @available(*, unavailable)
     @MainActor required dynamic init?(coder aDecoder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    /// Nil — hiding the button — when the delegate is gone or says the planner
+    /// cannot open. Shared with the cluster list, whose rows open this same sheet.
+    static func planTripAction(for actionsDelegate: RentalLayerActionsDelegate?) -> ((VehicleRental) -> Void)? {
+        guard let actionsDelegate, actionsDelegate.rentalLayerOffersTripPlanning else { return nil }
+        return { [weak actionsDelegate] in actionsDelegate?.rentalLayer(planTripUsing: $0) }
     }
 }
 
@@ -63,8 +74,11 @@ struct RentalDetailView: View {
     /// The layer's declared trust window; past it, the footer flags the data as stale.
     let staleAfter: Duration?
     let userLocation: CLLocation?
-    var onPlanTrip: (VehicleRental) -> Void
-    var onOpenURL: (URL, URL?, String?) -> Void
+    /// Nil when the region cannot open a trip planner, on either surface. The button is
+    /// hidden rather than disabled: a dead primary action is worse than none.
+    var onPlanTrip: ((VehicleRental) -> Void)?
+    /// Opens the deep-link target; the `String?` is the network id, for analytics.
+    var onOpenLink: (RentalDeepLink.Target, String?) -> Void
 
     /// Reverse-geocoded on selection — never in bulk. Falls back to a plain
     /// distance string while loading or when geocoding fails.
@@ -75,33 +89,35 @@ struct RentalDetailView: View {
             header
             statsRow
 
-            Button {
-                onPlanTrip(rental)
-            } label: {
-                Label(
-                    OBALoc("rental_detail.plan_trip", value: "Plan a trip using this bike", comment: "Primary action on the rental vehicle sheet"),
-                    systemImage: "arrow.triangle.turn.up.right.diamond.fill"
-                )
-                .font(.headline)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(Color(uiColor: .rentalPurple))
-
-            if let deepLink = deepLinkURL {
+            // Scooters too are hidden: OTP's bike-rental mode cannot rent one, so the
+            // planner would answer with a walk past the very vehicle on screen.
+            if let onPlanTrip, RentalTripPlan.canPlan(using: rental) {
                 Button {
-                    // Re-resolve at tap time: the URL carries a `generated_at`
-                    // timestamp, and a sheet left open would otherwise send a
-                    // stale one that the operator's app may reject.
-                    let target = RentalDeepLink.target(for: rental) ?? deepLink.target
-                    onOpenURL(target.url, target.storeFallback, rental.rentalNetwork?.networkId)
+                    onPlanTrip(rental)
                 } label: {
-                    Text(deepLink.title)
+                    Label(
+                        OBALoc("rental_detail.plan_trip", value: "Plan a trip using this vehicle", comment: "Primary action on the rental vehicle sheet"),
+                        systemImage: "arrow.triangle.turn.up.right.diamond.fill"
+                    )
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color(uiColor: .rentalPurple))
+            }
+
+            if let deepLink = openLink {
+                Button {
+                    onOpenLink(deepLink.target, rental.rentalNetwork?.networkId)
+                } label: {
+                    // The glyph says "this leaves the app", which the title alone does not.
+                    Label(deepLink.copy.title, systemImage: "arrow.up.forward.app")
                         .font(.subheadline.weight(.medium))
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
+                .accessibilityHint(Text(deepLink.copy.hint ?? ""))
             }
 
             attributionFooter
@@ -159,13 +175,15 @@ struct RentalDetailView: View {
                 if let range = vehicle.fuel?.range {
                     stat(
                         value: RentalFormat.distanceFormatter.string(fromDistance: CLLocationDistance(range)),
-                        label: OBALoc("rental_detail.range", value: "Range", comment: "Label for a rental vehicle's estimated remaining range")
+                        label: RentalFormat.rangeLabel,
+                        spokenValue: RentalFormat.spokenRangeText(range)
                     )
                 }
                 if let percent = vehicle.fuel?.percent {
                     stat(
                         value: RentalFormat.batteryText(percent),
-                        label: OBALoc("rental_detail.battery", value: "Battery", comment: "Label for a rental vehicle's battery charge")
+                        label: RentalFormat.batteryLabel,
+                        spokenValue: RentalFormat.spokenBatteryText(percent)
                     )
                 }
                 if let propulsion = vehicle.vehicleType?.propulsionType {
@@ -180,10 +198,12 @@ struct RentalDetailView: View {
                 if let vehicles = station.vehiclesAvailableCount {
                     stat(
                         value: String(vehicles),
-                        label: OBALoc("rental_detail.bikes_available", value: "Bikes", comment: "Label for the number of bikes available at a station")
+                        label: RentalFormat.stationVehiclesLabel(for: station)
                     )
                 }
-                if let docks = station.docksAvailableCount {
+                // `displayableDocksCount`, never the raw count: a virtual station
+                // reports a sentinel like 999999 that is not a number of docks.
+                if let docks = station.displayableDocksCount {
                     stat(
                         value: String(docks),
                         label: OBALoc("rental_detail.docks_available", value: "Docks", comment: "Label for the number of open docks at a station")
@@ -205,26 +225,24 @@ struct RentalDetailView: View {
         }
     }
 
-    private func stat(value: String, label: String) -> some View {
+    /// Visually value-over-label; spoken label-then-value ("Range, 3.4 miles"),
+    /// which is the order a listener needs to know what the number means.
+    private func stat(value: String, label: String, spokenValue: String? = nil) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(value).font(.headline)
             Text(label).font(.caption).foregroundStyle(.secondary)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(label))
+        .accessibilityValue(Text(spokenValue ?? value))
     }
 
     /// Where the "Open in <operator>" button goes. Feed-published URIs win;
     /// otherwise `RentalDeepLink` synthesizes one from the operator's scheme.
     /// Nil hides the button.
-    ///
-    /// Carries the `Target` itself rather than flattening it, so the tap-time
-    /// re-resolution above can swap in a fresher one without renaming fields.
-    private var deepLinkURL: (title: String, target: RentalDeepLink.Target)? {
+    private var openLink: (copy: RentalFormat.OpenButtonCopy, target: RentalDeepLink.Target)? {
         guard let target = RentalDeepLink.target(for: rental) else { return nil }
-
-        let template = OBALoc("rental_detail.open_in_fmt", value: "Open in %@", comment: "Button opening the rental operator's app or website")
-        let name = target.operatorName ?? target.url.host() ?? "app"
-
-        return (String(format: template, name), target)
+        return (RentalFormat.openButtonCopy(for: target), target)
     }
 
     /// Re-rendered every 30s so a sheet left open keeps telling the truth, and the
@@ -260,7 +278,7 @@ struct RentalDetailView: View {
         case "ELECTRIC", "ELECTRIC_ASSIST":
             return OBALoc("rental_detail.propulsion_electric", value: "Electric", comment: "Rental vehicle propulsion: electric")
         case "HUMAN":
-            return OBALoc("rental_detail.propulsion_human", value: "Pedal", comment: "Rental vehicle propulsion: human-powered")
+            return OBALoc("rental_detail.propulsion_human", value: "Human-powered", comment: "Rental vehicle propulsion: human-powered")
         case "COMBUSTION":
             return OBALoc("rental_detail.propulsion_combustion", value: "Gas", comment: "Rental vehicle propulsion: combustion")
         default:
@@ -279,7 +297,7 @@ struct RentalDetailView: View {
 
 /// "N vehicles here": dockless vehicles genuinely pile up at corners, and a list
 /// is the honest representation — never a forced zoom.
-final class RentalClusterListViewController: UIHostingController<RentalClusterListView> {
+final class RentalClusterListViewController: SheetHostingController<RentalClusterListView> {
 
     init(
         rentals: [VehicleRental],
@@ -288,14 +306,14 @@ final class RentalClusterListViewController: UIHostingController<RentalClusterLi
         userLocation: CLLocation? = nil,
         actionsDelegate: RentalLayerActionsDelegate? = nil
     ) {
-        weak var delegate = actionsDelegate
+        weak let delegate = actionsDelegate
         super.init(rootView: RentalClusterListView(
             rentals: rentals,
             fetchedAt: fetchedAt,
             staleAfter: staleAfter,
             userLocation: userLocation,
-            onPlanTrip: { delegate?.rentalLayer(planTripUsing: $0) },
-            onOpenURL: { delegate?.rentalLayer(open: $0, webFallback: $1, networkID: $2) }
+            onPlanTrip: RentalDetailViewController.planTripAction(for: actionsDelegate),
+            onOpenLink: { delegate?.rentalLayer(open: $0, networkID: $1) }
         ))
     }
 
@@ -310,8 +328,20 @@ struct RentalClusterListView: View {
     let fetchedAt: Date?
     let staleAfter: Duration?
     let userLocation: CLLocation?
-    var onPlanTrip: (VehicleRental) -> Void
-    var onOpenURL: (URL, URL?, String?) -> Void
+    var onPlanTrip: ((VehicleRental) -> Void)?
+    /// Where tapping a row goes, when the host wants to own that.
+    ///
+    /// Nil on the UIKit surface, where this view is a modally-presented hosting
+    /// controller and the `selectedRental` sheet below is the only way to drill in.
+    ///
+    /// The map panel passes a closure instead, because that sheet is not the panel's to
+    /// present: `StackedSheetLayer` already attaches a `.sheet` to this same content for
+    /// the next stacked route, and SwiftUI allows one presentation per view — "Currently,
+    /// only presenting a single sheet is supported." A rental sheet opened here would hold
+    /// that slot, and the trip planner pushed from inside it would silently queue until the
+    /// rider dismissed the rental by hand.
+    var onSelectRental: ((VehicleRental) -> Void)?
+    var onOpenLink: (RentalDeepLink.Target, String?) -> Void
 
     @State private var selectedRental: VehicleRental?
 
@@ -319,14 +349,27 @@ struct RentalClusterListView: View {
         NavigationStack {
             List(rentals) { rental in
                 Button {
-                    selectedRental = rental
+                    if let onSelectRental {
+                        onSelectRental(rental)
+                    } else {
+                        selectedRental = rental
+                    }
                 } label: {
                     row(for: rental)
                 }
                 .buttonStyle(.plain)
             }
             .listStyle(.plain)
-            .navigationTitle(String(format: OBALoc("rental_cluster.title_fmt", value: "%d vehicles here", comment: "Title of the sheet listing the members of a rental cluster"), rentals.count))
+            // `localizedStringWithFormat`, not `String(format:)`: the latter expands
+            // `%#@count@` but always resolves it against the root plural rule, so the
+            // `few`/`many`/`zero`/`two` forms in the ar, pl, and ru entries could never
+            // be selected. Same trap as `SearchResultsSheetView`.
+            //
+            // Clusters are formed from two or more, but this view gets whatever
+            // `rentals(withIDs:)` still finds in `visibleRentals` — members that left
+            // the feed are filtered out and the caller only guards `isEmpty`. So `1`
+            // reaches here, which is the count this key exists to get right.
+            .navigationTitle(String.localizedStringWithFormat(OBALoc("rental_cluster.title_fmt", value: "%d vehicles here", comment: "Title of the sheet listing the members of a rental cluster. Plural forms live in Localizable.stringsdict; the value above is only the not-found fallback."), rentals.count))
             .navigationBarTitleDisplayMode(.inline)
             .sheet(item: $selectedRental) { rental in
                 RentalDetailView(
@@ -335,9 +378,10 @@ struct RentalClusterListView: View {
                     staleAfter: staleAfter,
                     userLocation: userLocation,
                     onPlanTrip: onPlanTrip,
-                    onOpenURL: onOpenURL
+                    onOpenLink: onOpenLink
                 )
                 .presentationDetents([.medium])
+                .sheetKeepsBarsHorizontal()
             }
         }
     }
@@ -359,11 +403,24 @@ struct RentalClusterListView: View {
             }
 
             Spacer()
-            Image(systemName: "chevron.right")
+            Image(systemName: "chevron.forward")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }
         .contentShape(Rectangle())
+        // The drawn detail line is a bare "17 miles · 13 min walk"; spoken, the
+        // figure needs its name and the dot shouldn't be read at all. Same words
+        // as the map marker, so the list and the pin it came from agree.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(rowAccessibilityLabel(for: rental)))
+    }
+
+    private func rowAccessibilityLabel(for rental: VehicleRental) -> String {
+        var parts = [RentalFormat.markerAccessibilityLabel(for: rental)]
+        if let walkTime = RentalFormat.walkTimeText(from: userLocation, to: rental.coordinate) {
+            parts.append(walkTime)
+        }
+        return parts.joined(separator: ", ")
     }
 
     /// Range (battery only when the feed provides it) and walk estimate.

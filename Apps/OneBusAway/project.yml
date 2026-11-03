@@ -12,8 +12,9 @@ targets:
         name: App
         group: OneBusAway
         # gpx files are simulated-location fixtures for schemes, not app
-        # resources; keep them out of the bundle.
-        excludes: ["gpx_files"]
+        # resources; keep them out of the bundle. watch.yml is project wiring,
+        # not a resource.
+        excludes: ["gpx_files", "watch.yml"]
       - path: Apps/Shared/CommonClient
         name: Common
         group: OneBusAway
@@ -36,10 +37,9 @@ targets:
         NSSupportsLiveActivitiesFrequentUpdates: true
         CFBundleDisplayName: OneBusAway
         CFBundleURLTypes: [{CFBundleTypeRole: "Editor", CFBundleURLIconFile: "", CFBundleURLName: "onebusaway", CFBundleURLSchemes: ["onebusaway"]}]
+        # fb, twitter and comgooglemaps come from Apps/Shared/app_shared.yml;
+        # XcodeGen concatenates the two lists, so repeating them here duplicated them.
         LSApplicationQueriesSchemes:
-          - fb
-          - twitter
-          - comgooglemaps
           - fb313213768708402HART
           - org.sdmts.riderapp.compassmobile.payments
           - org.sdmts.pronto
@@ -107,7 +107,8 @@ include:
   - path: Apps/Shared/info_plist.yml
   - path: Apps/Shared/analytics_fx_config.yml
   - path: Apps/Shared/push_config.yml
-  - path: OBAKitCore/project.yml
-  - path: OBAKit/project.yml
   - path: OBAKitTests/project.yml
   - path: OBAWidget/project.yml
+  - path: Apps/OneBusAway/watch.yml
+    relativePaths: false
+    enable: ${OBA_WATCH}

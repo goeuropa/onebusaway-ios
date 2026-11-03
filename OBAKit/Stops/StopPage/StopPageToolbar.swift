@@ -47,6 +47,13 @@ struct StopPageToolbar: View {
     let onServiceAlerts: () -> Void
     let onNearbyStops: () -> Void
     let onWalkingDirections: () -> Void
+    /// Non-nil when OTP trip planning is available for the current region.
+    let onDirectionsToHere: (() -> Void)?
+    let onDirectionsFromHere: (() -> Void)?
+    /// Drives the nearby-alert item's title and glyph, so a rider reads whether
+    /// one is armed off the menu rather than by tapping to find out.
+    let isProximityAlertActive: Bool
+    let onToggleProximityAlert: () -> Void
     let onReportProblem: () -> Void
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -102,12 +109,20 @@ struct StopPageToolbar: View {
         .disabled(isRefreshing)
     }
 
+    /// One of two mutually exclusive route choices. The checkmark is what a
+    /// sighted rider reads the selection from — the trait alone leaves two
+    /// identical plain rows — and matches the Departure Type menu below and the
+    /// UIKit `filterMenu()` both surfaces port from.
     @ViewBuilder
     private func filterChoice(title: String, isSelected: Bool, filtered: Bool) -> some View {
         Button {
             onSetListFiltered(filtered)
         } label: {
-            Text(title)
+            if isSelected {
+                Label(title, systemImage: "checkmark")
+            } else {
+                Text(title)
+            }
         }
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
@@ -126,6 +141,11 @@ struct StopPageToolbar: View {
                     filtered: true
                 )
             } label: {
+                // Route filter only. Unlike the pushed presentation — where this
+                // glyph sits on the bar button that *contains* both filters, and so
+                // fills for either — here the two are sibling submenus. Filling this
+                // one for a Departure Type change would point at the wrong filter,
+                // so each submenu carries its own state instead.
                 Label(
                     Strings.filter,
                     systemImage: isFilterOn ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle"
@@ -149,7 +169,7 @@ struct StopPageToolbar: View {
             } label: {
                 Label(
                     OBALoc("stop_controller.arrival_filter.menu_title", value: "Departure Type", comment: "Title for the menu that filters departures by data type"),
-                    systemImage: "antenna.radiowaves.left.and.right"
+                    systemImage: Icons.departureTypeSymbolName(isActive: activeDepartureFilter != .all)
                 )
             }
 
@@ -165,6 +185,27 @@ struct StopPageToolbar: View {
                 Button(action: onWalkingDirections) {
                     Label(OBALoc("stops_controller.walking_directions", value: "Walking Directions", comment: "Button that launches a maps app with walking directions to this stop"), systemImage: "figure.walk")
                 }
+                if let onDirectionsToHere {
+                    Button(action: onDirectionsToHere) {
+                        Label(StopTripPlannerAction.directionsToHereTitle, systemImage: "arrow.triangle.turn.up.right.diamond")
+                    }
+                }
+                if let onDirectionsFromHere {
+                    Button(action: onDirectionsFromHere) {
+                        Label(StopTripPlannerAction.directionsFromHereTitle, systemImage: "arrow.triangle.turn.up.right.diamond.fill")
+                    }
+                }
+                // Last in the Location group, and never disabled. Its siblings
+                // are all "getting to this stop"; this is "tell me when I've got
+                // there". A rider who can't use it yet needs to be told why,
+                // which is what the tap does — a greyed row would reproduce the
+                // silent no-op the authorization step exists to prevent.
+                Button(action: onToggleProximityAlert) {
+                    Label(
+                        ProximityAlertMenuItem.title(isActive: isProximityAlertActive),
+                        systemImage: Icons.proximityAlertSymbolName(isActive: isProximityAlertActive)
+                    )
+                }
             }
 
             Section {
@@ -174,13 +215,16 @@ struct StopPageToolbar: View {
             }
         } label: {
             // Forgoes the pressed dimming the real buttons get; a menu opening over
-            // the tap is its own feedback. See `FrostedCapsuleBackground` for why a
+            // the tap is its own feedback. See `FrostedBackground` for why a
             // `Menu` can't take the button style.
             label(title: Strings.more, systemImage: "ellipsis")
                 .foregroundStyle(Color(uiColor: .label))
-                .modifier(FrostedCapsuleBackground())
+                .modifier(FrostedBackground())
         }
         .accessibilityLabel(Strings.more)
+        .accessibilityShowsLargeContentViewer {
+            Label(Strings.more, systemImage: "ellipsis")
+        }
     }
 
     // MARK: - Item Building
@@ -198,6 +242,11 @@ struct StopPageToolbar: View {
         .buttonStyle(FrostedActionButtonStyle())
         .accessibilityLabel(accessibilityLabel ?? title)
         .accessibilityValue(accessibilityValue ?? "")
+        // The glyph is a fixed 18pt and the caption shrinks to fit its slot, so
+        // at large text sizes a long-press shows the item enlarged instead.
+        .accessibilityShowsLargeContentViewer {
+            Label(title, systemImage: systemImage)
+        }
     }
 
     /// Icon above label, the shape the mockup calls for and the shape a tab-bar-adjacent strip
@@ -247,7 +296,10 @@ struct StopPageToolbar: View {
             hasServiceAlerts: true,
             onRefresh: {}, onSetListFiltered: { _ in }, onSetDepartureFilter: { _ in },
             onBookmark: {}, onSchedule: {},
-            onServiceAlerts: {}, onNearbyStops: {}, onWalkingDirections: {}, onReportProblem: {}
+            onServiceAlerts: {}, onNearbyStops: {}, onWalkingDirections: {},
+            onDirectionsToHere: nil, onDirectionsFromHere: nil,
+            isProximityAlertActive: false, onToggleProximityAlert: {},
+            onReportProblem: {}
         )
     }
 }

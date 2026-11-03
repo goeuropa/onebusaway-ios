@@ -22,6 +22,9 @@ public extension Notification.Name {
 
     /// Posted whenever proximity alerts are added or deleted in the UserDataStore.
     static let proximityAlertsDidChange = Notification.Name("UserDataStore.proximityAlertsDidChange")
+
+    /// Posted whenever bookmark groups are added, updated, reordered, or deleted in the UserDataStore.
+    static let bookmarkGroupsDidChange = Notification.Name("UserDataStore.bookmarkGroupsDidChange")
 }
 
 /// `UserDataStore` is a repository for the user's data, such as bookmarks, and recent stops.
@@ -40,6 +43,20 @@ public protocol UserDataStore: NSObjectProtocol {
     /// (thin route-color bar + label-colored text). Surfaced in
     /// Settings > Accessibility.
     var stopUIReducedColors: Bool { get set }
+
+    /// Whether the new stop and trip screens use tighter spacing. Opt-in,
+    /// off by default (#1278). Surfaced in Settings > Accessibility.
+    var stopTripCompactMode: Bool { get set }
+
+    /// Whether opening a stop from a trip applies transfer-relative times
+    /// and the "Arriving at XX:XX via ###" banner. Default `true` so existing
+    /// riders keep current behavior; Settings > Arrival & Departure Display can turn it off.
+    var showTransferArrivalBanner: Bool { get set }
+
+    /// Whether arrival/departure clock times use the transit region's time
+    /// zone (with a short offset badge when the phone differs). Default
+    /// `false` — opt-in per #1102 / #332; Settings > Arrival & Departure Display.
+    var showRegionTimeZone: Bool { get set }
 
     // MARK: - Bookmark Groups
 
@@ -95,6 +112,36 @@ public protocol UserDataStore: NSObjectProtocol {
     ///   - index: The sort order or index of the bookmark in its group. Pass in `Int.max` to append to the end.
     func add(_ bookmark: Bookmark, to group: BookmarkGroup?, index: Int)
 
+    /// Sets whether `bookmark` is pinned to the top of the home sheet's bookmarks
+    /// section, and persists the change.
+    ///
+    /// Separate from `add(_:to:)` on purpose. `bookmarks` is computed over
+    /// `UserDefaults` — its getter decodes fresh instances — so mutating a
+    /// `Bookmark` in memory doesn't persist, and routing the write through
+    /// `add(_:to:)` would re-append the bookmark and renumber `sortOrder` within
+    /// its group, quietly moving it to the bottom of the Bookmarks tab. This
+    /// updates in place and leaves group membership and `sortOrder` alone.
+    ///
+    /// Posts `.bookmarksDidChange`. No-op if `bookmark` isn't in the store.
+    /// - Parameters:
+    ///   - isPinned: The new pinned state.
+    ///   - bookmark: The `Bookmark` to update.
+    func setPinned(_ isPinned: Bool, for bookmark: Bookmark)
+
+    /// Saves `bookmark`'s edited fields (its name, favorite flag and so on) over
+    /// the stored copy with the same `id`, without moving it.
+    ///
+    /// Use this rather than `add(_:to:)` for an edit that doesn't change the
+    /// bookmark's group: `add` re-appends it and renumbers `sortOrder`, moving it
+    /// to the bottom of its group (see `setPinned(_:for:)`). The stored
+    /// `groupID` and `sortOrder` win, and are copied back onto `bookmark`; every
+    /// other field is taken from `bookmark`, so pass a copy fetched just before
+    /// editing (`findBookmark(id:)`), or a stale one will undo newer changes
+    /// such as `setPinned`.
+    ///
+    /// Posts `.bookmarksDidChange`. No-op if `bookmark` isn't in the store.
+    func update(_ bookmark: Bookmark)
+
     /// Deletes the specified `Bookmark` from the `UserDataStore`.
     /// - Parameter bookmark: The `Bookmark` to delete.
     func delete(bookmark: Bookmark)
@@ -128,6 +175,10 @@ public protocol UserDataStore: NSObjectProtocol {
 
     /// A list of recently-viewed stops
     var recentStops: [Stop] { get }
+
+    /// Recent stops belonging to `region`, most-recently-used first.
+    /// Returns `[]` when `region` is nil.
+    func recentStops(in region: Region?) -> [Stop]
 
     /// Add a `Stop` to the list of recently-viewed `Stop`s
     ///
@@ -304,12 +355,45 @@ public protocol UserDataStore: NSObjectProtocol {
     /// The source of the walking speed value (manual preset or HealthKit).
     var walkingSpeedSource: WalkingSpeedSource { get set }
 
+    // MARK: - Bike Mode
+
+    /// Whether Bike Mode is enabled. When `true`, walk-time-to-stop calculations
+    /// app-wide should use `bikeSpeedMetersPerSecond` instead of `walkingSpeedMetersPerSecond`.
+    var bikeModeEnabled: Bool { get set }
+
+    /// The user's effective cycling speed in meters per second (HealthKit-synced value,
+    /// or `BikeSpeed.defaultMetersPerSecond` when no sync has ever succeeded).
+    var bikeSpeedMetersPerSecond: Double { get set }
+
+    /// The source of the bike speed value (fixed fallback constant or HealthKit).
+    var bikeSpeedSource: BikeSpeedSource { get set }
+
     // MARK: - Alarm Lead Time
 
     /// The alarm lead time in minutes for one-tap alarms on the Stop page.
     /// Adjustable per-alarm afterward.
     var defaultAlarmLeadTimeMinutes: Int { get }
 
+}
+
+extension UserDataStore {
+    /// Drops `context` when the rider has turned the transfer banner off, so
+    /// the stop page shows ordinary clock times and the full departure list.
+    /// Lives on the protocol extension rather than the `@objc` protocol:
+    /// `TransferContext` is a Swift struct and cannot appear in an ObjC requirement.
+    public func displayedTransferContext(_ context: TransferContext?) -> TransferContext? {
+        showTransferArrivalBanner ? context : nil
+    }
+}
+
+public extension UserDataStore {
+    /// The velocity (m/s) that all walk-time-to-stop calculations should use.
+    /// Bike Mode, when enabled, takes priority over the walking speed. This is the
+    /// single place call sites should read from instead of branching on
+    /// `bikeModeEnabled` themselves.
+    var effectiveTravelVelocityMetersPerSecond: Double {
+        bikeModeEnabled ? bikeSpeedMetersPerSecond : walkingSpeedMetersPerSecond
+    }
 }
 
 // MARK: - Survey Tracking Data Models
@@ -404,8 +488,14 @@ public class UserDefaultsStore: NSObject, UserDataStore, StopPreferencesStore {
         static let alwaysShowSurveysOnStops = "UserDataStore.alwaysShowSurveysOnStops"
         static let walkingSpeedMetersPerSecond = "UserDataStore.walkingSpeedMetersPerSecond"
         static let walkingSpeedSource = "UserDataStore.walkingSpeedSource"
+        static let bikeModeEnabled = "UserDataStore.bikeModeEnabled"
+        static let bikeSpeedMetersPerSecond = "UserDataStore.bikeSpeedMetersPerSecond"
+        static let bikeSpeedSource = "UserDataStore.bikeSpeedSource"
         static let defaultAlarmLeadTimeMinutes = "UserDataStore.defaultAlarmLeadTimeMinutes"
         static let stopUIReducedColors = UserDefaultsStore.stopUIReducedColorsKey
+        static let stopTripCompactMode = UserDefaultsStore.stopTripCompactModeKey
+        static let showTransferArrivalBanner = UserDefaultsStore.showTransferArrivalBannerKey
+        static let showRegionTimeZone = UserDefaultsStore.showRegionTimeZoneKey
     }
 
     /// The defaults key backing `stopUIReducedColors`, public so the stop
@@ -416,14 +506,31 @@ public class UserDefaultsStore: NSObject, UserDataStore, StopPreferencesStore {
     /// docs/superpowers/specs/2026-07-20-stop-ui-accessibility-design.md §3.
     public static let stopUIReducedColorsKey = "stopUIReducedColors"
 
+    /// Defaults key for `stopTripCompactMode`. Dot-free so `@AppStorage`
+    /// on the stop and trip pages can observe it; see `stopUIReducedColorsKey`.
+    public static let stopTripCompactModeKey = "stopTripCompactMode"
+
+    /// Defaults key for `showTransferArrivalBanner`. Dot-free so a future
+    /// `@AppStorage` reader can observe it; see `stopUIReducedColorsKey`.
+    public static let showTransferArrivalBannerKey = "showTransferArrivalBanner"
+
+    /// Defaults key for `showRegionTimeZone`. Dot-free; see `stopUIReducedColorsKey`.
+    public static let showRegionTimeZoneKey = "showRegionTimeZone"
+
     public init(userDefaults: UserDefaults) {
         self.userDefaults = userDefaults
 
         self.userDefaults.register(defaults: [
             UserDefaultsKeys.debugMode: false,
             UserDefaultsKeys.stopUIReducedColors: false,
+            UserDefaultsKeys.stopTripCompactMode: false,
+            UserDefaultsKeys.showTransferArrivalBanner: true,
+            UserDefaultsKeys.showRegionTimeZone: false,
             UserDefaultsKeys.walkingSpeedMetersPerSecond: WalkingSpeed.defaultMetersPerSecond,
-            UserDefaultsKeys.walkingSpeedSource: WalkingSpeedSource.manual.rawValue
+            UserDefaultsKeys.walkingSpeedSource: WalkingSpeedSource.manual.rawValue,
+            UserDefaultsKeys.bikeModeEnabled: false,
+            UserDefaultsKeys.bikeSpeedMetersPerSecond: BikeSpeed.defaultMetersPerSecond,
+            UserDefaultsKeys.bikeSpeedSource: BikeSpeedSource.manual.rawValue
         ])
 
         // The alarm lead time used to be user-configurable; the setting has been removed
@@ -453,6 +560,39 @@ public class UserDefaultsStore: NSObject, UserDataStore, StopPreferencesStore {
         }
     }
 
+    // MARK: - Compact Stop / Trip Mode
+
+    public var stopTripCompactMode: Bool {
+        get {
+            return userDefaults.bool(forKey: UserDefaultsKeys.stopTripCompactMode)
+        }
+        set {
+            userDefaults.set(newValue, forKey: UserDefaultsKeys.stopTripCompactMode)
+        }
+    }
+
+    // MARK: - Transfer Arrival Banner
+
+    public var showTransferArrivalBanner: Bool {
+        get {
+            return userDefaults.bool(forKey: UserDefaultsKeys.showTransferArrivalBanner)
+        }
+        set {
+            userDefaults.set(newValue, forKey: UserDefaultsKeys.showTransferArrivalBanner)
+        }
+    }
+
+    // MARK: - Region Time Zone Display
+
+    public var showRegionTimeZone: Bool {
+        get {
+            return userDefaults.bool(forKey: UserDefaultsKeys.showRegionTimeZone)
+        }
+        set {
+            userDefaults.set(newValue, forKey: UserDefaultsKeys.showRegionTimeZone)
+        }
+    }
+
     // MARK: - Bookmark Groups
 
     public var bookmarkGroups: [BookmarkGroup] {
@@ -462,17 +602,20 @@ public class UserDefaultsStore: NSObject, UserDataStore, StopPreferencesStore {
         }
         set {
             try! encodeUserDefaultsObjects(newValue, key: UserDefaultsKeys.bookmarkGroups) // swiftlint:disable:this force_try
+            NotificationCenter.default.post(name: .bookmarkGroupsDidChange, object: self)
         }
     }
 
     public func upsert(bookmarkGroup: BookmarkGroup) {
-        if let index = findGroupIndex(id: bookmarkGroup.id) {
-            bookmarkGroups.remove(at: index)
-            bookmarkGroups.insert(bookmarkGroup, at: index)
+        var groups = bookmarkGroups
+        if let index = groups.firstIndex(where: { $0.id == bookmarkGroup.id }) {
+            groups.remove(at: index)
+            groups.insert(bookmarkGroup, at: index)
         }
         else {
-            bookmarkGroups.append(bookmarkGroup)
+            groups.append(bookmarkGroup)
         }
+        bookmarkGroups = groups
     }
 
     public func deleteGroup(_ group: BookmarkGroup) {
@@ -481,8 +624,10 @@ public class UserDefaultsStore: NSObject, UserDataStore, StopPreferencesStore {
             add(bm, to: nil, index: .max)
         }
 
-        if let index = findGroupIndex(id: group.id) {
-            bookmarkGroups.remove(at: index)
+        var groups = bookmarkGroups
+        if let index = groups.firstIndex(where: { $0.id == group.id }) {
+            groups.remove(at: index)
+            bookmarkGroups = groups
         }
     }
 
@@ -570,60 +715,80 @@ public class UserDefaultsStore: NSObject, UserDataStore, StopPreferencesStore {
 
         bookmark.groupID = group?.id ?? nil
 
-        if let existing = findBookmark(id: bookmark.id) {
-            delete(bookmark: existing, reorderGroup: true)
-        }
+        // Decode once, mutate in memory, encode once. The previous loop called
+        // `bookmarks` get/set (full plist round-trip) per row, which froze the
+        // UI for several seconds with a dozen bookmarks. See #548.
+        var all = bookmarks.filter { $0.id != bookmark.id }
+        let newGroupID = bookmark.groupID
 
-        var newGroupBookmarks = bookmarksInGroup(group)
-        newGroupBookmarks.insert(bookmark, at: min(index, newGroupBookmarks.count))
-
-        for (idx, elt) in newGroupBookmarks.enumerated() {
-            if let existing = findBookmark(id: elt.id) {
-                delete(bookmark: existing, reorderGroup: false)
-            }
-
+        var destination = all
+            .filter { $0.groupID == newGroupID }
+            .sorted { $0.sortOrder < $1.sortOrder }
+        destination.insert(bookmark, at: min(index, destination.count))
+        for (idx, elt) in destination.enumerated() {
             elt.sortOrder = idx
-
-            bookmarks.append(elt)
         }
 
-        if oldGroupID != bookmark.groupID {
-            let oldGroupBookmarks = bookmarksInGroup(findGroup(id: oldGroupID))
-            for (idx, elt) in oldGroupBookmarks.enumerated() {
-                if let existing = findBookmark(id: elt.id) {
-                    delete(bookmark: existing, reorderGroup: false)
-                }
+        let destinationIDs = Set(destination.map(\.id))
+        all.removeAll { destinationIDs.contains($0.id) }
+        all.append(contentsOf: destination)
 
+        if oldGroupID != newGroupID {
+            let remaining = all
+                .filter { $0.groupID == oldGroupID }
+                .sorted { $0.sortOrder < $1.sortOrder }
+            for (idx, elt) in remaining.enumerated() {
                 elt.sortOrder = idx
-                bookmarks.append(elt)
             }
         }
+
+        bookmarks = all
+        NotificationCenter.default.post(name: .bookmarksDidChange, object: self)
+    }
+
+    public func setPinned(_ isPinned: Bool, for bookmark: Bookmark) {
+        let allBookmarks = bookmarks
+        guard let index = allBookmarks.firstIndex(where: { $0.id == bookmark.id }) else { return }
+        guard allBookmarks[index].isPinned != isPinned else { return }
+
+        allBookmarks[index].isPinned = isPinned
+        // Keep the caller's instance in step. `bookmarks`' getter decodes fresh
+        // objects, so the one the caller is holding is a different instance than
+        // the one just written — without this its `isPinned` would still read
+        // stale to whoever kept a reference.
+        bookmark.isPinned = isPinned
+        bookmarks = allBookmarks
+
+        NotificationCenter.default.post(name: .bookmarksDidChange, object: self)
+    }
+
+    public func update(_ bookmark: Bookmark) {
+        var all = bookmarks
+        guard let index = all.firstIndex(where: { $0.id == bookmark.id }) else { return }
+
+        bookmark.groupID = all[index].groupID
+        bookmark.sortOrder = all[index].sortOrder
+        all[index] = bookmark
+        bookmarks = all
 
         NotificationCenter.default.post(name: .bookmarksDidChange, object: self)
     }
 
     public func delete(bookmark: Bookmark) {
-        delete(bookmark: bookmark, reorderGroup: true)
-        NotificationCenter.default.post(name: .bookmarksDidChange, object: self)
-    }
+        var all = bookmarks
+        guard let stored = all.first(where: { $0.id == bookmark.id }) else { return }
+        let groupID = stored.groupID
+        all.removeAll { $0.id == bookmark.id }
 
-    private func delete(bookmark: Bookmark, reorderGroup: Bool) {
-        let bookmark = findBookmark(id: bookmark.id, defaultValue: bookmark)
-        guard let index = bookmarks.firstIndex(of: bookmark) else { return }
-
-        let groupID = bookmark.groupID
-
-        bookmarks.remove(at: index)
-
-        if reorderGroup {
-            for (idx, elt) in bookmarksInGroup(findGroup(id: groupID)).enumerated() {
-                if let existing = findBookmark(id: elt.id) {
-                    delete(bookmark: existing, reorderGroup: false)
-                }
-                elt.sortOrder = idx
-                bookmarks.append(elt)
-            }
+        let remaining = all
+            .filter { $0.groupID == groupID }
+            .sorted { $0.sortOrder < $1.sortOrder }
+        for (idx, elt) in remaining.enumerated() {
+            elt.sortOrder = idx
         }
+
+        bookmarks = all
+        NotificationCenter.default.post(name: .bookmarksDidChange, object: self)
     }
 
     /// Finds the specified `Bookmark` by `id` or returns the `defaultValue`. Useful for upserts and the like.
@@ -677,9 +842,17 @@ public class UserDefaultsStore: NSObject, UserDataStore, StopPreferencesStore {
 
         updateBookmarksWithStop(stop, region: region)
 
-        if let idx = recentStops.firstIndex(of: stop) {
-            recentStops.remove(at: idx)
-        }
+        // A stop's identity is its `id`. `firstIndex(of:)` would compare every
+        // field `Stop.isEqual` covers — route list, name, code, coordinates — so
+        // the same stop re-fetched after any server-side change wouldn't match
+        // the stored copy and would be appended a second time under one id.
+        // Bookmarks already identify by id (see `add(_:to:index:)`, which looks
+        // up `findBookmark(id:)`); recents now do too.
+        //
+        // `removeAll` rather than removing the first match: a store that already
+        // accumulated duplicates before this fix heals the next time the user
+        // views that stop, instead of shedding one copy per visit.
+        recentStops.removeAll { $0.id == stop.id }
         recentStops.insert(stop, at: 0)
 
         if recentStops.count > maximumRecentStopsCount {
@@ -694,10 +867,12 @@ public class UserDefaultsStore: NSObject, UserDataStore, StopPreferencesStore {
         recentStops.removeAll()
     }
 
+    /// Identifies the stop by `id`, like `addRecentStop`. The instance a list
+    /// hands back on swipe-to-delete was decoded from the store, but the caller
+    /// may equally pass a freshly-fetched copy whose fields have since drifted;
+    /// matching on full equality would silently delete nothing.
     public func delete(recentStop: Stop) {
-        if let idx = recentStops.firstIndex(of: recentStop) {
-            recentStops.remove(at: idx)
-        }
+        recentStops.removeAll { $0.id == recentStop.id }
     }
 
     public var maximumRecentStopsCount: Int {
@@ -707,6 +882,21 @@ public class UserDefaultsStore: NSObject, UserDataStore, StopPreferencesStore {
     public func findRecentStops(matching searchText: String) -> [Stop] {
         let cleanedText = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         return recentStops.filter { $0.matchesQuery(cleanedText) }
+    }
+
+    public func recentStops(in region: Region?) -> [Stop] {
+        guard let region = region else { return [] }
+
+        // Deduped by `id`, keeping the most recent occurrence. `addRecentStop`
+        // prevents duplicates going in, but stores written before it identified
+        // stops by id can already hold two entries for one stop — and callers
+        // key their list rows off `id`, where a repeat is undefined behaviour
+        // rather than a cosmetic issue. This makes such a store render
+        // correctly now instead of only after the user revisits each stop.
+        var seen = Set<StopID>()
+        return recentStops
+            .filter { $0.regionIdentifier == region.regionIdentifier }
+            .filter { seen.insert($0.id).inserted }
     }
 
     // MARK: - Recent Map Items
@@ -1117,6 +1307,36 @@ public class UserDefaultsStore: NSObject, UserDataStore, StopPreferencesStore {
         }
         set {
             userDefaults.set(newValue.rawValue, forKey: UserDefaultsKeys.walkingSpeedSource)
+        }
+    }
+
+    // MARK: - Bike Mode
+
+    public var bikeModeEnabled: Bool {
+        get { userDefaults.bool(forKey: UserDefaultsKeys.bikeModeEnabled) }
+        set { userDefaults.set(newValue, forKey: UserDefaultsKeys.bikeModeEnabled) }
+    }
+
+    /// Reads clamp into BikeSpeed.validRange. Stored values below the 2.0 floor
+    /// from the earlier 1.0 range read back as 2.0 without changing the stored
+    /// value or the source. The next successful HealthKit sync overwrites them.
+    public var bikeSpeedMetersPerSecond: Double {
+        get {
+            let stored = userDefaults.double(forKey: UserDefaultsKeys.bikeSpeedMetersPerSecond)
+            return min(max(stored, BikeSpeed.validRange.lowerBound), BikeSpeed.validRange.upperBound)
+        }
+        set {
+            let clamped = min(max(newValue, BikeSpeed.validRange.lowerBound), BikeSpeed.validRange.upperBound)
+            userDefaults.set(clamped, forKey: UserDefaultsKeys.bikeSpeedMetersPerSecond)
+        }
+    }
+
+    public var bikeSpeedSource: BikeSpeedSource {
+        get {
+            BikeSpeedSource(rawValue: userDefaults.integer(forKey: UserDefaultsKeys.bikeSpeedSource)) ?? .manual
+        }
+        set {
+            userDefaults.set(newValue.rawValue, forKey: UserDefaultsKeys.bikeSpeedSource)
         }
     }
 

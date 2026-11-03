@@ -17,20 +17,35 @@ import UIKit
 /// terminal, and the vehicle.
 ///
 /// Presentation-driven like `StopRouteFocusMapLayer` — begun when the trip page
-/// is pushed and ended when it goes away — so `viewportDidChange` is a no-op and
-/// there is no zoom gate. A trip spans far more than a stop-density viewport, and
-/// culling it by visible-rect height would hide the line exactly when it is most
-/// useful.
+/// is pushed and ended when it goes away — so `viewportDidChange` only lays the
+/// direction chevrons out again for the new zoom, and there is no zoom gate. A trip
+/// spans far more than a stop-density viewport, and culling it by visible-rect
+/// height would hide the line exactly when it is most useful.
 @MainActor
 final class TripFocusMapLayer: NSObject, MapLayer {
 
-    private enum Style {
-        static let coreWidth: CGFloat = 6
-        static let casingExtraWidth: CGFloat = 4
+    /// Shared with the map panel's `tripFocusMapContent` and the trip screen's
+    /// `MinimalStopAnnotationView`, so a trip is drawn the same on every map.
+    enum Style {
+        /// The half still ahead: wide enough to carry its direction chevrons, over a
+        /// casing of the route color darkened. See `RouteArrowStyle`.
+        static let coreWidth: CGFloat = 9
+        static let casingExtraWidth = RouteArrowStyle.casingExtraWidth
         /// The travelled half is thinner as well as gray: it is context, not the
-        /// thing the rider is tracking.
+        /// thing the rider is tracking. It keeps a white casing, which reads on a
+        /// gray line where a darkened gray would not.
         static let spentCoreWidth: CGFloat = 4
+        static let spentCasingExtraWidth: CGFloat = 4
         static let spentAlpha: CGFloat = 0.85
+
+        /// Stop dots: the rider's own stop largest, then the terminals, then the rest.
+        static let userStopDiameter: CGFloat = 16
+        static let terminalStopDiameter: CGFloat = 14
+        static let stopDiameter: CGFloat = 10
+        static let stopRingWidth: CGFloat = 2.5
+
+        /// The vehicle marker's dot, the size of `PulsingVehicleAnnotationView`'s frame.
+        static let vehicleDiameter: CGFloat = 32
     }
 
     // MARK: - MapLayer
@@ -63,6 +78,8 @@ final class TripFocusMapLayer: NSObject, MapLayer {
 
     private var shapeOverlays: [TripShapeOverlay] = []
     private var stopAnnotations: [TripStopAnnotation] = []
+    /// What the direction chevrons on the line ahead keep clear of.
+    private let arrowContext = RouteArrowContext()
     private var vehicleAnnotation: VehicleAnnotation?
 
     /// The trip the camera has already been framed for. Framing happens once per
@@ -110,26 +127,26 @@ final class TripFocusMapLayer: NSObject, MapLayer {
     // MARK: - Rendering
 
     private func render(_ content: TripMapFocus.Content?) {
-        removeAllContent()
+        // Shape and stops are cheap to replace. The vehicle marker is not:
+        // removing it dismisses any callout and pops the pin instead of sliding
+        // it. See `drawVehicle`.
+        removeShapeAndStops()
 
-        guard let content else { return }
+        guard let content else {
+            removeVehicle()
+            return
+        }
 
         // Split once: the drawing and the camera have to agree about which half
         // of the shape is still ahead of the bus.
-        let split = Self.split(content)
+        let split = content.shapeSplit
 
-        drawShape(split)
         drawStops(content)
+        // Before the shape, so its first draw already knows where this trip's stops are.
+        refreshArrowMarkers()
+        drawShape(split)
         drawVehicle(content)
         frameCameraIfNeeded(content, split: split)
-    }
-
-    /// No reported progress means nothing is known to have been travelled, so the
-    /// whole shape counts as ahead rather than guessing at a split.
-    private static func split(_ content: TripMapFocus.Content) -> TripShapeSplit.Result {
-        content.progress.map {
-            TripShapeSplit.split(coordinates: content.shape, atFraction: $0)
-        } ?? TripShapeSplit.Result(spent: [], ahead: content.shape)
     }
 
     private func drawShape(_ split: TripShapeSplit.Result) {
@@ -142,10 +159,17 @@ final class TripFocusMapLayer: NSObject, MapLayer {
     private func add(coordinates: [CLLocationCoordinate2D], isSpent: Bool) {
         guard coordinates.count >= 2 else { return }
 
-        let casing = TripShapeOverlay.make(coordinates: coordinates, isSpent: isSpent, isCasing: true)
-        let core = TripShapeOverlay.make(coordinates: coordinates, isSpent: isSpent, isCasing: false)
-        shapeOverlays.append(contentsOf: [casing, core])
-        mapView.addOverlays([casing, core], level: .aboveRoads)
+        // Only the half ahead points the way: behind the bus, there is no way left to go.
+        let parts: [RouteLinePart] = isSpent ? [.casing, .core] : [.casing, .core, .arrows]
+        let overlays = parts.map { TripShapeOverlay.make(coordinates: coordinates, isSpent: isSpent, part: $0) }
+        shapeOverlays.append(contentsOf: overlays)
+        mapView.addOverlays(overlays, level: .aboveRoads)
+    }
+
+    /// The stops the line ahead keeps clear of: this trip's dots and whatever stops
+    /// the map shows.
+    private func refreshArrowMarkers() {
+        arrowContext.refresh(from: mapView, redrawing: shapeOverlays)
     }
 
     private func drawStops(_ content: TripMapFocus.Content) {
@@ -159,11 +183,41 @@ final class TripFocusMapLayer: NSObject, MapLayer {
     }
 
     private func drawVehicle(_ content: TripMapFocus.Content) {
-        guard let status = content.vehicle, Self.vehicleCoordinate(content) != nil else { return }
+        guard let status = content.vehicle, let coord = content.vehicleCoordinate else {
+            removeVehicle()
+            return
+        }
 
+        if let existing = vehicleAnnotation, Self.isSameVehicle(existing.tripStatus, status) {
+            // `tripStatus`'s didSet writes lastKnownLocation onto coordinate
+            // immediately. Restore `from` so `VehicleCoordinateUpdate` can
+            // interpolate instead of that assignment teleporting the pin.
+            let from = existing.coordinate
+            existing.tripStatus = status
+            existing.coordinate = from
+            VehicleCoordinateUpdate.apply(from: from, to: coord, on: existing)
+            if let view = mapView.view(for: existing) as? PulsingVehicleAnnotationView {
+                view.realTimeAnnotationColor = content.routeColor
+                view.applyTripStatus(status)
+            }
+            return
+        }
+
+        removeVehicle()
         let annotation = VehicleAnnotation(tripStatus: status)
         vehicleAnnotation = annotation
         mapView.addAnnotation(annotation)
+    }
+
+    /// Same bus, not merely the same trip: a block handoff should replace the
+    /// marker rather than interpolate across the depot. Missing vehicle IDs
+    /// still count as the same marker — this layer only ever draws one.
+    private static func isSameVehicle(_ existing: TripStatus?, _ incoming: TripStatus) -> Bool {
+        guard let existing else { return false }
+        if let existingID = existing.vehicleID, let incomingID = incoming.vehicleID {
+            return existingID == incomingID
+        }
+        return true
     }
 
     /// The part of the map this layer may frame into — everything the host isn't
@@ -172,35 +226,13 @@ final class TripFocusMapLayer: NSObject, MapLayer {
     /// Unset, the framing respects the safe area and nothing else.
     var cameraInsets: (() -> UIEdgeInsets)?
 
-    /// Frames the bus and the rider together, which is the comparison the page
-    /// exists to support, plus the path between them where that fits. Falls back
-    /// to the part of the trip still ahead when no vehicle position has been
-    /// reported, and to the stops when there is no shape at all.
+    /// See `TripMapFocus.Content.framingRect(split:userLocation:)` for what is framed.
     private func frameCameraIfNeeded(_ content: TripMapFocus.Content, split: TripShapeSplit.Result) {
-        guard framedTripID != content.tripID, let rect = framingRect(content, split: split) else { return }
+        guard framedTripID != content.tripID,
+              let rect = content.framingRect(split: split, userLocation: userCoordinate) else { return }
 
         framedTripID = content.tripID
         mapView.setVisibleMapRect(rect, edgePadding: framingInsets(), animated: true)
-    }
-
-    private func framingRect(_ content: TripMapFocus.Content, split: TripShapeSplit.Result) -> MKMapRect? {
-        let rider = userCoordinate
-
-        if let rect = TripCameraFraming.rect(
-            vehicle: Self.vehicleCoordinate(content),
-            userLocation: rider,
-            corridor: TripCameraFraming.corridor(ahead: split.ahead, userLocation: rider)
-        ) {
-            return rect
-        }
-
-        // A one-point shape frames to nothing useful, so it falls through to the
-        // stops the same way an empty one does.
-        if split.ahead.count >= 2 {
-            return TripCameraFraming.rect(of: split.ahead)
-        }
-
-        return TripCameraFraming.rect(of: stopAnnotations.map(\.coordinate))
     }
 
     private func framingInsets() -> UIEdgeInsets {
@@ -214,19 +246,22 @@ final class TripFocusMapLayer: NSObject, MapLayer {
         return mapView.userLocation.location?.coordinate
     }
 
-    private static func vehicleCoordinate(_ content: TripMapFocus.Content) -> CLLocationCoordinate2D? {
-        guard let status = content.vehicle, !status.coordinate.isNullIsland else { return nil }
-        return status.coordinate
+    private func removeAllContent() {
+        removeShapeAndStops()
+        removeVehicle()
     }
 
-    private func removeAllContent() {
+    private func removeShapeAndStops() {
         mapView.removeOverlays(shapeOverlays)
         mapView.removeAnnotations(stopAnnotations)
+        shapeOverlays.removeAll()
+        stopAnnotations.removeAll()
+    }
+
+    private func removeVehicle() {
         if let vehicleAnnotation {
             mapView.removeAnnotation(vehicleAnnotation)
         }
-        shapeOverlays.removeAll()
-        stopAnnotations.removeAll()
         vehicleAnnotation = nil
     }
 
@@ -235,12 +270,27 @@ final class TripFocusMapLayer: NSObject, MapLayer {
     func renderer(for overlay: MKOverlay, in mapView: MKMapView) -> MKOverlayRenderer? {
         guard let overlay = overlay as? TripShapeOverlay else { return nil }
 
-        let renderer = MKPolylineRenderer(polyline: overlay)
-        let coreWidth = overlay.isSpent ? Style.spentCoreWidth : Style.coreWidth
         let color = focus?.content?.routeColor ?? tintColor
-
-        renderer.lineWidth = overlay.isCasing ? coreWidth + Style.casingExtraWidth : coreWidth
-        renderer.strokeColor = overlay.isCasing ? .white : (overlay.isSpent ? .systemGray3 : color)
+        let renderer: MKPolylineRenderer
+        if overlay.isSpent {
+            renderer = MKPolylineRenderer(polyline: overlay)
+            renderer.lineWidth = overlay.isCasing ? Style.spentCoreWidth + Style.spentCasingExtraWidth : Style.spentCoreWidth
+            renderer.strokeColor = overlay.isCasing ? .white : .systemGray3
+        } else {
+            switch overlay.part {
+            case .casing:
+                renderer = MKPolylineRenderer(polyline: overlay)
+                renderer.lineWidth = Style.coreWidth + Style.casingExtraWidth
+                renderer.strokeColor = RouteArrowStyle.casingColor(for: color)
+            case .core:
+                renderer = MKPolylineRenderer(polyline: overlay)
+                renderer.lineWidth = Style.coreWidth
+                renderer.strokeColor = color
+            case .arrows:
+                renderer = RouteArrowRenderer(polyline: overlay, routeColor: color, context: arrowContext)
+                renderer.lineWidth = Style.coreWidth
+            }
+        }
         renderer.lineCap = .round
         renderer.lineJoin = .round
         renderer.alpha = overlay.isSpent ? Style.spentAlpha : 1
@@ -274,8 +324,17 @@ final class TripFocusMapLayer: NSObject, MapLayer {
 
     func deactivate() { end() }
 
-    /// Selection-driven, not viewport-driven — see the type doc.
-    func viewportDidChange(_ mapRect: MKMapRect?) { }
+    /// Selection-driven, not viewport-driven — see the type doc. A new zoom only
+    /// lays the arrows out again: they are sized and spaced in screen points.
+    func viewportDidChange(_ mapRect: MKMapRect?) {
+        guard focus != nil else { return }
+        arrowContext.refreshScale(from: mapView, redrawing: shapeOverlays)
+    }
+
+    func stopMarkersDidChange() {
+        guard focus != nil else { return }
+        refreshArrowMarkers()
+    }
 
     /// The map can be cleared out from under a layer (a region change, a search
     /// reset). Drop the bookkeeping rather than leave it pointing at annotations

@@ -13,6 +13,112 @@ import Contacts
 import SafariServices
 import OBAKitCore
 
+/// The exact-coordinate probe the address check runs (`OnDemandProbeController.probeExact`).
+/// Public because the public `MapItemViewModel.init` takes one.
+public typealias OnDemandCoverageProbe = @MainActor (CLLocationCoordinate2D) async throws -> [OnDemandServiceMatch]
+
+/// Spec 3.7: "Inside X" / "Inside X and N more" / "Outside X" for one point.
+struct OnDemandCoverageLine: Equatable {
+    let match: OnDemandServiceMatch
+    let isInside: Bool
+    /// Other services that also contain the point.
+    let extraCount: Int
+
+    var serviceName: String { match.service.name }
+
+    var text: String {
+        if isInside {
+            return extraCount > 0
+                ? OnDemandCopy.addressInsideMore(name: serviceName, extra: extraCount)
+                : String(format: Strings.onDemandAddressInsideFormat, serviceName)
+        }
+        return String(format: Strings.onDemandAddressOutsideFormat, serviceName)
+    }
+
+    /// The first inside match by the shared sort, else the nearest service
+    /// within 5,000 m (ties by the sort), else nil.
+    static func line(from matches: [OnDemandServiceMatch]) -> OnDemandCoverageLine? {
+        let inside = sortedSoonestUsable(matches.filter { $0.isInside && $0.distanceToArea != nil })
+        if let first = inside.first {
+            return OnDemandCoverageLine(match: first, isInside: true, extraCount: inside.count - 1)
+        }
+        let nearby = sortedSoonestUsable(matches.filter(\.isNearby))
+        guard let closest = nearby.map({ $0.distanceToArea ?? .infinity }).min(),
+              let nearest = nearby.first(where: { $0.distanceToArea == closest }) else {
+            return nil
+        }
+        return OnDemandCoverageLine(match: nearest, isInside: false, extraCount: 0)
+    }
+}
+
+/// The presentation-dependent half of the map-item screen, injected so the same
+/// view model drives both the UIKit floating panel and the SwiftUI sheet.
+///
+/// Everything else the screen does — opening Maps, dialing a phone number — is
+/// app-level and needs no presenter.
+@MainActor
+public struct MapItemActions {
+    public var openWebsite: (URL) -> Void
+    public var showNearbyStops: (CLLocationCoordinate2D) -> Void
+    public var dismiss: () -> Void
+    /// Only the UIKit host uses this — the sheet renders a native `ShareLink` from
+    /// `MapItemViewModel.shareURL` instead and passes a no-op here.
+    public var share: (URL) -> Void
+    /// Opens the zone page the coverage line names (spec 3.7); nil leaves the
+    /// line inert.
+    public var openOnDemandDetail: ((OnDemandServiceMatch, OnDemandLocationCheck) -> Void)?
+
+    public init(
+        openWebsite: @escaping (URL) -> Void,
+        showNearbyStops: @escaping (CLLocationCoordinate2D) -> Void,
+        dismiss: @escaping () -> Void,
+        share: @escaping (URL) -> Void = { _ in },
+        openOnDemandDetail: ((OnDemandServiceMatch, OnDemandLocationCheck) -> Void)? = nil
+    ) {
+        self.openWebsite = openWebsite
+        self.showNearbyStops = showNearbyStops
+        self.dismiss = dismiss
+        self.share = share
+        self.openOnDemandDetail = openOnDemandDetail
+    }
+
+    /// Reproduces the pre-sheet behavior: an in-app Safari controller and a pushed
+    /// `NearbyStopsViewController`, both presented from `presenter`, dismissal via
+    /// the modal delegate.
+    public static func uiKit(
+        presenter: UIViewController,
+        delegate: ModalDelegate?,
+        application: Application
+    ) -> MapItemActions {
+        MapItemActions(
+            openWebsite: { [weak presenter] url in
+                guard let presenter else { return }
+                application.viewRouter.present(SFSafariViewController(url: url), from: presenter)
+            },
+            showNearbyStops: { [weak presenter] coordinate in
+                guard let presenter else { return }
+                let nearbyStops = NearbyStopsViewController(coordinate: coordinate, application: application)
+                application.viewRouter.navigate(to: nearbyStops, from: presenter)
+            },
+            dismiss: { [weak presenter, weak delegate] in
+                guard let presenter else { return }
+                delegate?.dismissModalController(presenter)
+            },
+            share: { [weak presenter] url in
+                guard let presenter else { return }
+                let activityController = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+                // iPad support, unchanged from the previous `shareLocation()` body.
+                if let popover = activityController.popoverPresentationController {
+                    popover.sourceView = presenter.view
+                    popover.sourceRect = CGRect(x: presenter.view.bounds.midX, y: presenter.view.bounds.midY, width: 0, height: 0)
+                    popover.permittedArrowDirections = []
+                }
+                presenter.present(activityController, animated: true)
+            }
+        )
+    }
+}
+
 /// A view model that manages the data and business logic for displaying map item information.
 ///
 /// This view model extracts and formats data from an `MKMapItem` and handles user interactions
@@ -29,16 +135,16 @@ public class MapItemViewModel {
     /// The OBA application instance for accessing services and navigation
     let application: Application
 
-    let planTripHandler: () -> Void
+    /// `nil` on surfaces that have no trip-planner destination to hand off to.
+    /// Gates `showPlanTripButton`, so those surfaces don't render a button that
+    /// does nothing when tapped.
+    let planTripHandler: (() -> Void)?
 
     /// Optional handler for removing a user-dropped pin
     let removePinHandler: (() -> Void)?
 
-    /// Delegate for handling modal dismissal
-    weak var delegate: ModalDelegate?
-
-    /// The presenting view controller for navigation actions
-    private weak var presentingViewController: UIViewController?
+    /// Presentation-dependent actions injected at init time
+    private let actions: MapItemActions
 
     /// The name/title of the location
     var title: String
@@ -74,20 +180,40 @@ public class MapItemViewModel {
     /// Indicates whether Look Around is loading
     var isLoadingLookAround: Bool = false
 
+    /// The on-demand coverage line for this point (spec 3.7); nil while loading,
+    /// on failure, or when nothing is within 5 km.
+    var coverageLine: OnDemandCoverageLine?
+
+    private let coverageProbe: OnDemandCoverageProbe?
+
+    /// Exposed so tests can await the probe.
+    private(set) var coverageTask: Task<Void, Never>?
+
     /// Initializes a new map item view model.
     ///
     /// - Parameters:
     ///   - mapItem: The map item containing location information
     ///   - application: The OBA application instance
-    ///   - delegate: Optional delegate for handling modal dismissal
+    ///   - actions: Injected actions for presentation-dependent operations
     ///   - removePinHandler: Optional handler called when user wants to remove a dropped pin
-    ///   - planTripHandler: Handler called when user wants to plan a trip
-    public init(mapItem: MKMapItem, application: Application, delegate: ModalDelegate?, removePinHandler: (() -> Void)? = nil, planTripHandler: @escaping () -> Void) {
+    ///   - planTripHandler: Handler called when user wants to plan a trip, or `nil`
+    ///     to hide the Plan Trip button entirely
+    ///   - coverageProbe: The on-demand address check's exact probe, or `nil`
+    ///     when the deployment has no `/api/ondemand` (no line is shown)
+    public init(
+        mapItem: MKMapItem,
+        application: Application,
+        actions: MapItemActions,
+        removePinHandler: (() -> Void)? = nil,
+        planTripHandler: (() -> Void)?,
+        coverageProbe: OnDemandCoverageProbe? = nil
+    ) {
         self.mapItem = mapItem
         self.application = application
-        self.delegate = delegate
+        self.actions = actions
         self.removePinHandler = removePinHandler
         self.planTripHandler = planTripHandler
+        self.coverageProbe = coverageProbe
 
         self.title = mapItem.name ?? ""
 
@@ -95,7 +221,7 @@ public class MapItemViewModel {
             self.formattedAddress = CNPostalAddressFormatter.string(from: address, style: .mailingAddress)
         }
 
-        self.showPlanTripButton = application.features.tripPlanning == .running
+        self.showPlanTripButton = application.features.tripPlanning == .running && planTripHandler != nil
         self.phoneNumber = mapItem.phoneNumber
         self.url = mapItem.url
 
@@ -106,6 +232,33 @@ public class MapItemViewModel {
         Task {
             await fetchLookAroundScene()
         }
+
+        if coverageProbe != nil {
+            coverageTask = Task { await loadCoverage() }
+        }
+    }
+
+    /// Runs the exact-coordinate probe; any failure simply shows no line.
+    private func loadCoverage() async {
+        guard let coverageProbe else { return }
+        let coordinate = mapItem.placemark.coordinate
+        do {
+            coverageLine = OnDemandCoverageLine.line(from: try await coverageProbe(coordinate))
+        } catch {
+            coverageLine = nil
+        }
+    }
+
+    /// Opens the zone detail for the named service with `ProbeSource.point` at this pin.
+    func openCoverageDetail() {
+        guard let coverageLine, let open = actions.openOnDemandDetail else { return }
+        let check = OnDemandLocationCheck(
+            source: .point(label: mapItem.name),
+            isInside: coverageLine.isInside,
+            locality: mapItem.placemark.locality,
+            coordinate: mapItem.placemark.coordinate
+        )
+        open(coverageLine.match, check)
     }
 
     /// Fetches the Look Around scene for the map item's location,
@@ -133,27 +286,11 @@ public class MapItemViewModel {
 
     /// Helper: attempts to load a scene, returns nil on failure
     private func fetchScene(using request: MKLookAroundSceneRequest) async -> MKLookAroundScene? {
-        // Same Swift 6.2 boundary issue as MapRegionManager.handleMapFeatureSelection:
-        // neither the request nor the scene is Sendable, so hand each across in a box —
-        // the request is one-shot and the scene has no other owner until the transfer.
-        let requestBox = UncheckedSendableBox(value: request)
         do {
-            return try await Task.detached {
-                UncheckedSendableBox(value: try await requestBox.value.scene)
-            }.value.value
+            return try await request.scene
         } catch {
             return nil
         }
-    }
-
-    /// Sets the presenting view controller for navigation actions.
-    ///
-    /// This must be called before any navigation actions (like showing nearby stops or opening URLs)
-    /// to ensure proper view controller presentation.
-    ///
-    /// - Parameter viewController: The view controller that will present navigation actions
-    func setPresentingViewController(_ viewController: UIViewController) {
-        self.presentingViewController = viewController
     }
 
     /// Opens the location in the Maps app.
@@ -172,34 +309,21 @@ public class MapItemViewModel {
         application.open(url, options: [:], completionHandler: nil)
     }
 
-    /// Opens the location's website in a Safari view controller.
-    ///
-    /// This presents an in-app Safari browser with the location's website.
-    /// Does nothing if no URL is available or if the presenting view controller hasn't been set.
+    /// Opens the location's website through the injected action.
     func openURL() {
-        guard let url = url else { return }
-        guard let presenter = presentingViewController else { return }
-        let safari = SFSafariViewController(url: url)
-        application.viewRouter.present(safari, from: presenter)
+        guard let url else { return }
+        actions.openWebsite(url)
     }
 
-    /// Navigates to the nearby stops view controller.
-    ///
-    /// This pushes a new view controller showing transit stops near the location.
-    /// Does nothing if the presenting view controller hasn't been set.
+    /// Shows nearby stops through the injected action.
     func showNearbyStops() {
-        guard let presenter = presentingViewController else { return }
-        let nearbyStops = NearbyStopsViewController(
-            coordinate: mapItem.placemark.coordinate,
-            application: application
-        )
-        application.viewRouter.navigate(to: nearbyStops, from: presenter)
+        actions.showNearbyStops(mapItem.placemark.coordinate)
     }
 
     /// Plans a trip from/to this location.
     ///
     func planTrip() {
-        planTripHandler()
+        planTripHandler?()
     }
 
     /// Removes the user-dropped pin and dismisses the view.
@@ -209,31 +333,21 @@ public class MapItemViewModel {
         removePinHandler?()
     }
 
-    /// Dismisses the view by calling the delegate's dismissModalController method.
-    ///
-    /// This properly dismisses the FloatingPanel that contains the MapItemViewController.
+    /// Dismisses the view through the injected action.
     func dismissView() {
-        guard let presenter = presentingViewController else { return }
-        delegate?.dismissModalController(presenter)
+        actions.dismiss()
     }
 
-    /// Uses the MapKit Place ID when available to generate a stable "Place Link" URL,
-    /// falling back to query + coordinates when the place identity is not available.
+    /// The Apple Maps link for this place. Exposed so the SwiftUI sheet can use a
+    /// native `ShareLink`; the UIKit path still routes through `shareLocation()`.
+    var shareURL: URL? {
+        appleMapsShareURL(for: mapItem)
+    }
+
+    /// Shares the location through the injected action.
     func shareLocation() {
-        guard let presenter = presentingViewController else { return }
-        guard let url = appleMapsShareURL(for: mapItem) else { return }
-
-        let activityItems: [Any] = [url]
-        let activityController = UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
-
-        // iPad support
-        if let popover = activityController.popoverPresentationController {
-            popover.sourceView = presenter.view
-            popover.sourceRect = CGRect(x: presenter.view.bounds.midX, y: presenter.view.bounds.midY, width: 0, height: 0)
-            popover.permittedArrowDirections = []
-        }
-
-        presenter.present(activityController, animated: true)
+        guard let shareURL else { return }
+        actions.share(shareURL)
     }
 
     /// Generates an Apple Maps share URL using the Place ID when available,

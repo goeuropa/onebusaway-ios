@@ -85,7 +85,7 @@ final class ServiceAlertViewModel: ObservableObject {
     }
 
     // swiftlint:disable:next function_body_length
-    private nonisolated static func buildDocument(
+    nonisolated static func buildDocument(
         alert: ServiceAlert,
         dateTimeFormatter: DateFormatter,
         activeWindows: [String]
@@ -173,7 +173,7 @@ final class ServiceAlertViewModel: ObservableObject {
     }
 }
 
-nonisolated fileprivate struct HTMLBuilder {
+nonisolated struct HTMLBuilder {
     private(set) var HTML = String()
 
     enum Tag: String {
@@ -188,7 +188,7 @@ nonisolated fileprivate struct HTMLBuilder {
     mutating func append(_ tag: Tag, value: String? = nil, closure: ((inout HTMLBuilder) -> Void)? = nil) {
         HTML.append(tag.opening)
         if let value = value {
-            HTML.append(value)
+            HTML.append(value.htmlEscaped)
         } else if let closure = closure {
             var builder = HTMLBuilder()
             closure(&builder)

@@ -7,6 +7,7 @@
 //  LICENSE file in the root directory of this source tree.
 //
 
+import UIKit
 import OBAKitCore
 
 nonisolated struct EmptyDataSetItem: OBAListViewItem {
@@ -52,38 +53,21 @@ nonisolated struct EmptyDataSetItem: OBAListViewItem {
         }
 
         // Then, add an icon if applicable.
-        var icon: UIImage?
-        switch error {
-        case let apiError as APIError:
-            switch apiError {
-            case .networkFailure, .cellularDataRestricted:
-                icon = UIImage(systemName: "wifi.slash")
-            case .captivePortal:
-                icon = UIImage(systemName: "wifi.exclamationmark")
-            case .noResponseBody, .requestFailure, .invalidContentType:
-                icon = UIImage(systemName: "bolt.horizontal.circle")
-            case .requestNotFound:
-                icon = UIImage(systemName: "questionmark.square.dashed")
-            case .serverError, .serverUnavailable:
-                icon = UIImage(systemName: "server.rack")
-            case .surveyServiceNotConfigured:
-                icon = UIImage(systemName: "doc.text.magnifyingglass")
-            case .noRegionSelected:
-                icon = UIImage(systemName: "location.slash")
-            }
-        default:
-            break
-        }
+        let icon = EmptyDataSetView.icon(for: error)
 
         self.init(id: id, alignment: .center, title: nil, body: error.localizedDescription, image: icon, buttonConfig: buttonConfig)
     }
 
+    /// Hashes the empty data set item into the specified hasher, incorporating its unique identifier.
     func hash(into hasher: inout Hasher) {
         hasher.combine("EmptyDataSetItem")
+        hasher.combine(id)
     }
 
+    /// Determines equality between two `EmptyDataSetItem` instances based on ID, alignment, content, and button configuration.
     static func == (_ lhs: EmptyDataSetItem, _ rhs: EmptyDataSetItem) -> Bool {
-        return lhs.alignment == rhs.alignment &&
+        return lhs.id == rhs.id &&
+            lhs.alignment == rhs.alignment &&
             lhs.title == rhs.title &&
             lhs.body == rhs.body &&
             lhs.image == rhs.image &&

@@ -8,9 +8,7 @@
 //
 
 import UIKit
-import Combine
 import CoreTelephony
-import Hyperconnectivity
 import CoreLocation
 import OBAKitCore
 import SafariServices
@@ -75,7 +73,8 @@ public class Application: CoreApplication, PushServiceDelegate {
         userDefaults: userDefaults,
         obacoService: obacoService,
         analytics: analytics,
-        appLaunchCount: { [userDataStore] in userDataStore.appLaunchCount }
+        appLaunchCount: { [userDataStore] in userDataStore.appLaunchCount },
+        notificationCenter: notificationCenter
     )
 
     @MainActor
@@ -106,6 +105,21 @@ public class Application: CoreApplication, PushServiceDelegate {
     @MainActor
     lazy var walkingSpeedManager = WalkingSpeedManager(userDataStore: userDataStore)
 
+    /// Owns the rider's destination proximity alerts.
+    ///
+    /// `lazy` only because it needs a fully-initialized `self`; `init` forces it
+    /// immediately, and the comment there explains why it must not wait for a
+    /// first use that may never come.
+    @MainActor
+    public private(set) lazy var proximityAlertManager = ProximityAlertManager(
+        locationService: locationService,
+        userDataStore: userDataStore,
+        regionIDProvider: { [weak self] in self?.regionsService.currentRegion?.regionIdentifier }
+    )
+
+    @MainActor
+    lazy var bikeModeManager = BikeModeManager(userDataStore: userDataStore)
+
     @objc lazy var userActivityBuilder = UserActivityBuilder(application: self)
 
     /// Handles all deep-linking into the app.
@@ -114,46 +128,73 @@ public class Application: CoreApplication, PushServiceDelegate {
     private func makeAppLinksRouter() -> AppLinksRouter? {
         let router = AppLinksRouter(application: self)
 
-        router?.showStopHandler = { [weak self] stop in
-            guard
-                let self = self,
-                let topVC = self.topViewController
-            else { return }
-
-            Task { @MainActor in
-                self.viewRouter.navigateTo(stop: stop, from: topVC)
-            }
+        router?.showStopDestinationHandler = { [weak self] destination in
+            self?.queueOrOpenStop(destination)
         }
 
         router?.showArrivalDepartureDeepLink = { [weak self] deepLink in
-            guard let self, let apiService = self.apiService else {
-                return
-            }
-
-            Task(priority: .userInitiated) { @MainActor in
-                ProgressHUD.show()
-
-                do {
-                    let arrDep = try await apiService.getTripArrivalDepartureAtStop(stopID: deepLink.stopID, tripID: deepLink.tripID, serviceDate: deepLink.serviceDate, vehicleID: deepLink.vehicleID, stopSequence: deepLink.stopSequence).entry
-
-                    await MainActor.run {
-                        if let topViewController = self.topViewController {
-                            self.viewRouter.navigateTo(arrivalDeparture: arrDep, from: topViewController)
-                        }
-                    }
-                } catch {
-                    await self.displayError(error)
-                }
-
-                ProgressHUD.dismiss()
-            }
+            self?.queueOrOpenTrip(deepLink)
         }
 
         return router
     }
 
+    /// Loads the trip in `deepLink` and pushes it. Needs an API service and a
+    /// root UI to push from; `queueOrOpenTrip(_:)` stashes it until both exist.
+    @MainActor
+    private func openTrip(_ deepLink: ArrivalDepartureDeepLink, apiService: RESTAPIService) {
+        Task(priority: .userInitiated) { @MainActor in
+            ProgressHUD.show()
+
+            do {
+                let arrDep = try await apiService.getTripArrivalDepartureAtStop(stopID: deepLink.stopID, tripID: deepLink.tripID, serviceDate: deepLink.serviceDate, vehicleID: deepLink.vehicleID, stopSequence: deepLink.stopSequence).entry
+
+                self.withPushableTopViewController { from in
+                    // The rider may have switched regions while this loaded.
+                    guard self.currentRegion?.regionIdentifier == deepLink.regionID else {
+                        Logger.warn("Dropping trip \(deepLink.tripID) because the selected region changed before it loaded.")
+                        return
+                    }
+                    self.viewRouter.navigateTo(
+                        arrivalDeparture: arrDep,
+                        from: from,
+                        destinationStopID: deepLink.destinationStopID
+                    )
+                }
+            } catch {
+                await self.displayError(error)
+            }
+
+            ProgressHUD.dismiss()
+        }
+    }
+
     /// The application delegate object.
     @objc public weak var delegate: ApplicationDelegate?
+
+    /// Keeps the bookmarks widget's timeline in step with the bookmark store, no
+    /// matter which screen performed the write.
+    ///
+    /// Eagerly constructed rather than `lazy`, and held for the app's lifetime:
+    /// it exists purely for the side effect of observing `.bookmarksDidChange`,
+    /// so a lazy property nobody reads would never start observing, and a
+    /// shorter-lived owner would stop refreshing the widget the moment its
+    /// screen went away.
+    let bookmarkWidgetRefresher: BookmarkWidgetRefresher
+
+    /// Synchronizes bookmark changes to the Apple Watch companion app.
+    public private(set) var bookmarkWatchSyncSender: BookmarkWatchSyncSender?
+
+    /// Mirrors the resolved current region into the app-group suite so the
+    /// widget extension — which cannot see this process's custom regions — can
+    /// read it. Retained here because `RegionsService` holds delegates weakly.
+    private var resolvedRegionPersister: ResolvedRegionPersister?
+
+    /// Created in `application(_:didFinishLaunching:)`, so only the launched app refreshes Shortcuts.
+    private var appShortcutParametersRefresher: AppShortcutParametersRefresher?
+
+    /// See `startStopSpotlightIndexing()`. Internal so a test can install one.
+    var stopSpotlightIndexer: StopSpotlightIndexer?
 
     // MARK: - Init
 
@@ -163,10 +204,35 @@ public class Application: CoreApplication, PushServiceDelegate {
         self.config = config
 
         analytics = config.analytics
+        bookmarkWidgetRefresher = BookmarkWidgetRefresher()
 
         super.init(config: config)
 
+        bookmarkWatchSyncSender = BookmarkWatchSyncSender(
+            userDataStore: userDataStore,
+            regionsService: regionsService
+        )
+
+        resolvedRegionPersister = ResolvedRegionPersister(
+            regionsService: regionsService,
+            store: ResolvedRegionStore(userDefaults: userDefaults)
+        )
+
+        // Force the proximity alert manager now instead of leaving it to a first
+        // use that may never come. A geofence crossing relaunches a terminated
+        // app, and Core Location delivers the queued region event to whatever
+        // `LocationService` delegates exist once launch finishes — a launch on
+        // which no screen is ever built and nothing touches this property.
+        // Constructing it here registers the delegate, and re-arms the regions,
+        // before that event lands.
+        _ = proximityAlertManager
+
         configureAppearanceProxies()
+        observeShortcutLifecycle()
+
+        #if DEBUG
+        applyScreenshotLaunchHooks()
+        #endif
     }
 
     private func configureTipKit() {
@@ -232,7 +298,10 @@ public class Application: CoreApplication, PushServiceDelegate {
     ///
     /// Tapping the 'Crash' button will crash the app, which is useful for testing your integration of third-party
     /// crash reporter libraries, like Crashlytics.
-    /// - Note: This method always returns `false` when running on a device. It will only ever return `true` on the Simulator.
+    /// - Note: This is not limited to the Simulator or to Debug builds. It returns `true` on
+    ///   devices and in Release builds whenever the delegate implements `performTestCrash()`,
+    ///   which both shipping app delegates do. Users reach the Settings row that calls it only
+    ///   after they turn on Debug mode.
     var shouldShowCrashButton: Bool {
         guard let delegate = delegate as? NSObject & ApplicationDelegate else {
             return false
@@ -248,11 +317,7 @@ public class Application: CoreApplication, PushServiceDelegate {
         delegate?.performTestCrash?()
     }
 
-    // MARK: - Reachability
-
-    private var reachabilityBulletin: ReachabilityBulletin?
-
-    private var hyperconnectivityCancellable: AnyCancellable?
+    // MARK: - Cellular Data
 
     /// Long-lived instance so `restrictedState` has time to resolve from `.unknown`.
     private let cellularData = CTCellularData()
@@ -260,36 +325,6 @@ public class Application: CoreApplication, PushServiceDelegate {
     /// Whether the user has disabled cellular data for this app in iOS Settings.
     var isCellularDataRestricted: Bool {
         return cellularData.restrictedState == .restricted
-    }
-
-    /// This may be called repeatedly as the app goes in and out of the foreground.
-    private func configureConnectivity() {
-        hyperconnectivityCancellable?.cancel()
-
-        hyperconnectivityCancellable = Hyperconnectivity.Publisher()
-            .receive(on: DispatchQueue.main)
-            .eraseToAnyPublisher()
-            .sink(receiveValue: { [weak self] result in
-                guard let self = self else { return }
-                // `.receive(on: DispatchQueue.main)` above is what makes
-                // `assumeIsolated` safe here — bulletin presentation is
-                // `@MainActor`. Don't remove the `.receive(on:)` upstream;
-                // doing so would silently turn this into a crash-on-mismatch.
-                MainActor.assumeIsolated {
-                    if result.isConnected {
-                        self.reachabilityBulletin?.dismiss()
-                        return
-                    }
-
-                    guard let app = self.delegate?.uiApplication else { return }
-
-                    if self.reachabilityBulletin == nil {
-                        self.reachabilityBulletin = ReachabilityBulletin()
-                    }
-
-                    self.reachabilityBulletin?.showStatus(result, in: app, isCellularDataRestricted: self.isCellularDataRestricted)
-                }
-            })
     }
 
     // MARK: - Push Notifications
@@ -334,52 +369,35 @@ public class Application: CoreApplication, PushServiceDelegate {
         pushService.start(launchOptions: launchOptions)
     }
 
-    public func pushServicePresentingController(_ pushService: PushService) -> UIViewController? {
-        topViewController
-    }
-
-    public func pushService(_ pushService: PushService, received pushBody: AlarmPushBody) {
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            // Remove the fired alarm from the local store and let open stop pages
-            // update their alarm index via the notification.
-            self.deleteMatchingAlarm(for: pushBody)
-            NotificationCenter.default.post(name: .alarmFired, object: nil)
-
-            guard let topViewController = self.topViewController else {
-                // UI not ready yet (cold launch). Navigate once the scene activates.
-                self.pendingStopID = pushBody.stopID
-                return
-            }
-            self.viewRouter.navigateTo(stopID: pushBody.stopID, from: topViewController)
-        }
-    }
-
-    public func pushService(_ pushService: PushService, receivedDeviceToken token: String) {
-        pushRegistrationManager.updateDeviceToken(token)
-        Task { await pushRegistrationManager.registerIfNeeded() }
-    }
-
-    /// Deletes the stored alarm whose deep-link identity matches `pushBody`, so the stop
-    /// page reflects the fired state without waiting for the next full refresh.
-    @MainActor
-    private func deleteMatchingAlarm(for pushBody: AlarmPushBody) {
-        for alarm in userDataStore.alarms {
-            guard let deepLink = alarm.deepLink else { continue }
-            guard deepLink.stopID == pushBody.stopID,
-                  deepLink.tripID == pushBody.tripID,
-                  deepLink.stopSequence == pushBody.stopSequence,
-                  abs(deepLink.serviceDate.timeIntervalSince(pushBody.serviceDate)) < 60
-            else { continue }
-            userDataStore.delete(alarm: alarm)
-            return
-        }
-    }
-
-    /// A stop navigation (fired alarm push or `viewStop` deep link) received before the
-    /// root view controller was installed (cold launch). Drained on activation once a
-    /// root view controller exists.
-    private var pendingStopID: StopID?
+    /// A stop navigation (fired alarm push, `viewStop` deep link, or a donated
+    /// stop `NSUserActivity`) received before the root view controller was
+    /// installed, or before `currentRegion` had loaded. Drained once both exist.
+    /// Internal so tests can assert the shortcut was stashed rather than dropped.
+    var pendingStopID: StopID?
+    /// Region the stashed stop belongs to. Nil for the URL-scheme path, which
+    /// historically did not carry a region. When set, drain refuses to open the
+    /// stop against a different region's API.
+    var pendingStopRegionID: Int?
+    /// A trip navigation (Handoff, state restoration, or a trip deep link) received
+    /// before the root view controller was installed, or before `currentRegion` and
+    /// its API service had loaded. Drained once all of them exist, like `pendingStopID`.
+    /// Internal so tests can assert the trip was stashed rather than dropped.
+    var pendingTripDeepLink: ArrivalDepartureDeepLink?
+    /// The coordinate of an `onebusaway://rentals` link, held until a map can show
+    /// it — the map's counterpart of `pendingStopID`. Whichever map surface is
+    /// installed takes it with `claimPendingRentalsFocus()`, on appearing or on
+    /// `.rentalsDeepLinkPending`, so a link that arrives on a cold launch or during
+    /// onboarding is applied once the map exists and the region has loaded.
+    var pendingRentalsCoordinate: CLLocationCoordinate2D?
+    #if DEBUG
+    /// App Store screenshot hooks, read from the launch environment and claimed
+    /// once the map or region is ready. See `Application+ScreenshotSupport.swift`.
+    var screenshotStopID: StopID?
+    var screenshotBookmarkSeeds: [ScreenshotBookmarkSeed]?
+    #endif
+    /// Lives here rather than on the map so it survives root reloads and sees every
+    /// deep link, which arrive here before (or instead of) any map appearing.
+    lazy var launchRouteGate = LaunchRouteGate(configValue: config.launchRouteID)
     private var presentDonationUIOnActive = false
     private var presentAddRegionAlertOnActive = false
     private var donationPromptID: String?
@@ -456,7 +474,7 @@ public class Application: CoreApplication, PushServiceDelegate {
     // MARK: - UIApplication Hooks
 
     /// Provides access the topmost view controller in the app, if one exists.
-    private var topViewController: UIViewController? {
+    var topViewController: UIViewController? {
         delegate?.uiApplication?.keyWindowFromScene?.topViewController
     }
 
@@ -469,9 +487,23 @@ public class Application: CoreApplication, PushServiceDelegate {
         reportAnalyticsUserProperties()
 
         configureTipKit()
+        if let provider = config.appShortcutsProvider {
+            appShortcutParametersRefresher = AppShortcutParametersRefresher(provider: provider)
+        }
+        startRegionStopSync()
+
+        startStopSpotlightIndexing()
 
         if userDataStore.walkingSpeedSource == .healthKit {
             Task { await walkingSpeedManager.refreshFromHealthKitIfPossible() }
+        }
+
+        // Matches the walking-speed refresh above: gated on the sync source alone, not
+        // on whether Bike Mode is currently toggled on. The header's bike chip is always
+        // shown regardless of mode, so a rider who synced once and later turned Bike Mode
+        // off would otherwise keep a frozen cycling-speed ETA on every stop header forever.
+        if userDataStore.bikeSpeedSource == .healthKit {
+            Task { await bikeModeManager.refreshFromHealthKitIfPossible() }
         }
     }
 
@@ -487,7 +519,11 @@ public class Application: CoreApplication, PushServiceDelegate {
             locationService.startUpdates()
         }
 
-        configureConnectivity()
+        // Re-arm proximity geofences and reap alerts that expired while the app was
+        // away. Same reason the Live Activity cleanup below runs here: alerts age
+        // out on a clock that keeps running with no process to notice, and the
+        // regions standing for them outlive the process that armed them.
+        proximityAlertManager.reconcileMonitoredRegions()
 
         // Clean up Live Activity subscriptions whose activities are gone. This has to run on an
         // app-lifecycle hook rather than in a view controller: an activity the user dismissed
@@ -505,6 +541,7 @@ public class Application: CoreApplication, PushServiceDelegate {
         #endif
 
         alertsStore.checkForUpdates()
+        scheduleRegionStopSync()
 
         // Re-register the push token with OBACloud so the server's inactivity prune never
         // drops this device, and so locale changes propagate. The manager dedupes, so this
@@ -516,6 +553,8 @@ public class Application: CoreApplication, PushServiceDelegate {
         }
 
         drainPendingUIPresentations()
+
+        consumePendingLiveActivityShortcut()
 
         if let region = regionsService.currentRegion, let analytics {
             analytics.updateServer?(region: region)
@@ -530,6 +569,10 @@ public class Application: CoreApplication, PushServiceDelegate {
     /// otherwise wait for the next foreground cycle. This is the deterministic drain point.
     @MainActor @objc public func rootUserInterfaceDidLoad() {
         drainPendingUIPresentations()
+        consumePendingLiveActivityShortcut()
+        #if DEBUG
+        seedScreenshotBookmarksIfNeeded()
+        #endif
     }
 
     /// True while the onboarding flow is installed as the window's root — deferred
@@ -548,9 +591,40 @@ public class Application: CoreApplication, PushServiceDelegate {
     private func drainPendingUIPresentations() {
         guard !isOnboardingRoot else { return }
 
-        if let stopID = pendingStopID, let topViewController {
-            viewRouter.navigateTo(stopID: stopID, from: topViewController)
+        if let stopID = pendingStopID, topViewController != nil {
+            var wrongRegion = false
+            if let neededRegion = pendingStopRegionID {
+                // Region still loading: wait. Loaded but different: drop — do not
+                // fetch this stop against the wrong region's API, but keep draining.
+                guard let current = currentRegion?.regionIdentifier else { return }
+                wrongRegion = current != neededRegion
+            }
             pendingStopID = nil
+            pendingStopRegionID = nil
+            if !wrongRegion {
+                // While a modal is on its way out, anything presented from it goes with
+                // it, so stop here; the dismissal re-runs this drain for the rest.
+                let dismissing = pushStopFromOutside(stopID) { [weak self] in
+                    self?.drainPendingUIPresentations()
+                }
+                if dismissing { return }
+            }
+        }
+
+        // Waits while the region or its API service is still loading.
+        if let deepLink = pendingTripDeepLink, topViewController != nil,
+           let current = currentRegion?.regionIdentifier, let apiService {
+            pendingTripDeepLink = nil
+            if current == deepLink.regionID {
+                openTrip(deepLink, apiService: apiService)
+            } else {
+                // Do not fetch this trip against the wrong region's API.
+                Logger.warn("Trip \(deepLink.tripID) belongs to region \(deepLink.regionID) but region \(current) is selected; dropping it.")
+            }
+        }
+
+        if pendingRentalsCoordinate != nil, topViewController != nil {
+            showMapForPendingRentals()
         }
 
         if presentDonationUIOnActive, let topViewController {
@@ -572,12 +646,54 @@ public class Application: CoreApplication, PushServiceDelegate {
         }
     }
 
+    /// A Track Bookmark Shortcut queued a Live Activity. Consume it here from
+    /// `topViewController` rather than switching to the Bookmarks tab — that
+    /// tab's stack may already have a stop page pushed, and
+    /// `rootNavigateTo(.bookmarks)` does not pop it.
+    @MainActor
+    func consumePendingLiveActivityShortcut() {
+        guard !isOnboardingRoot else { return }
+        LiveActivityShortcutDrain.consume(application: self, presentingFrom: topViewController)
+    }
+
+    /// `openAppWhenRun` activates the app before `perform()` stores, so
+    /// `applicationDidBecomeActive` / `rootUserInterfaceDidLoad` peek an empty
+    /// queue. Observe the store notification (warm launch).
+    private func observeShortcutLifecycle() {
+        notificationCenter.addObserver(
+            forName: .liveActivityShortcutRequestDidStore,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            MainActor.assumeIsolated {
+                self.consumePendingLiveActivityShortcut()
+            }
+        }
+
+        // Open Stop has no queue to peek: its request arrives only as this
+        // notification, and `queueOrOpenStop(_:)` stashes the stop if the UI or
+        // region isn't ready yet.
+        notificationCenter.addObserver(
+            forName: .openStopRequested,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self else { return }
+            guard let destination = notification.userInfo?[OpenStopRequest.destinationUserInfoKey] as? AppLinksRouter.StopDestination else {
+                Logger.warn("Open Stop request has no stop destination; nothing to open.")
+                return
+            }
+            MainActor.assumeIsolated {
+                self.queueOrOpenStop(destination)
+            }
+        }
+    }
+
     @objc public func applicationWillResignActive(_ application: UIApplication) {
         // Unconditional: stopping is always safe, and gating it on authorization
         // would strand a manager we started before access was revoked.
         locationService.stopUpdates()
-
-        hyperconnectivityCancellable?.cancel()
     }
 
     public var isIdleTimerDisabled: Bool {
@@ -615,12 +731,66 @@ public class Application: CoreApplication, PushServiceDelegate {
         delegate?.credits ?? [:]
     }
 
+    /// Opens `destination` now, or stashes it until the root UI and matching
+    /// region exist. Does not fetch this stop against a different region's API.
+    func queueOrOpenStop(_ destination: AppLinksRouter.StopDestination) {
+        if let current = currentRegion?.regionIdentifier, current != destination.regionID {
+            // Dropped on purpose — fetching this stop against another region's API
+            // would return the wrong stop or nothing — but say so. This is the end
+            // of the line for something the rider actually tapped, and the
+            // no-region branch that defers instead already logs its reasoning.
+            Logger.warn("Stop \(destination.stopID) belongs to region \(destination.regionID) but region \(current) is selected; dropping the tap.")
+            Task { @MainActor in
+                await self.displayError(UnstructuredError(OBALoc(
+                    "application.stop_in_other_region",
+                    value: "This stop is in a different region than the one you're using, so it can't be opened.",
+                    comment: "Shown when the rider taps a link or notification for a stop that belongs to a transit region other than the currently selected one."
+                )))
+            }
+            return
+        }
+
+        launchRouteGate.suppress()
+
+        // Not while onboarding is the root: there is no API service to load the
+        // stop with yet, and the page would be pushed over the region picker. The
+        // drain picks the stash up once onboarding finishes.
+        if topViewController != nil, !isOnboardingRoot, currentRegion?.regionIdentifier == destination.regionID {
+            pushStopFromOutside(destination.stopID)
+            return
+        }
+
+        pendingStopID = destination.stopID
+        pendingStopRegionID = destination.regionID
+    }
+
+    /// Opens the trip in `deepLink` now, or stashes it until the root UI, the
+    /// trip's region, and its API service exist. Does not fetch this trip against
+    /// a different region's API.
+    func queueOrOpenTrip(_ deepLink: ArrivalDepartureDeepLink) {
+        if let current = currentRegion?.regionIdentifier, current != deepLink.regionID {
+            Logger.warn("Trip \(deepLink.tripID) belongs to region \(deepLink.regionID) but region \(current) is selected; dropping it.")
+            return
+        }
+
+        if topViewController != nil, !isOnboardingRoot, currentRegion?.regionIdentifier == deepLink.regionID, let apiService {
+            openTrip(deepLink, apiService: apiService)
+            return
+        }
+
+        pendingTripDeepLink = deepLink
+    }
+
     @objc public func application(_ application: UIApplication, continue userActivity: NSUserActivity, restorationHandler: @escaping ([UIUserActivityRestoring]?) -> Void) -> Bool {
         guard let appLinksRouter = appLinksRouter else {
             return false
         }
 
-        return appLinksRouter.route(userActivity: userActivity)
+        let handled = appLinksRouter.route(userActivity: userActivity)
+        if handled {
+            launchRouteGate.suppress()
+        }
+        return handled
     }
 
     @MainActor
@@ -629,20 +799,25 @@ public class Application: CoreApplication, PushServiceDelegate {
             return false
         }
 
-        let router = URLSchemeRouter(scheme: scheme)
-
-        guard let urlType = router.decodeURLType(from: url) else {
+        guard let urlType = URLSchemeRouter(scheme: scheme).decodeURLType(from: url) else {
             return false
         }
 
+        launchRouteGate.suppress()
+
         switch urlType {
         case .viewStop(let stopData):
-            guard let topViewController = self.topViewController else {
-                // UI not ready yet (cold launch). Navigate once the scene activates.
-                pendingStopID = stopData.stopID
-                return true
+            // Shares the stash, region check, and onboarding guard every other
+            // stop entry point uses, rather than navigating against whichever
+            // region happens to be selected.
+            queueOrOpenStop(AppLinksRouter.StopDestination(stopID: stopData.stopID, regionID: stopData.regionID))
+            return true
+        case .viewRentals(let coordinate):
+            pendingRentalsCoordinate = coordinate
+            // UI not ready yet (cold launch) or onboarding up: the drain applies it.
+            if topViewController != nil, !isOnboardingRoot {
+                showMapForPendingRentals()
             }
-            viewRouter.navigateTo(stopID: stopData.stopID, from: topViewController)
             return true
         case .addRegion(let regionData):
             viewRouter.rootNavigateTo(page: .map)
@@ -653,39 +828,7 @@ public class Application: CoreApplication, PushServiceDelegate {
                         return
                     }
 
-                    guard let regionCoordinate = try await self.apiService?.getAgenciesWithCoverage().list.first?.region else {
-                        return
-                    }
-
-                    // Adjustments for coordinate span
-                    var adjustedRegionCoordinate = regionCoordinate
-                    adjustedRegionCoordinate.span.latitudeDelta = 2
-                    adjustedRegionCoordinate.span.longitudeDelta = 2
-
-                    // Create region provider
-                    let regionProvider = RegionPickerCoordinator(regionsService: self.regionsService, userDataStore: self.userDataStore)
-
-                    // Construct Region from URL data. umamiAnalytics applies the
-                    // both-or-nothing rule; no rule logic lives here.
-                    //
-                    // regionIdentifier must come from the link: Region falls back to a
-                    // random id when it's nil, and every Obaco call for the region then
-                    // 404s against an id the sidecar has never heard of.
-                    let currentRegion = Region(
-                        name: regionData.name,
-                        OBABaseURL: regionData.obaURL,
-                        coordinateRegion: adjustedRegionCoordinate,
-                        contactEmail: "example@example.com",
-                        regionIdentifier: regionData.regionID,
-                        openTripPlannerURL: regionData.otpURL,
-                        openTripPlannerGraphQLURL: regionData.otpGraphQLURL,
-                        supportsOTPGraphQLBikeshare: regionData.supportsOTPGraphQLBikeshare,
-                        sidecarBaseURL: regionData.sidecarURL,
-                        umamiAnalytics: regionData.umamiAnalytics)
-
-                    // Add and set current region
-                    try await regionProvider.add(customRegion: currentRegion)
-                    try await regionProvider.setCurrentRegion(to: currentRegion)
+                    try await addCustomRegion(from: regionData)
                 } catch {
                     presentAddRegionAlertOnActive = true
                     return
@@ -698,27 +841,6 @@ public class Application: CoreApplication, PushServiceDelegate {
     override public func apiServicesRefreshed() {
         super.apiServicesRefreshed()
         donationsManager.obacoService = obacoService
-    }
-
-    // MARK: - Appearance and Themes
-
-    /// Sets default styles for several UIAppearance proxies in order to customize the app's look and feel
-    ///
-    /// To override the values that are set in here, either customize the theme that this object is
-    /// configured with at launch or simply don't call this method and set up your own `UIAppearance`
-    /// proxies instead.
-    private func configureAppearanceProxies() {
-        for t in [UIWindow.self, UINavigationBar.self, UISearchBar.self, UISegmentedControl.self, UITabBar.self, UITextField.self, UIButton.self] {
-            t.appearance().tintColor = ThemeColors.shared.brand
-        }
-
-        UISwitch.appearance().onTintColor = ThemeColors.shared.brand
-
-        StopArrivalView.appearance().notificationCenter = notificationCenter
-
-        MKMarkerAnnotationView.appearance().markerTintColor = ThemeColors.shared.brand
-
-        UIBarButtonItem.appearance().setTitleTextAttributes([.foregroundColor: ThemeColors.shared.brand], for: .normal)
     }
 
     // MARK: - Regions Management
@@ -744,6 +866,28 @@ public class Application: CoreApplication, PushServiceDelegate {
         // By the time updatedRegion fires, willUpdateToRegion has already rebuilt
         // obacoService for the new region, so this registers the token there.
         Task { await pushRegistrationManager.registerIfNeeded() }
+
+        // A donated stop shortcut that arrived before `currentRegion` was set
+        // is sitting in `pendingStopID`. Drain now that we know which region we are in.
+        drainPendingUIPresentations()
+        #if DEBUG
+        seedScreenshotBookmarksIfNeeded()
+        #endif
+
+        // Region change does not post `.bookmarksDidChange`, so Shortcuts
+        // would keep offering the previous region's trip bookmarks.
+        appShortcutParametersRefresher?.refresh()
+
+        // Deletes the previous region's stops from Spotlight, then indexes this one's.
+        stopSpotlightIndexer?.replaceAll()
+    }
+
+    /// The launch and region-change rebuilds read the cache before the region's
+    /// sync writes to it, so the index is rebuilt again once it has. A sync that
+    /// finishes as the rider switches regions is ignored: the switch rebuilt it.
+    public override func regionStopSyncWroteStops(regionID: Int) {
+        guard regionID == currentRegion?.regionIdentifier else { return }
+        stopSpotlightIndexer?.replaceAll()
     }
 
     public func regionsService(_ service: RegionsService, displayError error: Error) {
@@ -764,93 +908,39 @@ public class Application: CoreApplication, PushServiceDelegate {
     // MARK: - Error Visualization
 
     /// Classifies and displays an error to the end user.
+    ///
+    /// Shows a non-modal toast with a Details button rather than a modal card
+    /// (#1582). Bursts of the same failure collapse into one toast; see
+    /// `ErrorPresenter.shouldPresent(_:current:isShowingDetails:)`.
     @MainActor
     public override func displayError(_ error: Error) async {
-        let classified = ErrorClassifier.classify(error, regionName: currentRegionName, isCellularDataRestricted: isCellularDataRestricted)
-        Logger.error("Error: \(classified.localizedDescription)")
+        let report = ErrorReport(
+            error: error,
+            regionName: currentRegionName,
+            isCellularDataRestricted: isCellularDataRestricted,
+            systemVersion: Self.systemVersion,
+            deviceModel: Self.deviceModel
+        )
+        // `report.summary` rather than `error.localizedDescription`: a 404's
+        // description carries the full request URL, API key included.
+        Logger.error("Error [\(report.reference)]: \(report.errorCode) \(report.requestURL?.absoluteString ?? "") \(report.summary)")
 
         analytics?.reportError?(error)
 
-        guard let uiApp = delegate?.uiApplication else { return }
-        let bulletin = ErrorBulletin(application: self, classifiedError: classified)
-        bulletin.show(in: uiApp)
-        self.errorBulletin = bulletin
+        guard let scene = delegate?.uiApplication?.errorToastTargetScene else {
+            Logger.error("Error [\(report.reference)] not shown: no foreground window scene.")
+            return
+        }
+        errorPresenter.present(report, in: scene)
     }
 
-    private var errorBulletin: ErrorBulletin?
+    private let errorPresenter = ErrorPresenter()
+
+    // Fixed for the life of the process; `modelName` reflects over `uname`.
+    private static let systemVersion = UIDevice.current.systemVersion
+    private static let deviceModel = UIDevice.current.modelName
 
     // MARK: - Feature Availability
-
-    /// Models feature availability state in the app.
-    ///
-    /// Some applications might have support for features, like push notifications, that other white label versions of the app might lack.
-    /// `FeatureStatus` and `FeatureAvailability` describe whether those features are unavailable, not running, or available for use.
-    public enum FeatureStatus {
-
-        /// This feature is not available in this app.
-        case off
-
-        /// This feature is available, but is not fully configured for use.
-        ///
-        /// This might be due to a race condition, for instance, and the caller should assume that the feature may be available in the future.
-        case notRunning
-
-        /// This feature is available for use.
-        case running
-    }
-
-    /// Describes feature availability state in the app.
-    ///
-    /// Some applications might have support for features, like push notifications, that other white label versions of the app might lack.
-    /// `FeatureStatus` and `FeatureAvailability` describe whether those features are unavailable, not running, or available for use.
-    public struct FeatureAvailability {
-        private let config: AppConfig
-        private weak var application: Application?
-
-        init(config: AppConfig, application: Application) {
-            self.config = config
-            self.application = application
-        }
-
-        /// Feature status of the Obaco service.
-        public var obaco: FeatureStatus {
-            switch (application?.regionsService.currentRegion?.sidecarBaseURL, application?.obacoService) {
-            case (nil, nil): return .off
-            case (_, nil): return .notRunning
-            default: return .running
-            }
-        }
-
-        /// Feature status of push notifications.
-        public var push: FeatureStatus {
-            switch (config.pushServiceProvider, application?.pushService) {
-            case (nil, nil): return .off
-            case (_, nil): return .notRunning
-            default: return .running
-            }
-        }
-
-        /// Feature status of Deep Linking.
-        public var deepLinking: FeatureStatus {
-            switch (application?.regionsService.currentRegion?.sidecarBaseURL, application?.appLinksRouter) {
-            case (nil, nil): return .off
-            case (_, nil): return .notRunning
-            default: return .running
-            }
-        }
-
-        /// Feature status of OTP trip planning.
-        public var tripPlanning: FeatureStatus {
-            guard
-                let region = application?.regionsService.currentRegion,
-                region.supportsOTP
-            else {
-                return .off
-            }
-
-            return .running
-        }
-    }
 
     /// Documents availability of features in whitelabel clients, so that features like alarms, weather, and trip status can be hidden or shown.
     ///

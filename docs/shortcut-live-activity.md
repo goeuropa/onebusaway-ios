@@ -1,0 +1,77 @@
+# Shortcuts → Live Activity
+
+#1222 asked for a Shortcut that starts a Live Activity for a stop and routes.
+The app's Live Activities are already trip-shaped (stop + route + headsign),
+and the only user-curated list of those is **trip bookmarks**.
+
+## What a Shortcut does
+
+1. The **Track Bookmark** App Intent (`openAppWhenRun = true`) writes the
+   bookmark UUID into the app-group defaults via `LiveActivityShortcutRequest`.
+   `store` posts `.liveActivityShortcutRequestDidStore`.
+2. `openAppWhenRun` is equivalent to `supportedModes = .foreground(.immediate)`:
+   the app is already frontmost **before** `perform()` runs. Lifecycle hooks
+   (`applicationDidBecomeActive`, `rootUserInterfaceDidLoad`) therefore peek
+   an empty queue. The store notification wakes `Application`, which drains
+   the request from `topViewController` — it does **not** switch to the
+   Bookmarks tab. Cold launch still peeks from `rootUserInterfaceDidLoad`
+   if the observer was not yet registered when `store` posted.
+3. `LiveActivityShortcutDrain` builds its own `BookmarkDataLoader`, awaits
+   arrivals, then starts (or promotes) the Live Activity via the existing
+   Track path. No `Activity` is captured into a `Task`.
+
+Intents live in OBAKit, a Swift package target. Xcode merges a package's
+intent metadata into the app's own `Metadata.appintents`, so the app needs no
+`AppIntentsPackage`, and must not have one that includes OBAKit: the indexer
+would look for an `OBAKit.framework/Metadata.appintents` that doesn't exist
+and then ignore every intent in the app. `scripts/check_app_intents` fails
+the build if that comes back.
+
+The `AppShortcutsProvider`, `OBAAppShortcuts`, is in the app target
+(`Apps/Shared/CommonClient`), because the metadata processor drops one
+compiled into a package. Its `AppShortcuts.strings` and the intents'
+`AppIntents.strings` sit beside it, in the bundle that holds the metadata.
+
+The App Shortcut phrase includes `$bookmark`. `OBAAppShortcuts.updateAppShortcutParameters()`
+(reached through `AppConfig.appShortcutsProvider`) runs at launch and on `.bookmarksDidChange` so the donated list tracks the
+current region's trip bookmarks.
+
+Whole-stop bookmarks are omitted from the intent's entity query: they have no
+single route to Track. Out-of-region trip bookmarks are omitted too — arrivals
+only load for the current region, so offering them queued a request that never
+started and hijacked the Bookmarks tab on every launch. The region filter
+reads `RegionsService.currentRegionIdentifierUserDefaultsKey` (public
+`nonisolated`), not a copied string.
+
+A queued request expires after 90 seconds (and leftover ids without a timestamp
+are dropped). Drain does not switch tabs. Permanent blockers — Live Activities
+disabled system-wide, or a region mismatch — clear the request and log a
+warning. A transient failure (empty arrivals, ActivityKit error) **keeps** the
+request so another drain entry within the 90s window can retry; only a
+successful start/promote clears it. When a presenter is available, transient
+failure also shows the Track error alert.
+
+Arbitrary stop IDs that are not bookmarked are out of scope for this change.
+
+## Next Departures (#456)
+
+`NextDeparturesIntent` answers "when is my next bus?" from Siri without
+opening the app (`openAppWhenRun = false`). It takes the same `BookmarkEntity`,
+so Siri offers the same trip bookmarks as Track. With no bookmark spoken it
+uses the only one, asks which when there are several, and says so when there
+are none.
+
+`NextDeparturesLoader` fetches like `WidgetDataProvider`: region from
+`ResolvedRegionStore`, a standalone `RESTAPIService`, and
+`BookmarkArrivalsLoader` — the intent has no route to `Application`. The
+wording lives in `NextDeparturesSummary` (pure, unit tested): up to three
+departures, already-departed vehicles dropped, minute counts pluralized via
+`Localizable.stringsdict`.
+
+## Tests
+
+`LiveActivityShortcutRequestTests` pin store / peek / expiry, that `store`
+posts the drain notification, and that a still-fresh timestamp plus a
+non-UUID string is treated as empty (not as a missing timestamp).
+`BookmarkIntentMappingTests` pin trip-vs-whole-stop, the region filter, and
+that the query reads the `RegionsService` key.

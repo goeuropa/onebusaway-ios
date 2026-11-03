@@ -18,6 +18,9 @@ protocol StopAnnotationDelegate: NSObjectProtocol {
 
     /// Whether tapping a stop annotation should open a callout, or open the stop directly.
     var showsStopAnnotationCallouts: Bool { get }
+
+    /// Whether stop pins that would overlap merge into a cluster.
+    var clustersStops: Bool { get }
 }
 
 class StopAnnotationView: MKAnnotationView {
@@ -105,25 +108,27 @@ class StopAnnotationView: MKAnnotationView {
         super.prepareForReuse()
 
         labelStack.isHidden = true
+        clusteringIdentifier = nil
 
         titleLabel.text = nil
     }
 
     public override func prepareForDisplay() {
         super.prepareForDisplay()
+        applyPresentation()
+    }
 
-        // The delegate's answer can change between displays — it reads a feature flag the user
-        // can flip mid-session — and a recycled view still carries the previous one.
+    /// Sets the icon before MapKit shows the view. `prepareForDisplay` can run
+    /// a frame later; leaving `image` nil for that frame is the default-pin flash.
+    func applyPresentation() {
         updateCalloutVisibility()
+        clusteringIdentifier = delegate?.clustersStops == true ? StopCluster.clusteringIdentifier : nil
 
-        guard let delegate = delegate else {
-            return
-        }
+        guard let delegate else { return }
 
         if let bookmark = annotation as? Bookmark {
             prepareForDisplay(bookmark: bookmark, delegate: delegate)
-        }
-        else if let stop = annotation as? Stop {
+        } else if let stop = annotation as? Stop {
             prepareForDisplay(stop: stop, delegate: delegate)
         }
     }
@@ -146,7 +151,7 @@ class StopAnnotationView: MKAnnotationView {
         labelStack.isHidden = delegate.shouldHideExtraStopAnnotationData
         image = delegate.iconFactory.buildIcon(for: bookmark.stop, isBookmarked: true, traits: traitCollection)
         titleLabel.attributedText = strokedText(bookmark.name)
-        detailCalloutAccessoryView = buildDetailLabel(text: bookmark.stop.subtitle)
+        detailCalloutAccessoryView = buildDetailLabel(text: bookmark.stop.bookmarkCalloutText)
     }
 
     private func prepareForDisplay(stop: Stop, delegate: StopAnnotationDelegate) {
@@ -159,7 +164,7 @@ class StopAnnotationView: MKAnnotationView {
             titleLabel.text = ""
         }
 
-        detailCalloutAccessoryView = buildDetailLabel(text: stop.subtitle)
+        detailCalloutAccessoryView = buildDetailLabel(text: stop.mapCalloutText)
     }
 
     private func buildDetailLabel(text: String?) -> UILabel {
@@ -185,15 +190,25 @@ class StopAnnotationView: MKAnnotationView {
 
     override var accessibilityLabel: String? {
         get {
-            guard let stop = annotation as? Stop else {
-                return nil
-            }
-
-            return Formatters.formattedAccessibilityLabel(stop: stop)
+            Self.accessibilityLabel(for: annotation) ?? super.accessibilityLabel
         }
 
         set {
             super.accessibilityLabel = newValue
+        }
+    }
+
+    /// Bookmarks share this view with stops, and used to fall through to `nil` —
+    /// an unlabelled pin. They now read as the stop does, led by the bookmark's
+    /// own name when the rider gave it one.
+    static func accessibilityLabel(for annotation: MKAnnotation?) -> String? {
+        switch annotation {
+        case let stop as Stop:
+            return Formatters.formattedAccessibilityLabel(stop: stop)
+        case let bookmark as Bookmark:
+            return Formatters.formattedAccessibilityLabel(stop: bookmark.stop, bookmarkName: bookmark.name)
+        default:
+            return nil
         }
     }
 

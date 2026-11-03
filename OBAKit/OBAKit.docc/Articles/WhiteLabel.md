@@ -36,14 +36,16 @@ First, duplicate the `Apps/OneBusAway` directory and rename it as you see fit. I
 Second, update the files that are explicitly tied to OneBusAway with your own custom changes:
 
 * App Icon
-* AppDelegate.m
+* AppDelegate.swift
 * project.yml
 * GoogleService-Info.plist (if you want to use Firebase and Crashlytics)
 * regions.json
 
 (List is known to be incomplete. Pull requests welcome.)
 
-Most of the changes you will need to make should be in the files `AppDelegate.m` and `project.yml`.
+Most of the changes you will need to make should be in the files `AppDelegate.swift` and `project.yml`.
+
+Keep the `Apps/Shared/CommonClient` entry in your `project.yml`'s `sources`. That directory holds the code every app shares: the entry point, the scene delegate, and the Siri and Shortcuts setup described in <doc:WhiteLabel#Siri-and-Shortcuts>. Your app compiles it in place, so it picks up fixes there with no copying.
 
 ### 3. Generate Your App
 
@@ -63,29 +65,58 @@ Some features that are present within OneBusAway will require you to create and 
 
 (List accurate as of September 1, 2022.)
 
-If you do not wish to use these services in your app, you may disable them by excluding the relevant pieces of data in your `AppDelegate.m` and `project.yml` files. Furthermore, both analytics and push notifications are designed to support integration of other third party services. Please contact the OBAKit project maintainer for more information on how you can add support for other third party services.
+If you do not wish to use these services in your app, you may disable them by excluding the relevant pieces of data in your `AppDelegate.swift` and `project.yml` files. Furthermore, both analytics and push notifications are designed to support integration of other third party services. Please contact the OBAKit project maintainer for more information on how you can add support for other third party services.
 
 ## Embeddable Frameworks
 
-The new OneBusAway for iOS app is built on top of two frameworks as part of a project called OBAKit. These frameworks, OBAKitCore and OBAKit, provide all of the OneBusAway application's functionality, and they are designed to be reused in other applications.
+This repository is a Swift package with three library products, which other apps can add as a dependency. See "Using OBAKit as a Swift Package" in the README for how to add it, and for a warning: the API is not stable.
 
-### OBAKitCore.framework
+### OBAKitCore
 
-This is a lower-level framework whose primary function is to provide networking and data modeling services. It is a dependency of `OBAKit.framework`.
+A lower-level module for networking, data models, regions, and persistence, for iOS and watchOS. It is safe to use in app extensions. `OBAKit` and `OBAKitWatch` depend on it.
 
 Example use cases:
 
-* I want to access OneBusAway data from an AWS Lambda service.
-* I want to build a new OneBusAway UI for macOS or watchOS.
+* I want to build a new OneBusAway UI for watchOS.
 * I want to build a custom user interface for displaying OneBusAway data within my iOS app.
+* I want to show OneBusAway data in a widget.
 
-### OBAKit.framework
+### OBAKit
 
-This is a higher-level framework that contains almost all of the OneBusAway application UI. It depends on `OBAKitCore.framework`.
+A higher-level module that contains almost all of the OneBusAway application UI, for iOS.
 
 Example use cases:
 
 * I want to embed OneBusAway application screens, like stops or trip information, into my existing app.
+
+### OBAKitWatch
+
+The watch app's screens and host, for watchOS.
+
+## Siri and Shortcuts
+
+OBAKit defines two Siri and Shortcuts actions: **Track Bookmark**, which starts a Live Activity for a bookmarked trip, and **Next Departures**, which answers "when is my next bus?". Apple's tools put three requirements on where their pieces live, and each one fails silently: the app builds, launches and passes its tests, and the actions simply never appear in Siri or the Shortcuts app.
+
+1. **The App Shortcuts provider must be in your app target.** Xcode drops an `AppShortcutsProvider` compiled into a Swift package. Ours is `Apps/Shared/CommonClient/OBAAppShortcuts.swift`.
+2. **Your app must hand the provider to OBAKit**, so OBAKit can keep the list of bookmarks that Siri offers up to date. In your `AppDelegate`, after creating the `AppConfig`:
+
+   ```swift
+   appConfig.appShortcutsProvider = OBAAppShortcuts.self
+   ```
+
+3. **The strings must be in your app bundle.** The system looks up an action's strings in the bundle that carries the App Intents metadata, which is your app. Two tables, in every language you ship:
+   * `AppIntents.strings`: titles and descriptions of the actions.
+   * `AppShortcuts.strings`: the Siri phrases. Every phrase must contain `${applicationName}`, or Siri drops it.
+
+   Ours are in `Apps/Shared/CommonClient/<language>.lproj/`.
+
+Do **not** add an `AppIntentsPackage` type that includes OBAKit. Xcode already merges OBAKit's actions into your app. With that type, the system looks for metadata in an OBAKit framework that doesn't exist, and then ignores every action in your app.
+
+**A white-label app in this repository** gets all of this from `Apps/Shared/CommonClient` and from the `AppDelegate.swift` you copied in step 2. There is nothing to copy.
+
+**An app outside this repository** that depends on the OBAKit package has to provide the three pieces itself. Copy `OBAAppShortcuts.swift` and both tables into your app target, and add the `AppConfig` line.
+
+To check a build, run `scripts/check_app_intents path/to/YourApp.app`. It fails if an action, the shortcuts, or a strings table is missing, or if the app includes a package's actions the system can't find. CI runs it on the OneBusAway app. After installing on a simulator or device, the Shortcuts app should list your app with "Track bookmark" and "Next departures".
 
 ## Apple Developer Accounts and Settings
 
@@ -146,15 +177,84 @@ These are parameters specified in your app's `project.yml` file that customizes 
     RESTServerAPIKey: org.onebusaway.iphone
     RegionsServerBaseAddress: https://regions.onebusaway.org
     RegionsServerAPIPath: /regions-v3.json
+    DefaultArrivalDepartureFilter: all
 
 ### Regions
 
-There are three parameters that are associated with regions:
+There are five parameters that are associated with regions:
 
 * `BundledRegionsFileName` - Required.
 * `RegionsServerBaseAddress` - Optional.
 * `RegionsServerAPIPath` - Optional.
+* `FixedRegionName` - Optional.
+* `FixedRegionOBABaseURL` - Optional.
 
 The regions JSON file that you will specify with the `BundledRegionsFileName` parameter is required so that the app can show the user a list of available regions as soon as the application launches, without having to worry about having an internet connection. However, that list will eventually/inevitably become out of date, and so the app will also regularly download the remote copy of the regions file to make sure that changes (names, features, new regions, deleted regions) are handled.
 
 If you choose to leave out `RegionsServerBaseAddress` and `RegionsServerAPIPath`, then your app will rely solely on the bundled regions file for all regions that your application will know about. It is _highly_ recommended that you provide a regions server URL and path, but it is not strictly required.
+
+### Default region from OBAKitConfig
+
+These keys are **not a pin**. `RegionsService.init` resolves a region in this order:
+
+1. Previously stored region (UserDefaults), **unless** location auto-select is on (the default) — then a cached fix inside a known region can overwrite it
+2. Location-based auto-select when auto-select is on *or* no region is stored yet (`|| currentRegion == nil`), and `LocationService` already has a cached fix inside a known region
+3. `FixedRegionName`, then `FixedRegionOBABaseURL` if the name matches nothing — only when `currentRegion` is still nil after steps 1–2
+4. The only *active* region in the list, when there is exactly one
+5. The region picker
+
+A rider whose device already has a location fix inside another region's bounds will get **that** region, not the configured one. `OBAKitTests` covers this as `Location based selection takes priority`. Because location runs whenever `currentRegion` is nil (including first launch), registering `OBAAutomaticallySelectRegionUserDefaultsKey` as `false` does **not** skip that match on the launch where `FixedRegionName` could apply. An agency that needs every install on one region must ship a list with only that region (or avoid prompting for location so `currentLocation` stays nil); these keys will not override a location match.
+
+* `FixedRegionName` - Optional. The `name` of a region in the bundled (or downloaded) list. Used only when steps 1–2 left `currentRegion` nil. A successful match writes that region and turns auto-select off so a *later* location fix cannot steal it — an *earlier* one already can.
+* `FixedRegionOBABaseURL` - Optional. Used only when `FixedRegionName` is set and does not match any known region. The first region whose OBA base URL equals this value is selected instead. A missing or unparseable URL is ignored.
+
+Name match wins over URL match. Neither key overrides a stored region or a location match.
+
+If the name matches nothing and the URL fallback misses too, step 4 still runs: a list with exactly one active region selects that region and the picker does not appear. The picker runs only when every step above leaves `currentRegion` unset.
+
+### Arrival and Departure Display
+
+* `DefaultArrivalDepartureFilter` - Optional. Defaults to `all`.
+
+Stop pages can hide departures that lack real-time data, or hide the real-time ones and show only the schedule. This parameter picks which of those a fresh install starts with:
+
+* `all` - Show every departure. This is the behavior you get if you omit the parameter, and the right choice for most agencies.
+* `estimatedOnly` - Show only departures the server has real-time data for. Worth considering if your feed's scheduled times are unreliable enough that riders are better off not seeing them.
+* `scheduledOnly` - Show only departures without real-time data.
+
+This is a starting value, not a lock: riders can change it in Settings under Arrival & Departure Display, or from the Departure Type menu on any stop page, and their choice is remembered from then on. An unrecognized value is ignored and treated as `all`.
+
+### Launch Route
+
+* `LaunchRouteID` - Optional. The full route ID (agency prefix included, e.g. `1_100479`) of a route the map opens on.
+
+Meant for agencies with one route, or one that matters far more than the rest, so riders see it the moment the app opens instead of finding a stop first. The route is shown the same way as a route the rider searched for: its path, only its stops, and the route sheet, whose Close button brings the ordinary map back.
+
+It is offered once per launch, and only when nothing else has already decided what the rider should see. A deep link, an opened user activity (Handoff, Spotlight, a donated shortcut), a tapped alarm or proximity notification, a stop waiting to open, or a restored tab other than the map each skip it for that launch. The route is looked up on the current region's server once a region exists, so on a first launch it appears after the region is chosen. A route ID the server doesn't recognize, or one with no shape, is logged and the ordinary map is shown.
+
+Omit the key, or leave it empty, to keep the default behavior.
+
+### More Tab
+
+* `MoreTab` - Optional dictionary. Customizes the More (settings) tab header and menu items without forking the UI. Omit the whole key to keep OneBusAway defaults. KiedyBus is a working example.
+
+Nested keys (all optional):
+
+* `HeaderSupportText` - String shown in the branded header box. Omit or leave empty to keep the default volunteer-support copy.
+* `ShowHelpOutSection` - Boolean. Defaults to `true`. Set `false` to hide the "Help make the app better" section (translate / develop rows).
+* `TranslateURL` - URL for "Help Translate the App". Omit to hide that row. OneBusAway currently omits it; white-label apps can opt in.
+* `DevelopURL` - URL for "Help Fix Bugs & Build New Features". Defaults to the OneBusAway iOS GitHub repo when omitted. An empty string hides the row — and because the section is dropped when it has no rows left, an empty `DevelopURL` also hides the "Help make the app better" header whenever `TranslateURL` is absent, which is the OneBusAway default. Set `ShowHelpOutSection` to `false` when hiding the whole section is the intent.
+* `TutorialURL`, `PhoneURL`, `TextURL` - Optional. When set, they appear under "Contact & Help" as Tutorials, Call Agency, and Text Agency. `tel:` and `sms:` URLs are valid. Empty strings are ignored.
+* `CustomLinks` - Array of `{Title, URL}` dictionaries. Shown under "Resources". A row is dropped if `Title` or `URL` is missing or the URL is empty.
+
+Example (KiedyBus-style):
+
+```yaml
+OBAKitConfig:
+  MoreTab:
+    HeaderSupportText: "Powered by goEuropa"
+    ShowHelpOutSection: false
+    CustomLinks:
+      - Title: "goEuropa Website"
+        URL: "https://www.goeuropa.eu"
+```

@@ -24,79 +24,78 @@ public struct MapItemView: View {
     /// The view model that manages the data and business logic
     private var viewModel: MapItemViewModel
 
+    /// Whether to show the Share button; the UIKit host shows it, the sheet uses a native ShareLink
+    private let showsShareButton: Bool
+
     /// State for controlling the Look Around viewer presentation
     @State private var showLookAroundViewer = false
 
     /// Initializes a new map item view.
     ///
     /// - Parameter viewModel: The view model containing the map item data and handling user actions
-    public init(viewModel: MapItemViewModel) {
+    /// - Parameter showsShareButton: Whether to show the Share button (default: true for UIKit host)
+    public init(viewModel: MapItemViewModel, showsShareButton: Bool = true) {
         self.viewModel = viewModel
+        self.showsShareButton = showsShareButton
     }
 
     public var body: some View {
-        ZStack {
-            Color.clear
-                .background(.ultraThinMaterial)
-                .ignoresSafeArea(.all)
+        VStack(spacing: 0) {
+            headerView
+                .padding(.top, 20)
+                .padding(.horizontal)
 
-            VStack(spacing: 0) {
-                headerView
-                    .padding(.top, 20)
-                    .padding(.horizontal)
+            ScrollView {
+                VStack(spacing: 20) {
+                    // Action Buttons and Nearby Stops
+                    VStack(spacing: 12) {
+                        actionButtonsRow
+                            .padding(.horizontal)
 
-                ScrollView {
-                     VStack(spacing: 20) {
-                        // Action Buttons and Nearby Stops
-                        VStack(spacing: 12) {
-                            actionButtonsRow
-                                .padding(.horizontal)
-
-                            // Nearby Stops Button - show as full-width only when call/website buttons exist
-                            if viewModel.phoneNumber != nil || viewModel.url != nil {
-                                Button(
-                                    action: {
-                                        viewModel.showNearbyStops()
-                                    },
-                                    label: {
-                                        HStack {
-                                            Text(OBALoc("map_item_controller.nearby_stops", value: "Nearby Stops", comment: "Button to view nearby stops"))
-                                                .bold()
-                                            Spacer()
-                                            Image(systemName: "chevron.right")
-                                                .font(.caption)
-                                                .bold()
-                                        }
-                                        .padding()
-                                        .background(Color(uiColor: .secondarySystemBackground))
-                                        .clipShape(.rect(cornerRadius: 12))
+                        // Nearby Stops Button - show as full-width only when call/website buttons exist
+                        if viewModel.phoneNumber != nil || viewModel.url != nil {
+                            Button(
+                                action: {
+                                    viewModel.showNearbyStops()
+                                },
+                                label: {
+                                    HStack {
+                                        Text(OBALoc("map_item_controller.nearby_stops", value: "Nearby Stops", comment: "Button that shows the stops near this map item."))
+                                            .bold()
+                                        Spacer()
+                                        Image(systemName: "chevron.forward")
+                                            .font(.caption)
+                                            .bold()
                                     }
-                                )
-                                .padding(.horizontal)
-                                .foregroundStyle(.primary)
-                                .accessibilityLabel(OBALoc("map_item_controller.nearby_stops_accessibility", value: "View nearby transit stops", comment: "Accessibility label for nearby stops button"))
-                            }
+                                    .padding()
+                                    .background(Color(uiColor: .secondarySystemBackground))
+                                    .clipShape(.rect(cornerRadius: 12))
+                                }
+                            )
+                            .padding(.horizontal)
+                            .foregroundStyle(.primary)
+                            .accessibilityLabel(OBALoc("map_item_controller.nearby_stops_accessibility", value: "View nearby transit stops", comment: "Accessibility label for nearby stops button"))
                         }
-
-                        if let scene = viewModel.lookAroundScene {
-                            lookAroundSection(scene: scene)
-                        }
-
-                        if viewModel.hasAboutContent {
-                            aboutSection
-                                .padding(.horizontal)
-                        }
-
-                        // Remove Pin button for user-dropped pins
-                        if viewModel.canRemovePin {
-                            removePinSection
-                                .padding(.horizontal)
-                        }
-
-                        Spacer(minLength: 40)
                     }
-                    .padding(.top)
+
+                    if let scene = viewModel.lookAroundScene {
+                        lookAroundSection(scene: scene)
+                    }
+
+                    if viewModel.hasAboutContent {
+                        aboutSection
+                            .padding(.horizontal)
+                    }
+
+                    // Remove Pin button for user-dropped pins
+                    if viewModel.canRemovePin {
+                        removePinSection
+                            .padding(.horizontal)
+                    }
+
+                    Spacer(minLength: 40)
                 }
+                .padding(.top)
             }
         }
         .lookAroundViewer(
@@ -124,23 +123,37 @@ public struct MapItemView: View {
                         .lineLimit(1)
                         .padding(.horizontal, 44)
                 }
+
+                if let line = viewModel.coverageLine {
+                    Button { viewModel.openCoverageDetail() } label: {
+                        Label(line.text, systemImage: line.isInside ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(line.isInside ? Color(uiColor: .systemGreen) : Color(uiColor: .systemRed))
+                            .frame(minHeight: 44)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 44)
+                }
             }
             .frame(maxWidth: .infinity)
             .padding(.top, 4)
 
             HStack(alignment: .top) {
                 // Share Button
-                Button("Share", systemImage: "square.and.arrow.up") {
-                    viewModel.shareLocation()
+                if showsShareButton {
+                    Button("Share", systemImage: "square.and.arrow.up") {
+                        viewModel.shareLocation()
+                    }
+                    .labelStyle(.iconOnly)
+                    .font(.title3)
+                    .foregroundStyle(.primary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(.circle)
+                    .background(.regularMaterial)
+                    .clipShape(.circle)
+                    .accessibilityLabel(OBALoc("map_item_controller.share_button", value: "Share Location", comment: "Accessibility label for share button"))
                 }
-                .labelStyle(.iconOnly)
-                .font(.title3)
-                .foregroundStyle(.primary)
-                .frame(width: 44, height: 44)
-                .contentShape(.circle)
-                .background(.regularMaterial)
-                .clipShape(.circle)
-                .accessibilityLabel(OBALoc("map_item_controller.share_button", value: "Share Location", comment: "Accessibility label for share button"))
 
                 Spacer()
 
@@ -211,7 +224,7 @@ public struct MapItemView: View {
             // Nearby Stops - show next to Plan Trip when call/website buttons are absent
             if viewModel.phoneNumber == nil && viewModel.url == nil {
                 actionButton(
-                    title: OBALoc("map_item_controller.nearby_stops", value: "Nearby Stops", comment: "Nearby stops button"),
+                    title: OBALoc("map_item_controller.nearby_stops", value: "Nearby Stops", comment: "Button that shows the stops near this map item."),
                     icon: "mappin.and.ellipse",
                     backgroundColor: Color(uiColor: .secondarySystemBackground),
                     foregroundColor: Color(uiColor: ThemeColors.shared.brand),
@@ -275,6 +288,11 @@ public struct MapItemView: View {
             }
             .accessibilityLabel(OBALoc("map_item_controller.look_around", value: "Look Around preview. Tap to open full screen viewer", comment: "Accessibility label for Look Around preview"))
             .accessibilityAddTraits(.isButton)
+            // `.onTapGesture` is invisible to assistive tech; without a default
+            // action the preview announces "button" and activating does nothing.
+            .accessibilityAction {
+                showLookAroundViewer = true
+            }
     }
 
     /// The "About" section displaying location details such as address, phone, and URL.
@@ -282,6 +300,7 @@ public struct MapItemView: View {
         VStack(alignment: .leading, spacing: 16) {
             Text(OBALoc("map_item_controller.about_header", value: "About", comment: "About section header"))
                 .font(.headline)
+                .accessibilityAddTraits(.isHeader)
                 .padding(.leading, 4)
 
             VStack(spacing: 0) {

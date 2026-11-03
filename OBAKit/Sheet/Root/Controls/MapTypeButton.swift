@@ -10,11 +10,16 @@
 import SwiftUI
 import OBAKitCore
 
-/// Floating map-type toggle rendered on the bottom-trailing cluster of
-/// `MapPanelRootView`. Mirrors the UIKit `toggleMapTypeButton` in
-/// `MapViewController` — same icons, same accessibility strings, same VM call.
+/// Floating basemap button on the bottom-trailing cluster of
+/// `MapPanelRootView`. Opens the Map sheet, which absorbs the old
+/// standard/hybrid toggle as its basemap tiles — the same move
+/// `MapViewController`'s basemap button already made.
+///
+/// The badge carries the active-layer count: layer state stays readable
+/// without opening anything.
 struct MapTypeButton: View {
     let mapType: MapBaseType
+    let badgeCount: Int
     let onTap: () -> Void
 
     var body: some View {
@@ -25,42 +30,24 @@ struct MapTypeButton: View {
                 .contentShape(Circle())
         }
         .liquidGlassButtonStyle(borderShape: .circle, fallbackShape: Circle())
-        .accessibilityLabel(Text(OBALoc(
-            "map_controller.map_type.accessibility_label",
-            value: "Map type",
-            comment: "Voiceover text indicating that this button toggles the base map type."
-        )))
-        .accessibilityValue(Text(accessibilityValueText))
+        .overlay(alignment: .topTrailing) {
+            if badgeCount > 0 {
+                Text(String(badgeCount))
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(Color(uiColor: MapTypeButtonPresentation.badgeTextColor))
+                    .frame(minWidth: 15, minHeight: 15)
+                    .background(Color(uiColor: ThemeColors.shared.brand), in: Circle())
+                    .offset(x: -2, y: 2)
+                    .accessibilityHidden(true)
+            }
+        }
+        // Shared with `MapViewController`'s hover-bar button, which opens the
+        // same sheet; see `MapTypeButtonPresentation`.
+        .accessibilityLabel(Text(MapTypeButtonPresentation.accessibilityLabel))
+        .accessibilityValue(Text(MapTypeButtonPresentation.accessibilityValue(mapType: mapType, layerCount: badgeCount)))
     }
 
     private var symbolName: String {
-        switch mapType {
-        case .standard: return "map"
-        case .satellite: return "globe.americas.fill"
-        case .hybrid: return "globe"
-        }
-    }
-
-    private var accessibilityValueText: String {
-        switch mapType {
-        case .standard:
-            return OBALoc(
-                "map_controller.map_type.standard.accessibility_value",
-                value: "standard",
-                comment: "Voiceover text indicating the current map type as the standard base map."
-            )
-        case .satellite:
-            return OBALoc(
-                "map_controller.map_type.satellite.accessibility_value",
-                value: "satellite",
-                comment: "Voiceover text indicating the current map type as the satellite base map."
-            )
-        case .hybrid:
-            return OBALoc(
-                "map_controller.map_type.hybrid.accessibility_value",
-                value: "hybrid",
-                comment: "Voiceover text indicating the current map type as the hybrid base map (satellite view with labels)."
-            )
-        }
+        MapTypeButtonPresentation.symbolName(for: mapType)
     }
 }

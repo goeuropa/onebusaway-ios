@@ -31,6 +31,7 @@ struct TripCardView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.obaFormatters) private var formatters
     @AppStorage(UserDefaultsStore.stopUIReducedColorsKey) private var reducedColors = false
+    @AppStorage(UserDefaultsStore.stopTripCompactModeKey) private var compactMode = false
 
     private var status: DepartureStatus? {
         departure.map { DepartureStatus(arrivalDeparture: $0) }
@@ -44,8 +45,12 @@ struct TripCardView: View {
         departure.map { DepartureTimeDisplay(arrivalDeparture: $0, formatters: formatters) }
     }
 
+    private var etaDistance: TripETADistance? {
+        departure.flatMap { TripETADistance.make(departure: $0, formatter: formatters.distanceFormatter) }
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: StopTripSpacing.card(compactMode)) {
             if dynamicTypeSize.isAccessibilitySize {
                 // Same stacking rule as `DepartureRowView`: badge and countdown
                 // stay together as glance tokens, everything else flows below.
@@ -56,13 +61,15 @@ struct TripCardView: View {
                 }
                 headsignText
                 timeAndStatus
+                distanceLine
                 occupancy
             } else {
-                HStack(alignment: .top, spacing: 13) {
+                HStack(alignment: .top, spacing: StopTripSpacing.hStack(compactMode)) {
                     badge
                     VStack(alignment: .leading, spacing: 4) {
                         headsignText
                         timeAndStatus
+                        distanceLine
                         occupancy
                     }
                     Spacer(minLength: 8)
@@ -78,7 +85,7 @@ struct TripCardView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(14)
+        .padding(StopTripSpacing.cardPadding(compactMode))
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
         // The card is one fact about one vehicle, so it is one VoiceOver stop —
@@ -90,6 +97,20 @@ struct TripCardView: View {
         // page exists to tell you — reached VoiceOver from nowhere at all.
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityText)
+        // A focused card re-speaks as its countdown changes, like the Stop page rows.
+        // A heading because it's what this page is about, so the Headings rotor
+        // reaches it first.
+        .accessibilityAddTraits([.updatesFrequently, .isHeader])
+    }
+
+    /// "Route 10 to Capitol Hill". Also the trip page's title.
+    static func routeToHeadsign(_ routeShortName: String, _ headsign: String) -> String {
+        let fmt = OBALoc(
+            "trip_page.card.a11y_no_arrival_fmt",
+            value: "Route %@ to %@",
+            comment: "VoiceOver label for the trip page's header card when the trip was reached without a stop, so there is no arrival time. Also the trip page's title."
+        )
+        return String(format: fmt, routeShortName, headsign)
     }
 
     /// "Arrives" rather than the departure list's "departs": this card is the one
@@ -98,12 +119,7 @@ struct TripCardView: View {
         guard let departure, let status, let timeDisplay else {
             // Reached from vehicle search: no stop, so no arrival to count down to.
             // Route and headsign are all there is to say.
-            let fmt = OBALoc(
-                "trip_page.card.a11y_no_arrival_fmt",
-                value: "Route %@ to %@",
-                comment: "VoiceOver label for the trip page's header card when the trip was reached without a stop, so there is no arrival time."
-            )
-            return [String(format: fmt, routeShortName, headsign), provenance]
+            return [Self.routeToHeadsign(routeShortName, headsign), provenance]
                 .compactMap { $0 }
                 .joined(separator: ", ")
         }
@@ -117,14 +133,16 @@ struct TripCardView: View {
         let identity: String
         if departure.arrivalDepartureMinutes < 0 {
             let fmt = OBALoc("stop_page.row.a11y_past_fmt", value: "Route %@ to %@, departed %d minutes ago, %@", comment: "VoiceOver label for a departure row that has already departed: route, headsign, minutes ago, status.")
-            identity = String(format: fmt, routeShortName, headsign, abs(departure.arrivalDepartureMinutes), status.accessibilityStatusDescription)
+            // localizedStringWithFormat: see StopPageAccessibilityCopy — the no-locale
+            // overload makes Slavic `few`/`many` unreachable.
+            identity = String.localizedStringWithFormat(fmt, routeShortName, headsign, abs(departure.arrivalDepartureMinutes), status.accessibilityStatusDescription)
         } else {
             let fmt = OBALoc(
                 "trip_page.card.a11y_fmt",
                 value: "Route %@ to %@, arrives in %d minutes, %@",
                 comment: "VoiceOver label for the trip page's header card: route, headsign, minutes until arrival, status."
             )
-            identity = String(format: fmt, routeShortName, headsign, departure.arrivalDepartureMinutes, status.accessibilityStatusDescription)
+            identity = String.localizedStringWithFormat(fmt, routeShortName, headsign, departure.arrivalDepartureMinutes, status.accessibilityStatusDescription)
         }
 
         return DepartureAccessibility.label(
@@ -132,7 +150,7 @@ struct TripCardView: View {
             departure: departure,
             status: status,
             timeDisplay: timeDisplay,
-            extraClauses: [provenance].compactMap { $0 }
+            extraClauses: [etaDistance?.accessibilityText, provenance].compactMap { $0 }
         )
     }
 
@@ -163,6 +181,16 @@ struct TripCardView: View {
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(Color(uiColor: status.color))
             }
+        }
+    }
+
+    @ViewBuilder
+    private var distanceLine: some View {
+        if let etaDistance {
+            Text(etaDistance.text)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

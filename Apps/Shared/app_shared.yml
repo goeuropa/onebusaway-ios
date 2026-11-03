@@ -6,15 +6,17 @@ name: OBAKit
 
 settings:
   base:
-    MARKETING_VERSION: 26.4.0
+    MARKETING_VERSION: 26.5.0
     # Swift 6 migration, now complete (docs/swift6-migration-plan.md): every
     # target in the project — frameworks, apps, widget, OBAKitTests and
     # OBAKitUITests — builds in the Swift 6 language mode with main-actor
     # default isolation.
-    # Exactly one target overrides this base: OBAKitCore pins
-    # SWIFT_DEFAULT_ACTOR_ISOLATION back to nonisolated, because it owns the
-    # actors and the background decode. OBAKitTests used to override it too;
-    # that pin went away when the suite moved to Swift Testing (see Phase 4).
+    # OBAKitCore, OBAKit and OBAKitWatch are the exception: they are Swift
+    # package targets (Package.swift at the repo root), so none of these
+    # settings reach them. Package.swift reproduces them, except that Core's
+    # default isolation stays nonisolated because Core owns the actors and the
+    # background decode. OBAKitTests used to override it too; that pin went
+    # away when the suite moved to Swift Testing (see Phase 4).
     # Approachable concurrency stays on permanently for Swift 6 targets (two
     # of its five features are not part of the Swift 6 language mode).
     SWIFT_STRICT_CONCURRENCY: complete
@@ -50,8 +52,10 @@ targets:
     type: application
     platform: iOS
     dependencies:
-      - target: OBAKitCore
-      - target: OBAKit
+      - package: OBAKit
+        product: OBAKitCore
+      - package: OBAKit
+        product: OBAKit
       - target: OBAWidget
     info:
       properties:
@@ -75,6 +79,13 @@ targets:
           - fb
           - twitter
           - comgooglemaps
+        # Nearby alerts (stop proximity alerts) geofence the chosen stop, and Core
+        # Location only delivers region events in the background under Always. The
+        # body opens with the When In Use sentence, because iOS can show this string
+        # from .notDetermined too, then names the background use. Translations live
+        # in Apps/<App>/<locale>.lproj/InfoPlist.strings; keep the term in step with
+        # the stop_page.proximity_alert.* strings in OBAKit/Strings.
+        NSLocationAlwaysAndWhenInUseUsageDescription: "See where you are in relation to transit, and help you navigate more easily. Nearby alerts also use your location in the background to let you know when you're approaching a stop you chose, even when the app is closed."
         NSLocationWhenInUseUsageDescription: See where you are in relation to transit, and help you navigate more easily.
         # HealthKit purpose strings live in Apps/Shared/info_plist.yml (shared by every app).
         NSLocationTemporaryUsageDescriptionDictionary:
@@ -88,15 +99,21 @@ targets:
           - UIInterfaceOrientationLandscapeRight
           - UIInterfaceOrientationPortraitUpsideDown
         UIApplicationSceneManifest:
-          UIApplicationSupportsMultipleScenes: false
+          UIApplicationSupportsMultipleScenes: true
           UISceneConfigurations:
             UIWindowSceneSessionRoleApplication:
               - UISceneConfigurationName: Default Configuration
-                UISceneDelegateClassName: SceneDelegate
+                UISceneDelegateClassName: "$(PRODUCT_MODULE_NAME).SceneDelegate"
     preBuildScripts:
       - name: Versioning
         script: "${PROJECT_DIR}/scripts/version"
         runOnlyWhenInstalling: true         # For SwiftUI Xcode Previews.
+    # Lints the whole repository. It ran after the OBAKit framework built until
+    # OBAKit became a package target, which can't carry a script phase.
+    postBuildScripts:
+      - name: Swiftlint
+        script: 'sh "${PROJECT_DIR}/scripts/swiftlint.sh"'
+        basedOnDependencyAnalysis: false
     scheme:
       gatherCoverageData: true
       testTargets:
@@ -116,30 +133,24 @@ targets:
           DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
 
 packages:
-    BLTNBoard:
-        url: https://github.com/alexaubry/BulletinBoard.git
-        exactVersion: 5.0.0
-    Eureka:
-        url: https://github.com/xmartlabs/Eureka.git
-        exactVersion: 5.5.0
+    # This repository's own Package.swift, which builds OBAKitCore, OBAKit and
+    # OBAKitWatch. Their dependencies are declared there. The path is relative
+    # to this file, as included paths are.
+    OBAKit:
+        path: ../..
     FloatingPanel:
         url: https://github.com/SCENEE/FloatingPanel.git
-        exactVersion: 3.2.2
+        exactVersion: 3.2.4
+    OTPKit:
+        url: https://github.com/OneBusAway/otpkit.git
+        minorVersion: 0.17.0
+    # FloatingPanel, OTPKit and Core's dependencies are declared again here
+    # (Package.swift has them too) so OBAKitTests, which uses each directly, can
+    # link them. Xcode resolves each pair of declarations to the same package
+    # and builds it once.
     GRDB:
         url: https://github.com/groue/GRDB.swift.git
         minorVersion: 7.11.0
-    Hyperconnectivity:
-        url: https://github.com/rwbutler/Hyperconnectivity.git
-        exactVersion: 1.2.0
-    MarqueeLabel:
-        url: https://github.com/cbpowell/MarqueeLabel.git
-        exactVersion: 4.5.3
-    OTPKit:
-        # OneBusAway/otpkit#155 has merged to main but is not in a tagged
-        # release yet; track main until one ships, then switch back to a
-        # version range.
-        url: https://github.com/OneBusAway/otpkit.git
-        branch: main
     SwiftProtobuf:
         url: https://github.com/apple/swift-protobuf.git
         minorVersion: 1.38.1

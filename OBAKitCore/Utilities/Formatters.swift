@@ -10,10 +10,29 @@
 import Foundation
 import MapKit
 
+public extension Notification.Name {
+    /// Posted after `Formatters.timeZone` changes so on-screen clock rows can
+    /// redraw when the region zone lands asynchronously.
+    static let formattersTimeZoneDidChange = Notification.Name("OBAFormattersTimeZoneDidChange")
+}
+
 public class Formatters: NSObject {
     private let locale: Locale
     private let themeColors: ThemeColors
     private let calendar: Calendar
+
+    /// Zone used for clock times (arrivals, trip times, transfer banners).
+    ///
+    /// Defaults to the device zone so existing tests and pre-region-load UI stay
+    /// stable. When the rider opts in, `CoreApplication` replaces this with the
+    /// region's dominant agency zone once `agencies-with-coverage` returns.
+    public var timeZone: TimeZone = .autoupdatingCurrent {
+        didSet {
+            guard oldValue != timeZone else { return }
+            applyTimeZoneToFormatters()
+            NotificationCenter.default.post(name: .formattersTimeZoneDidChange, object: self)
+        }
+    }
 
     /// Creates a new `Formatters` object that will use the provided `Calendar` and `Locale` for locale-specific customization.
     ///
@@ -44,11 +63,38 @@ public class Formatters: NSObject {
     /// - Parameter date: The date from which the return value will be created.
     public func contextualDateTimeString(_ date: Date) -> String {
         if calendar.isDateInToday(date) {
-            return timeFormatter.string(from: date)
+            return formattedClockTime(date)
         }
         else {
-            return shortDateTimeFormatter.string(from: date)
+            return appendingScheduleBadge(to: shortDateTimeFormatter.string(from: date), at: date)
         }
+    }
+
+    /// Clock time in `timeZone`, with a parenthetical badge when the device
+    /// offset differs. Same-offset riders see a bare time — issue #332.
+    public func formattedClockTime(_ date: Date, deviceTimeZone: TimeZone = .current) -> String {
+        appendingScheduleBadge(to: timeFormatter.string(from: date), at: date, deviceTimeZone: deviceTimeZone)
+    }
+
+    public func appendingScheduleBadge(to clock: String, at date: Date, deviceTimeZone: TimeZone = .current) -> String {
+        guard let badge = timeZone.scheduleBadge(at: date, versus: deviceTimeZone) else {
+            return clock
+        }
+        return String(
+            format: OBALoc(
+                "timezone.clock_with_badge_fmt",
+                value: "%1$@ (%2$@)",
+                comment: "Clock time with a timezone badge, e.g. 4:00 PM (PST). First argument is the clock. Second is the badge."
+            ),
+            clock,
+            badge
+        )
+    }
+
+    private func applyTimeZoneToFormatters() {
+        timeFormatter.timeZone = timeZone
+        shortDateTimeFormatter.timeZone = timeZone
+        dateIntervalFormatter.timeZone = timeZone
     }
 
     /// Converts a date into a human-readable date/time string that conforms to the user's locale.
@@ -57,16 +103,28 @@ public class Formatters: NSObject {
         formatter.dateStyle = .short
         formatter.timeStyle = .short
         formatter.locale = locale
+        formatter.timeZone = timeZone
 
         return formatter
     }()
 
     /// Converts a date into a human-readable time string that conforms to the user's locale.
+    ///
+    /// Zoned to the region, and deliberately unbadged. Reach for
+    /// ``formattedClockTime(_:deviceTimeZone:)`` instead whenever a clock stands on
+    /// its own — a single arrival, a row a rider reads without surrounding times —
+    /// because there a region-zone time is indistinguishable from a local one.
+    ///
+    /// Using this directly is right for a run of times that share one context and
+    /// establish the zone between them: the stop lists in `TripStopListItem`,
+    /// `TripStopListView` and `DestinationStopPickerController` are all times along
+    /// a single trip, where a badge on every row would be noise. Audited for #1438.
     public lazy var timeFormatter: DateFormatter = {
         let timeFormatter = DateFormatter()
         timeFormatter.dateStyle = .none
         timeFormatter.timeStyle = .short
         timeFormatter.locale = locale
+        timeFormatter.timeZone = timeZone
 
         return timeFormatter
     }()
@@ -75,6 +133,7 @@ public class Formatters: NSObject {
         let formatter = DateIntervalFormatter()
         formatter.dateStyle = .short
         formatter.timeStyle = .short
+        formatter.timeZone = timeZone
         return formatter
     }()
 
@@ -124,15 +183,13 @@ public class Formatters: NSObject {
         arrivalDepartureStatus: ArrivalDepartureStatus,
         scheduleDeviationInMinutes: Int) -> NSAttributedString {
 
-        let arrDepTime = timeFormatter.string(from: arrivalDepartureDate)
+        let arrDepTime = formattedClockTime(arrivalDepartureDate)
 
-        let explanationText: String
-        if scheduleStatus == .unknown {
-            explanationText = Strings.scheduledNotRealTime
-        }
-        else {
-            explanationText = formattedScheduleDeviation(temporalState: temporalState, arrivalDepartureStatus: arrivalDepartureStatus, scheduleDeviation: scheduleDeviationInMinutes)
-        }
+        let explanationText = deviationLabel(
+            scheduleStatus: scheduleStatus,
+            temporalState: temporalState,
+            arrivalDepartureStatus: arrivalDepartureStatus,
+            scheduleDeviation: scheduleDeviationInMinutes)
 
         let scheduleStatusColor = colorForScheduleStatus(scheduleStatus)
         let timeExplanationFont = UIFont.preferredFont(forTextStyle: .footnote)
@@ -182,7 +239,7 @@ public class Formatters: NSObject {
     /// - "arriving in 3 minutes at 9:57pm"
     /// - "scheduled to arrive in 3 minutes at 9:57pm"
     public func accessibilityValueForArrivalDeparture(arrivalDepartureDate: Date, arrivalDepartureMinutes: Int, arrivalDepartureStatus: ArrivalDepartureStatus, temporalState: TemporalState, scheduleStatus: ScheduleStatus) -> String {
-        let arrDepTime = timeFormatter.string(from: arrivalDepartureDate)
+        let arrDepTime = formattedClockTime(arrivalDepartureDate)
 
         let apply: (String) -> String = { String(format: $0, abs(arrivalDepartureMinutes), arrDepTime) }
 
@@ -268,6 +325,22 @@ public class Formatters: NSObject {
         }
     }
 
+    /// One-word caption under the minutes countdown so a layover/first stop
+    /// is readable at a glance (#447). The explanation line already says
+    /// Arrives/Departs; the minutes badge did not.
+    public func arrivalDepartureCaption(for status: ArrivalDepartureStatus, temporalState: TemporalState = .future) -> String {
+        switch (temporalState, status) {
+        case (.past, .arriving):
+            return OBALoc("formatters.caption.arrived", value: "Arrived", comment: "Short caption under a past stop-page countdown for a vehicle that already arrived.")
+        case (.past, .departing):
+            return OBALoc("formatters.caption.departed", value: "Departed", comment: "Short caption under a past stop-page countdown for a vehicle that already left.")
+        case (_, .arriving):
+            return OBALoc("formatters.caption.arrives", value: "Arrives", comment: "Short caption under a stop-page countdown for a vehicle arriving at this stop.")
+        case (_, .departing):
+            return OBALoc("formatters.caption.departs", value: "Departs", comment: "Short caption under a stop-page countdown for a vehicle departing this stop (first stop or layover).")
+        }
+    }
+
     // MARK: - ArrivalDeparture Schedule Deviation
 
     /// Creates a formatted string representing the deviation from schedule described by `arrivalDeparture`
@@ -292,9 +365,33 @@ public class Formatters: NSObject {
     /// `TripActivityPresenter.deviationLabel(for:now:)` applies for Live
     /// Activity content states.
     public func deviationLabel(for arrivalDeparture: ArrivalDeparture) -> String {
-        guard arrivalDeparture.predicted else { return Strings.scheduledNotRealTime }
+        deviationLabel(
+            scheduleStatus: arrivalDeparture.scheduleStatus,
+            temporalState: arrivalDeparture.temporalState,
+            arrivalDepartureStatus: arrivalDeparture.arrivalDepartureStatus,
+            scheduleDeviation: arrivalDeparture.deviationFromScheduleInMinutes)
+    }
 
-        return formattedScheduleDeviation(for: arrivalDeparture)
+    /// The component form, for callers holding a view model rather than the
+    /// `ArrivalDeparture` it came from — `ArrivalDepartureItem` carries these four
+    /// values and not the model.
+    ///
+    /// Gating on `scheduleStatus == .unknown` rather than `predicted` is the same
+    /// condition, not a looser one: `ArrivalDeparture.scheduleStatus` opens with
+    /// `guard predicted else { return .unknown }`. Expressing it once here is what
+    /// stops the two forms drifting apart.
+    public func deviationLabel(
+        scheduleStatus: ScheduleStatus,
+        temporalState: TemporalState,
+        arrivalDepartureStatus: ArrivalDepartureStatus,
+        scheduleDeviation: Int
+    ) -> String {
+        guard scheduleStatus != .unknown else { return Strings.scheduledNotRealTime }
+
+        return formattedScheduleDeviation(
+            temporalState: temporalState,
+            arrivalDepartureStatus: arrivalDepartureStatus,
+            scheduleDeviation: scheduleDeviation)
     }
 
     public func formattedScheduleDeviation(temporalState: TemporalState, arrivalDepartureStatus: ArrivalDepartureStatus, scheduleDeviation: Int) -> String {
@@ -389,9 +486,16 @@ public class Formatters: NSObject {
         switch temporalState {
         case .present: return OBALoc("formatters.now", value: "NOW", comment: "Short formatted time text for arrivals/departures occurring now.")
         default:
-            let formatString = OBALoc("formatters.short_time_fmt", value: "%dm", comment: "Short formatted time text for arrivals/departures. Example: 7m means that this event happens 7 minutes in the future. -7m means 7 minutes in the past.")
-            return String(format: formatString, untilMinutes)
+            return Self.shortMinutesText(untilMinutes)
         }
+    }
+
+    /// The localized abbreviated minute count, e.g. "7m" — the suffix differs
+    /// per locale, so never interpolate a literal `m`. Visual only: VoiceOver
+    /// reads "7m" as meters, so spoken text uses `formattedTimeUntilArrivalDeparture`.
+    public static func shortMinutesText(_ minutes: Int) -> String {
+        let formatString = OBALoc("formatters.short_time_fmt", value: "%dm", comment: "Short formatted time text for arrivals/departures. Example: 7m means that this event happens 7 minutes in the future. -7m means 7 minutes in the past.")
+        return String(format: formatString, minutes)
     }
 
     private lazy var relativeDateTimeFormatter: RelativeDateTimeFormatter = {
@@ -414,6 +518,11 @@ public class Formatters: NSObject {
         }
 
         return relativeDateTimeFormatter.localizedString(for: date, relativeTo: Date())
+    }
+
+    /// "Updated: 2 min. ago", for a page that shows when it last loaded.
+    public func updatedText(since date: Date) -> String {
+        String(format: Strings.updatedAtFormat, timeAgoInWords(date: date))
     }
 
     /// Creates a formatted string from the `ArrivalDeparture` object that shows the  formatted time until this event occurs.
@@ -589,15 +698,9 @@ public class Formatters: NSObject {
 
     // MARK: - Routes
 
-    /// Generates a formatted, human readable list of routes.
-    ///
-    /// For example: "Routes: 10, 12, 49, + 3 more".
-    ///
-    /// - Parameter routes: An array of `Route`s from which the string will be generated.
-    /// - Parameter limit: The number of `Route`s that be displayed in the returned string. By default, this is `Int.max`.
-    /// - Returns: A human-readable list of the passed-in `Route`s.
-    public class func formattedRoutes(_ routes: [Route], limit: Int = .max) -> String? {
-        guard routes.count > 0 else { return nil }
+    /// Sorted short names (or route-type labels when short names are absent) for display.
+    private class func sortedRouteDisplayNames(from routes: [Route]) -> [String] {
+        guard routes.count > 0 else { return [] }
 
         var routeNames = routes
             .map { $0.shortName }
@@ -609,6 +712,47 @@ public class Formatters: NSObject {
             routeNames = routes.map { $0.routeType }.uniqued.compactMap { routeTypeToString($0) }.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
         }
 
+        return routeNames
+    }
+
+    /// Compact route list for map pin labels under stop icons.
+    ///
+    /// For example: "10, 12, 49…" — no "Routes:" prefix, and an explicit U+2026
+    /// ellipsis when the list overflows so UIKit truncation doesn't silently drop
+    /// the overflow hint (#132, #514). The glyph lives in `OBALoc` so translators
+    /// can substitute locale-conventional marks (zh-Hans `……`).
+    ///
+    /// - Parameter routes: An array of `Route`s from which the string will be generated.
+    /// - Parameter limit: The number of route names shown before appending "…".
+    /// - Returns: A comma-separated list of route short names, or `nil` when none are available.
+    public class func formattedMapRoutes(_ routes: [Route], limit: Int = 3) -> String? {
+        let routeNames = sortedRouteDisplayNames(from: routes)
+        guard !routeNames.isEmpty else {
+            return nil
+        }
+
+        if routeNames.count > limit {
+            let fmt = OBALoc(
+                "formatters.map_routes_overflow_fmt",
+                value: "%@…",
+                comment: "Overflowing map-pin route list. The argument is the visible names; U+2026 marks that more routes exist. e.g. '10, 12, 49…'"
+            )
+            return String(format: fmt, routeNames.prefix(limit).joined(separator: ", "))
+        }
+        else {
+            return routeNames.joined(separator: ", ")
+        }
+    }
+
+    /// Generates a formatted, human readable list of routes.
+    ///
+    /// For example: "Routes: 10, 12, 49, + 3 more".
+    ///
+    /// - Parameter routes: An array of `Route`s from which the string will be generated.
+    /// - Parameter limit: The number of `Route`s that be displayed in the returned string. By default, this is `Int.max`.
+    /// - Returns: A human-readable list of the passed-in `Route`s.
+    public class func formattedRoutes(_ routes: [Route], limit: Int = .max) -> String? {
+        let routeNames = sortedRouteDisplayNames(from: routes)
         guard !routeNames.isEmpty else {
             return nil
         }
@@ -704,7 +848,7 @@ public class Formatters: NSObject {
 
     /// Formats a transfer arrival banner string. e.g., "Arriving at 4:10 PM via 10 - Capitol Hill"
     public func transferArrivalBannerText(arrivalTime: Date, routeDisplay: String) -> String {
-        let formattedTime = timeFormatter.string(from: arrivalTime)
+        let formattedTime = formattedClockTime(arrivalTime)
         let fmt = OBALoc(
             "formatters.transfer.arrival_banner_fmt",
             value: "Arriving at %@ via %@",

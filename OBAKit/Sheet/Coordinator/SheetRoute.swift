@@ -8,7 +8,106 @@
 //
 
 import SwiftUI
+import MapKit
 import OBAKitCore
+import OTPKit
+
+// MARK: - TripPlannerRequest
+
+/// Parameters for initiating the OTPKit trip planner.
+///
+/// Both map-item and rental entry points carry payloads to prefill planner state:
+/// a map item prefills the destination and leaves the mode open; a rental prefills
+/// the origin (the vehicle) and the mode. All fields are optional so the planner
+/// can open empty (all `nil`), with partial prefill, or fully configured.
+nonisolated struct TripPlannerRequest: Hashable, Equatable {
+    /// Starting point, if prefilled by the entry point. The rental sheet's "Plan a
+    /// trip using this vehicle" sets it to the vehicle: starting on top of a
+    /// vehicle in bike-rental mode is what makes OTP rent it (`RentalTripPlan`).
+    /// Nil leaves the planner on the rider's current location.
+    let origin: MKMapItem?
+
+    /// Destination pin on the map, if prefilled by the entry point (e.g., a
+    /// tapped map item). The planner uses this to seed the destination field.
+    let destination: MKMapItem?
+
+    /// Intermediate point (stopover) for multi-segment trips. No entry point sets
+    /// it today — the rental sheet used to, but OTP never turned a via point into
+    /// a rental leg. `CLLocationCoordinate2D` is not `Hashable` or `Equatable`,
+    /// so we implement both over latitude/longitude.
+    let viaPoint: CLLocationCoordinate2D?
+
+    /// Transport mode to preselect. The rental sheet sets `.bikeRental`; map-item
+    /// entry leaves it `nil` so the user can pick freely.
+    let transportMode: TransportMode?
+
+    /// Initializer with all parameters optional, defaulting to `nil`.
+    init(
+        origin: MKMapItem? = nil,
+        destination: MKMapItem? = nil,
+        viaPoint: CLLocationCoordinate2D? = nil,
+        transportMode: TransportMode? = nil
+    ) {
+        self.origin = origin
+        self.destination = destination
+        self.viaPoint = viaPoint
+        self.transportMode = transportMode
+    }
+
+    // MARK: - Hashable
+
+    func hash(into hasher: inout Hasher) {
+        // `MKMapItem` is a reference type; follow what `AppSheetRoute.mapItem`
+        // does — hash the coordinate.
+        for item in [origin, destination] {
+            if let item {
+                let coordinate = item.placemark.coordinate
+                hasher.combine(coordinate.latitude)
+                hasher.combine(coordinate.longitude)
+            } else {
+                hasher.combine(NSNull())
+            }
+        }
+
+        // `CLLocationCoordinate2D` is not `Hashable`; hash its components.
+        if let viaPoint {
+            hasher.combine(viaPoint.latitude)
+            hasher.combine(viaPoint.longitude)
+        } else {
+            hasher.combine(NSNull())
+        }
+
+        hasher.combine(transportMode)
+    }
+
+    // MARK: - Equatable
+
+    static func == (lhs: TripPlannerRequest, rhs: TripPlannerRequest) -> Bool {
+        // For reference types like `MKMapItem`, compare by identity (===) or
+        // coordinate. The mapItem case uses coordinates, so we do the same.
+        func sameItem(_ lhs: MKMapItem?, _ rhs: MKMapItem?) -> Bool {
+            guard let lhs, let rhs else { return lhs == nil && rhs == nil }
+            let lhsCoord = lhs.placemark.coordinate
+            let rhsCoord = rhs.placemark.coordinate
+            return lhsCoord.latitude == rhsCoord.latitude && lhsCoord.longitude == rhsCoord.longitude
+        }
+        let originEqual = sameItem(lhs.origin, rhs.origin)
+        let destinationEqual = sameItem(lhs.destination, rhs.destination)
+
+        // For `CLLocationCoordinate2D`, compare latitude and longitude.
+        let viaPointEqual: Bool
+        if let lhsVia = lhs.viaPoint, let rhsVia = rhs.viaPoint {
+            viaPointEqual = (lhsVia.latitude == rhsVia.latitude &&
+                            lhsVia.longitude == rhsVia.longitude)
+        } else {
+            viaPointEqual = (lhs.viaPoint == nil && rhs.viaPoint == nil)
+        }
+
+        let transportModeEqual = lhs.transportMode == rhs.transportMode
+
+        return originEqual && destinationEqual && viaPointEqual && transportModeEqual
+    }
+}
 
 // MARK: - SheetDetentConfiguration
 
@@ -65,6 +164,25 @@ nonisolated protocol SheetRouteable: Identifiable, Hashable {
     var prefersStacking: Bool { get }
 }
 
+// MARK: - OnDemandPickerPayload
+
+/// A pushed overlap picker: the matches and where they were probed. Equality
+/// is by `id` so two pushes of the same list are two sheets.
+nonisolated struct OnDemandPickerPayload: Hashable {
+    let id: String
+    let request: OnDemandPickerRequest
+    let locality: String?
+
+    init(request: OnDemandPickerRequest, locality: String?) {
+        id = UUID().uuidString
+        self.request = request
+        self.locality = locality
+    }
+
+    static func == (lhs: OnDemandPickerPayload, rhs: OnDemandPickerPayload) -> Bool { lhs.id == rhs.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+}
+
 // MARK: - AppSheetRoute
 
 /// All navigable destinations within the floating sheet.
@@ -78,14 +196,25 @@ nonisolated enum AppSheetRoute: SheetRouteable {
 
     // Stacked layer
     case stopDetails(stopID: Stop.ID)
-    case tripPlanner
-    case tripDetails(tripID: TripIdentifier)
+    case tripPlanner(TripPlannerRequest)
+    // The convertible, not just its trip ID: the trip page's view model fetches
+    // with the vehicle and service date as well, which an ID can't supply.
+    case tripDetails(TripConvertible)
     case routePicker
     case currentTrip(route: Route)
     case transitAlert(alertID: String)
+    case rentalDetail(rentalID: VehicleRental.ID)
+    case rentalCluster(memberIDs: [VehicleRental.ID])
+    case onDemandService(OnDemandService, locationCheck: OnDemandLocationCheck? = nil)
+    case onDemandPicker(OnDemandPickerPayload)
+    case searchResults(SearchResponse)
+    case mapItem(MKMapItem)
+    case routeStops(StopsForRoute)
+    case nearbyStops(coordinate: CLLocationCoordinate2D)
 
     case more
     case settings
+    case mapSettings
 
 }
 
@@ -112,16 +241,58 @@ nonisolated extension AppSheetRoute {
     var id: String {
         switch self {
         case .home, .search, .nearbyAll, .recentStopsAll, .bookmarksAll,
-             .tripPlanner, .routePicker, .more, .settings:
+             .routePicker, .more, .settings, .mapSettings:
             return caseName
         case .stopDetails(let stopID):
             return "\(caseName)-\(stopID)"
-        case .tripDetails(let tripID):
-            return "\(caseName)-\(tripID)"
+        case .tripPlanner(let request):
+            // Analytics key based on payload presence. Privacy guard: no
+            // coordinates in the key (rider location is sensitive). Instead, flag
+            // which fields are present so analytics can track entry points
+            // separately (map item, rental, etc.) without leaking location.
+            var parts: [String] = []
+            if request.origin != nil {
+                parts.append("origin")
+            }
+            if request.destination != nil {
+                parts.append("destination")
+            }
+            if request.viaPoint != nil {
+                parts.append("viaPoint")
+            }
+            if request.transportMode != nil {
+                parts.append("transportMode")
+            }
+            let suffix = parts.isEmpty ? "blank" : parts.joined(separator: "_")
+            return "\(caseName)_\(suffix)"
+        case .tripDetails(let convertible):
+            // Keyed on the trip alone, not on which model carried it, so a trip
+            // reached from an arrival and from a vehicle has one identity.
+            return "\(caseName)-\(convertible.tripID)"
         case .currentTrip(let route):
             return "\(caseName)-\(route.id)"
         case .transitAlert(let alertID):
             return "\(caseName)-\(alertID)"
+        case .rentalDetail(let rentalID):
+            return "\(caseName)-\(rentalID)"
+        case .rentalCluster(let memberIDs):
+            // Sorted so the id is order-independent — the same pile of vehicles
+            // must produce the same route regardless of feed ordering, which is
+            // what keeps an open sheet bound to its marker across a camera move.
+            return "\(caseName)-\(memberIDs.sorted().joined(separator: ","))"
+        case .onDemandService(let service, _):
+            return "\(caseName)-\(service.id)"
+        case .onDemandPicker(let payload):
+            return "\(caseName)-\(payload.id)"
+        case .searchResults(let response):
+            return "\(caseName)-\(response.request.searchType.rawValue)-\(response.request.query)"
+        case .mapItem(let item):
+            let coordinate = item.placemark.coordinate
+            return "\(caseName)-\(coordinate.latitude)-\(coordinate.longitude)"
+        case .routeStops(let stopsForRoute):
+            return "\(caseName)-\(stopsForRoute.id)"
+        case .nearbyStops(let coordinate):
+            return "\(caseName)-\(coordinate.latitude)-\(coordinate.longitude)"
         }
     }
 
@@ -140,7 +311,9 @@ nonisolated extension AppSheetRoute {
     /// Detail destinations prefer the stacked layer so the base sheet peeks beneath.
     var prefersStacking: Bool {
         switch self {
-        case .stopDetails, .tripPlanner, .tripDetails, .currentTrip, .transitAlert, .more, .nearbyAll, .recentStopsAll, .bookmarksAll, .settings:
+        case .stopDetails, .tripPlanner, .tripDetails, .currentTrip, .transitAlert, .more, .nearbyAll,
+             .recentStopsAll, .bookmarksAll, .settings, .mapSettings, .rentalDetail, .rentalCluster,
+             .onDemandService, .onDemandPicker, .searchResults, .mapItem, .routeStops, .nearbyStops:
             return true
         case .home, .search, .routePicker:
             return false
@@ -162,7 +335,23 @@ nonisolated extension AppSheetRoute {
 
     /// Height of the home sheet's smallest detent. Shared by `MapPanelRootView`
     /// so the map's bottom safe-area padding matches the collapsed sheet.
-    static let homeCollapsedHeight: CGFloat = 80
+    ///
+    /// Sized to `HomeSheetView`'s search-bar row and nothing else, so the
+    /// collapsed sheet reads as a search field rather than as a list that got
+    /// cut off: a body-metrics capsule (~48pt: one line of text plus its 14pt
+    /// vertical padding, top and bottom) under the row's own 16pt top and 12pt
+    /// bottom padding, less the couple of points the drag indicator already
+    /// occupies above it.
+    static let homeCollapsedHeight: CGFloat = 75
+
+    /// Height of the trip planner's tip detent — a "peek" rung that leaves the
+    /// map dominant when the panel is minimized. OTPKit's
+    /// `DirectionsSheetView.tipDetent` collapses its own view when turn-by-turn
+    /// directions open, and the panel owns detents centrally, so the trip
+    /// planner needs a comparable rung for that handoff. Sized similarly to
+    /// `homeCollapsedHeight`: a single row (e.g., just a button bar) with
+    /// minimal padding.
+    static let tripPlannerTipHeight: CGFloat = 80
 
     var detentConfiguration: SheetDetentConfiguration {
         switch self {
@@ -198,14 +387,100 @@ nonisolated extension AppSheetRoute {
                 backgroundInteraction: .disabled
             )
         case .stopDetails:
+            // `backgroundInteraction` must be stated explicitly here, exactly as
+            // the other `[.large]`-only routes above do. The default is
+            // `.enabled(upThrough: .medium)`, which maps to
+            // `UISheetPresentationController.largestUndimmedDetentIdentifier =
+            // .medium`. With `.medium` absent from `detents`, UIKit has no detent
+            // at which to begin dimming, so the sheet stays undimmed and
+            // non-modal and every touch falls through to the map behind it —
+            // the sheet renders but neither scrolls nor responds to taps.
+            //
+            // Routes that safely leave the default (`.tripPlanner`, `.more`, …)
+            // all carry `.medium` in their detent set.
             return SheetDetentConfiguration(
                 detents: [.large],
                 initialDetent: .large,
+                isDismissDisabled: false,
+                backgroundInteraction: .disabled
+            )
+        case .tripPlanner:
+            // Opens at `.medium`: planning a trip is a map task, and the origin and
+            // destination fields are what the rider reads first — a full-height sheet
+            // hides the very map the trip is being drawn on.
+            //
+            // OTPKit's trip planner also collapses to its own custom tip detent when
+            // directions open. The panel owns detents, so it needs a comparable tip
+            // rung to stay in sync with OTPKit's collapsed state.
+            return SheetDetentConfiguration(
+                detents: [.height(AppSheetRoute.tripPlannerTipHeight), .medium, .large],
+                initialDetent: .medium,
                 isDismissDisabled: false
             )
-        case .tripPlanner, .tripDetails, .routePicker, .currentTrip, .transitAlert, .more, .settings:
+        case .tripDetails:
+            // Opens at `.medium`: the trip page draws no map of its own and relies
+            // on the panel's, so a full-height start would cover the map it needs.
             return SheetDetentConfiguration(
                 detents: [.medium, .large],
+                initialDetent: .medium,
+                isDismissDisabled: false
+            )
+        case .routePicker, .currentTrip, .transitAlert, .more, .settings:
+            return SheetDetentConfiguration(
+                detents: [.medium, .large],
+                initialDetent: .large,
+                isDismissDisabled: false
+            )
+        case .rentalDetail, .rentalCluster:
+            // `.medium` first: a rental sheet is a glance, and the map behind it
+            // is the context for "is this one near me?".
+            return SheetDetentConfiguration(
+                detents: [.medium, .large],
+                initialDetent: .medium,
+                isDismissDisabled: false
+            )
+        case .onDemandService, .onDemandPicker:
+            // `.medium` first, like a rental: the zone the rider tapped (or the
+            // picker's highlighted zone) stays in view above the sheet, and
+            // `.large` shows the whole page.
+            return SheetDetentConfiguration(
+                detents: [.medium, .large],
+                initialDetent: .medium,
+                isDismissDisabled: false
+            )
+        case .mapSettings:
+            // Opens at `.medium` so the map stays visible behind the basemap
+            // tiles: picking a basemap you cannot see is a guess.
+            return SheetDetentConfiguration(
+                detents: [.medium, .large],
+                initialDetent: .medium,
+                isDismissDisabled: false
+            )
+        case .mapItem:
+            // Medium only: the sheet is a detail card over the map, and the map has
+            // to stay visible behind it. Long content scrolls inside the detent.
+            return SheetDetentConfiguration(
+                detents: [.medium],
+                initialDetent: .medium,
+                isDismissDisabled: false
+            )
+        case .routeStops:
+            // Opens at medium so the route polyline stays on screen; the user can
+            // drag to large for the full stop list.
+            return SheetDetentConfiguration(
+                detents: [.medium, .large],
+                initialDetent: .medium,
+                isDismissDisabled: false
+            )
+        case .searchResults:
+            return SheetDetentConfiguration(
+                detents: [.medium, .large],
+                initialDetent: .large,
+                isDismissDisabled: false
+            )
+        case .nearbyStops:
+            return SheetDetentConfiguration(
+                detents: [.large],
                 initialDetent: .large,
                 isDismissDisabled: false
             )

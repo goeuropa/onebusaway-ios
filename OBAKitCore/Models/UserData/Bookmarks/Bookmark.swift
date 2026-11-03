@@ -36,10 +36,36 @@ import Foundation
     public let stopID: StopID
 
     /// Whether or not this `Bookmark` should be displayed in the Today widget, for example. `false` by default.
+    ///
+    /// - Note: Despite the name, this is the "Show in Today View" toggle, not a
+    ///   general-purpose favourite. See `isPinned` for the home sheet's pinning.
     public var isFavorite: Bool
 
+    /// Whether the user has pinned this `Bookmark` to the top of the home sheet's
+    /// bookmarks section. `false` by default.
+    ///
+    /// Distinct from `isFavorite`, which drives widget visibility — pinning is
+    /// purely about placement on the home sheet, and conflating the two would
+    /// change what appears in the user's widget.
+    public var isPinned: Bool
+
     /// The order in which this `Bookmark` is sorted in. By default, this value is set to be `Int.max`
+    ///
+    /// - Note: This is a *per-group* index — `UserDataStore.bookmarksInGroup(_:)`
+    ///   renumbers each group from zero — so it is not comparable across groups.
     public var sortOrder: Int
+
+    /// When this `Bookmark` was created.
+    ///
+    /// Recorded because `sortOrder` can't answer "which of these is newest":
+    /// a new bookmark is appended to the end of its group, and the user can
+    /// reorder the list afterwards. Surfaces that need most-recent-first — the
+    /// home sheet's bookmarks preview, which shows only a handful — order by this.
+    ///
+    /// `Bookmark`s persisted before this property existed decode as
+    /// `.distantPast`, so they sort after anything created since and keep their
+    /// own relative order.
+    public let dateCreated: Date
 
     /// This object stores a complete copy of its underlying `Stop` in order to be able to show additional information
     /// to the user.
@@ -60,42 +86,82 @@ import Foundation
     public let tripHeadsign: String?
     public let routeID: RouteID?
 
+    // MARK: - Destination Properties
+
+    /// Optional. The stop where the rider gets off, for a trip bookmark that tracks
+    /// a commute from `stopID` to a destination on the same route.
+    ///
+    /// Only trip bookmarks carry a destination; it is ignored for whole-stop bookmarks.
+    /// See: https://github.com/OneBusAway/onebusaway-ios/issues/1080
+    public let destinationStopID: StopID?
+
+    /// The destination stop's name, captured when the bookmark was created so the
+    /// card can label the arrival without fetching the stop.
+    public let destinationStopName: String?
+
     // MARK: - Init
 
-    public convenience init(name: String, regionIdentifier: Int, arrivalDeparture: ArrivalDeparture) {
-        self.init(name: name, regionIdentifier: regionIdentifier, arrivalDeparture: arrivalDeparture, stop: arrivalDeparture.stop)
+    public convenience init(name: String, regionIdentifier: Int, arrivalDeparture: ArrivalDeparture, destinationStop: Stop? = nil, dateCreated: Date = Date()) {
+        self.init(
+            name: name,
+            regionIdentifier: regionIdentifier,
+            arrivalDeparture: arrivalDeparture,
+            stop: arrivalDeparture.stop,
+            destinationStop: destinationStop,
+            dateCreated: dateCreated
+        )
     }
 
-    public convenience init(name: String, regionIdentifier: Int, stop: Stop) {
-        self.init(name: name, regionIdentifier: regionIdentifier, arrivalDeparture: nil, stop: stop)
+    public convenience init(name: String, regionIdentifier: Int, stop: Stop, dateCreated: Date = Date()) {
+        self.init(
+            name: name,
+            regionIdentifier: regionIdentifier,
+            arrivalDeparture: nil,
+            stop: stop,
+            dateCreated: dateCreated
+        )
     }
 
-    public init(name: String, regionIdentifier: Int, arrivalDeparture: ArrivalDeparture?, stop: Stop) {
+    /// `dateCreated` is injectable so tests can pin an ordering instead of
+    /// racing the clock; production callers take the default.
+    ///
+    /// `destinationStop` is kept only when `arrivalDeparture` is provided: a
+    /// destination is meaningless without the trip that reaches it.
+    public init(name: String, regionIdentifier: Int, arrivalDeparture: ArrivalDeparture?, stop: Stop, destinationStop: Stop? = nil, dateCreated: Date = Date()) {
         if let arrivalDeparture = arrivalDeparture {
             self.routeShortName = arrivalDeparture.routeShortName
             self.routeID = arrivalDeparture.routeID
             self.tripHeadsign = arrivalDeparture.tripHeadsign
+            self.destinationStopID = destinationStop?.id
+            self.destinationStopName = destinationStop?.name
         }
         else {
             self.routeShortName = nil
             self.routeID = nil
             self.tripHeadsign = nil
+            self.destinationStopID = nil
+            self.destinationStopName = nil
         }
 
         self.stop = stop
         self.stopID = stop.id
         self.isFavorite = false
+        self.isPinned = false
         self.name = name
         self.regionIdentifier = regionIdentifier
         self.id = UUID()
         self.sortOrder = .max
+        self.dateCreated = dateCreated
     }
 
     private enum CodingKeys: String, CodingKey {
-        case groupID, isFavorite, name, regionIdentifier, stop, stopID, id, sortOrder
+        case groupID, isFavorite, isPinned, name, regionIdentifier, stop, stopID, id, sortOrder, dateCreated
 
         // Trip bookmark keys
         case routeShortName, tripHeadsign, routeID
+
+        // Destination keys
+        case destinationStopID, destinationStopName
     }
 
     public required init(from decoder: Decoder) throws {
@@ -103,16 +169,29 @@ import Foundation
 
         groupID = try? container.decodeIfPresent(UUID.self, forKey: .groupID)
         isFavorite = try container.decode(Bool.self, forKey: .isFavorite)
+        // Absent from bookmarks written before pinning existed; nothing was
+        // pinned then, so `false` is the truthful default.
+        isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
         name = try container.decode(String.self, forKey: .name)
         regionIdentifier = try container.decode(Int.self, forKey: .regionIdentifier)
         sortOrder = try container.decode(Int.self, forKey: .sortOrder)
         stop = try container.decode(Stop.self, forKey: .stop)
         stopID = try container.decode(StopID.self, forKey: .stopID)
         id = try container.decode(UUID.self, forKey: .id)
+        // Absent from bookmarks written before this property existed. Falling back
+        // to `.distantPast` — rather than "now" — keeps a decode from making every
+        // stored bookmark look freshly created, which would scramble
+        // most-recent-first ordering on the first launch after upgrading.
+        dateCreated = try container.decodeIfPresent(Date.self, forKey: .dateCreated) ?? .distantPast
 
         routeShortName = try container.decodeIfPresent(String.self, forKey: .routeShortName)
         tripHeadsign = try container.decodeIfPresent(String.self, forKey: .tripHeadsign)
         routeID = try container.decodeIfPresent(RouteID.self, forKey: .routeID)
+
+        // Absent from bookmarks written before destinations existed; those are
+        // ordinary trip (or stop) bookmarks.
+        destinationStopID = try container.decodeIfPresent(StopID.self, forKey: .destinationStopID)
+        destinationStopName = try container.decodeIfPresent(String.self, forKey: .destinationStopName)
     }
 
     /// Returns `true` if the receiver's contents match the contents of `bookmark`.
@@ -126,9 +205,15 @@ import Foundation
             stopID == bookmark.stopID &&
             routeShortName == bookmark.routeShortName &&
             tripHeadsign == bookmark.tripHeadsign &&
-            routeID == bookmark.routeID
+            routeID == bookmark.routeID &&
+            destinationStopID == bookmark.destinationStopID
     }
 
+    /// - Note: `dateCreated` is deliberately excluded here and from `hash`. It's
+    ///   provenance, not content — two bookmarks that differ only in when they
+    ///   were made are the same bookmark to a user — and `Date` loses sub-second
+    ///   precision through the store's encoder, so including it would make a
+    ///   round-tripped bookmark unequal to the one that was written.
     public override func isEqual(_ object: Any?) -> Bool {
         guard let rhs = object as? Bookmark else { return false }
 
@@ -141,9 +226,12 @@ import Foundation
             stopID == rhs.stopID &&
             stop == rhs.stop &&
             isFavorite == rhs.isFavorite &&
+            isPinned == rhs.isPinned &&
             routeShortName == rhs.routeShortName &&
             routeID == rhs.routeID &&
-            tripHeadsign == rhs.tripHeadsign
+            tripHeadsign == rhs.tripHeadsign &&
+            destinationStopID == rhs.destinationStopID &&
+            destinationStopName == rhs.destinationStopName
     }
 
     public override var hash: Int {
@@ -155,10 +243,13 @@ import Foundation
         hasher.combine(stopID)
         hasher.combine(stop)
         hasher.combine(isFavorite)
+        hasher.combine(isPinned)
         hasher.combine(routeShortName)
         hasher.combine(routeID)
         hasher.combine(sortOrder)
         hasher.combine(tripHeadsign)
+        hasher.combine(destinationStopID)
+        hasher.combine(destinationStopName)
         return hasher.finalize()
     }
 
@@ -171,14 +262,23 @@ import Foundation
         descriptionBuilder.add(key: "stopID", value: stopID)
 
         descriptionBuilder.add(key: "isFavorite", value: isFavorite)
+        descriptionBuilder.add(key: "isPinned", value: isPinned)
         descriptionBuilder.add(key: "routeShortName", value: routeShortName)
         descriptionBuilder.add(key: "routeID", value: routeID)
         descriptionBuilder.add(key: "sortOrder", value: sortOrder)
+        descriptionBuilder.add(key: "dateCreated", value: dateCreated)
         descriptionBuilder.add(key: "tripHeadsign", value: tripHeadsign)
+        descriptionBuilder.add(key: "destinationStopID", value: destinationStopID)
+        descriptionBuilder.add(key: "destinationStopName", value: destinationStopName)
         return descriptionBuilder.description
     }
 
     public var isTripBookmark: Bool {
         routeShortName != nil && routeID != nil && tripHeadsign != nil
+    }
+
+    /// `true` for a trip bookmark that also tracks the rider's arrival at a destination stop.
+    public var hasDestination: Bool {
+        isTripBookmark && destinationStopID != nil
     }
 }

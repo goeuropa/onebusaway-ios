@@ -21,16 +21,57 @@ import Testing
 final class LocalizationTests {
 
     /// Keys whose plural forms come from `Localizable.stringsdict` rather than
-    /// `Localizable.strings`. Every one of these is called with `String(format:)` and a count.
+    /// `Localizable.strings`. Each is called with a count.
+    ///
+    /// Note that `String(format:)` expands `%#@…@` but always resolves it against the root
+    /// plural rule, so only `one`/`other` are ever reachable through it — the call site has to
+    /// use `String.localizedStringWithFormat` for a locale's `few`/`many`/`zero`/`two` entries
+    /// to mean anything. The parity checks below can't see that; it's a call-site property.
+    /// A test *can* pin it per key by asserting a locale whose categories differ from the
+    /// root's — see `Polish layer count reaches its few and many forms`.
     private static let pluralKeys: Set<String> = [
         "stop_page.service_alerts.summary_fmt",
         "stop_page.service_alerts.show_all_fmt",
         "stop_page.timeline.skipped_stops_fmt",
         "stop_page.past_toggle_show_a11y_fmt",
+        "stop_page.a11y.past_shown_fmt",
         "stop_controller.transfer_show_earlier_departures_fmt",
         "stop_page.empty.no_departures_fmt",
         "data_migration_bulletin.report_summary_number_of_failures",
-        "data_migration_bulletin.report_summary_number_of_successes"
+        "data_migration_bulletin.report_summary_number_of_successes",
+        "map_controller.map_type.accessibility_value_with_layers_fmt",
+        "search_results_sheet.result_count_fmt",
+        "rental_cluster.title_fmt",
+        "rental_annotation.vehicles_available_fmt",
+        "rental_detail.walk_time_fmt",
+        // VoiceOver strings that interpolate a minute count. Slavic locales need
+        // one/few/many agreement, so a single plain form is wrong at some counts —
+        // Polish "minut" is right for 5+ and wrong for 1 and 2-4.
+        "stop_page.row.a11y_arrives_fmt",
+        "stop_page.row.a11y_past_fmt",
+        "trip_page.card.a11y_fmt",
+        "trip_page.card.distance_stops_fmt",
+        "trip_page.card.distance_stops_a11y_fmt",
+        "alarm_builder_controller.minutes_fmt",
+        "next_departures_intent.in_minutes_fmt",
+        // Two counts: the minute countdown (bound to "count", which the well-formedness
+        // check below inspects) and the number of extra departures loaded.
+        "stop_page.grouped.a11y_fmt",
+        // The arriving/departing counterparts. Leaving these out would have made
+        // VoiceOver correct for arriving vehicles and wrong for departing ones.
+        "stop_page.row.a11y_fmt",
+        "stop_page.grouped.a11y_arrives_fmt",
+        // DRT (spec 2.8) counts.
+        "on_demand.card.more_services",
+        "on_demand.picker.title",
+        "on_demand.picker.title_nearby",
+        "on_demand.detail.zone_count",
+        "on_demand.address.inside_more",
+        "on_demand.planner.more_serving_both",
+        // The trip page's collapsed runs of stops (#1576).
+        "trip_page.stop_list.run_count_fmt",
+        "trip_page.stop_list.a11y_run_passed_fmt",
+        "trip_page.stop_list.a11y_run_approaching_fmt"
     ]
 
     /// `%@`, `%d`, `%1$@`, `%2$d`, … and the escaped `%%`.
@@ -38,14 +79,31 @@ final class LocalizationTests {
     private static let specifier = try! NSRegularExpression(pattern: #"%(?:\d+\$)?[@dfs]|%%"#)
 
     private var frameworks: [(name: String, bundle: Bundle)] {
-        [("OBAKit", Bundle(for: DonationCell.self)),
-         ("OBAKitCore", Bundle(for: Strings.self))]
+        [("OBAKit", Bundle.obaKit),
+         ("OBAKitCore", Bundle.obaKitCore)]
     }
 
     private func strings(in bundle: Bundle, localization: String) -> [String: String]? {
         guard let url = bundle.url(forResource: "Localizable", withExtension: "strings",
                                    subdirectory: nil, localization: localization) else { return nil }
         return NSDictionary(contentsOf: url) as? [String: String]
+    }
+
+    /// Treats a named locale's `.lproj` as its own bundle so a test can load a
+    /// localization the host does not prefer.
+    private func lprojBundle(_ localization: String) -> Bundle? {
+        guard let path = Bundle.obaKit.path(forResource: localization, ofType: "lproj") else { return nil }
+        return Bundle(path: path)
+    }
+
+    /// A named locale's own copy of a key. Going through `localizedString(forKey:)`
+    /// keeps the `Localizable.stringsdict` rules attached to the returned format,
+    /// which parsing the plist by hand would not.
+    private func localizedFormat(forKey key: String, localization: String) -> String? {
+        guard let bundle = lprojBundle(localization) else { return nil }
+
+        let value = bundle.localizedString(forKey: key, value: "MISSING", table: nil)
+        return value == "MISSING" ? nil : value
     }
 
     private func specifiers(in value: String) -> [String] {
@@ -99,7 +157,7 @@ final class LocalizationTests {
     /// Every locale must carry all the plural keys, with the CLDR-mandatory `other` category.
     /// A dropped entry degrades silently to the `.strings` fallback ("1 stops").
     @Test func `Every locale stringsdict is well formed`() {
-        let bundle = Bundle(for: DonationCell.self)
+        let bundle = Bundle.obaKit
 
         for localization in bundle.localizations where localization != "Base" {
             guard let url = bundle.url(forResource: "Localizable", withExtension: "stringsdict",
@@ -126,12 +184,181 @@ final class LocalizationTests {
         }
     }
 
+    /// One sheet serves both rental layers: `RentalDetailViewController` branches on
+    /// `vehicle.vehicleType?.formFactor?.isScooter` and `RentalMapLayer` declares both a
+    /// bikes and a scooters layer. So the sheet's own copy must not name a vehicle type —
+    /// a scooter rider reading "Plan a trip using this bike" is being told about a vehicle
+    /// they are not looking at. Likewise GBFS `propulsion_type: HUMAN` means human-powered,
+    /// which for a kick scooter is not pedalling.
+    @Test func `Rental sheet copy does not assume a bike`() throws {
+        let english = try #require(strings(in: Bundle.obaKit, localization: "en"))
+
+        let planTrip = try #require(english["rental_detail.plan_trip"])
+        #expect(!planTrip.localizedCaseInsensitiveContains("bike"),
+                "rental_detail.plan_trip names a bike but the sheet also shows scooters: \(planTrip)")
+
+        let human = try #require(english["rental_detail.propulsion_human"])
+        #expect(!human.localizedCaseInsensitiveContains("pedal"),
+                "rental_detail.propulsion_human says pedal, but GBFS HUMAN covers kick scooters too: \(human)")
+    }
+
+    /// `MoreViewController` opens `MoreTabConfiguration.textURL` with no scheme check, and
+    /// the key's own comment says that URL may be `sms:` **or** web. A label promising SMS
+    /// therefore mislabels every region that configures a web contact form. English "Text
+    /// Agency" uses "text" as a verb, which is SMS in en-US, so the narrowing starts at the
+    /// source rather than in translation.
+    @Test func `Agency contact action does not promise SMS`() throws {
+        let bundle = Bundle.obaKit
+        // Words that name SMS specifically, per locale. Deliberately not a blanket "sms"
+        // substring check: several locales use a generic "message"/"write to" verb that is
+        // correct for both destinations.
+        let smsWords = ["sms", "短信", "簡訊", "문자", "i-text"]
+
+        for localization in bundle.localizations where localization != "Base" {
+            guard let value = strings(in: bundle, localization: localization)?["more_controller.text_agency"]
+            else { continue }
+            let lowered = value.lowercased()
+            let offender = smsWords.first { lowered.contains($0) }
+            #expect(offender == nil,
+                    "\(localization): more_controller.text_agency promises SMS (\"\(value)\") but textURL may be a web link")
+        }
+    }
+
+    /// Portuguese "trânsito" is road traffic, not public transport — a false friend for
+    /// English "transit". The distinction is load-bearing in this catalog, which legitimately
+    /// uses "Mostrar trânsito" for `settings_controller.map_section.shows_traffic`. So the
+    /// rule keys off the English: where the source says "transit", pt-BR must not answer
+    /// "trânsito".
+    @Test func `Brazilian Portuguese does not render transit as trânsito`() throws {
+        let bundle = Bundle.obaKit
+        let english = try #require(strings(in: bundle, localization: "en"))
+        let ptBR = try #require(strings(in: bundle, localization: "pt-BR"))
+
+        for (key, source) in english where source.localizedCaseInsensitiveContains("transit") {
+            guard let translated = ptBR[key] else { continue }
+            #expect(!translated.localizedCaseInsensitiveContains("trânsito"),
+                    "pt-BR/\(key): \"transit\" became \"trânsito\" (road traffic): \(translated)")
+        }
+    }
+
+    /// Three keys name the same rider-facing concept — changing from one vehicle to another —
+    /// and Arabic had drifted into two words for it: التبديل on the two accessibility labels,
+    /// التحويلة in Settings. التحويلة is a detour or a railway switch, i.e. the *vehicle* being
+    /// rerouted, not the rider changing services. One term, all three keys.
+    @Test func `Arabic uses one word for a transfer`() throws {
+        let arabic = try #require(strings(in: Bundle.obaKit, localization: "ar"))
+        let transferKeys = [
+            "settings_controller.arrival_display_section.transfer_banner",
+            "walk_time_view.transfer_accessibility_label",
+            "stop_page.row.a11y_transfer_trip"
+        ]
+
+        for key in transferKeys {
+            let value = try #require(arabic[key], "ar/\(key) is missing")
+            #expect(!value.contains("التحويلة"),
+                    "ar/\(key) says التحويلة (a detour/junction) where the app means a rider transfer: \(value)")
+            #expect(value.contains("التبديل"),
+                    "ar/\(key) does not use the app's transfer term التبديل: \(value)")
+        }
+    }
+
+    /// OBAKitCore's `map_layers_tip` is the onboarding tip that introduces the rental layers,
+    /// and OBAKit's `map_layers.scooters` is the row it points at. If the two modules pick
+    /// different words, the tip names something the sheet does not offer.
+    ///
+    /// Compared by shared substring rather than equality: several locales qualify the row
+    /// ("Mga scooter", "共享滑板车") while the tip carries the bare noun, and that is fine —
+    /// what matters is that the same word for the vehicle appears in both.
+    @Test func `Both modules use the same word for a scooter`() throws {
+        let kit = Bundle.obaKit
+        let core = Bundle.obaKitCore
+
+        func sharesRun(_ a: String, _ b: String, minimum: Int) -> Bool {
+            let x = Array(a.lowercased()), y = b.lowercased()
+            guard x.count >= minimum else { return false }
+            for start in 0...(x.count - minimum) {
+                for length in stride(from: x.count - start, through: minimum, by: -1) {
+                    if y.contains(String(x[start..<(start + length)])) { return true }
+                }
+            }
+            return false
+        }
+
+        var compared = 0
+        for localization in kit.localizations where localization != "Base" {
+            guard let row = strings(in: kit, localization: localization)?["map_layers.scooters"],
+                  let tip = strings(in: core, localization: localization)?["map_layers_tip.title"]
+            else { continue }
+            compared += 1
+            #expect(sharesRun(row, tip, minimum: 3),
+                    "\(localization): OBAKit says \"\(row)\" but OBAKitCore's tip says \"\(tip)\"")
+        }
+        // Without this, a bundle lookup that finds no strings skips every locale and passes.
+        #expect(compared == kit.localizations.filter { $0 != "Base" }.count)
+    }
+
+    /// Proves the production formatter goes through `Localizable.stringsdict` at all.
+    ///
+    /// `OBALoc` loads the format from the *test host's* localization, which is English, so this
+    /// cannot assert Polish words — passing a locale to `String(format:locale:)` selects the
+    /// plural category, it does not switch language. What it can prove is that the singular is
+    /// reached: before these keys had stringsdict entries the call site rendered the one plain
+    /// form at every count and said "arrives in 1 minutes". Polish `few`/`many` reachability is
+    /// a property of the catalog, pinned separately in the tests above.
+    @Test @MainActor func `Stop page VoiceOver copy resolves its plural forms`() {
+        func spoken(_ minutes: Int, _ status: ArrivalDepartureStatus) -> String {
+            StopPageAccessibilityCopy.upcomingIdentity(
+                routeShortName: "10", headsign: "Downtown", minutes: minutes,
+                arrivalDepartureStatus: status, adherence: "on time"
+            )
+        }
+
+        for status in [ArrivalDepartureStatus.arriving, .departing] {
+            #expect(spoken(1, status).contains("1 minute,"), "\(status) singular: \(spoken(1, status))")
+            #expect(!spoken(1, status).contains("1 minutes"), "\(status) said \"1 minutes\": \(spoken(1, status))")
+            #expect(spoken(5, status).contains("5 minutes"), "\(status) plural: \(spoken(5, status))")
+        }
+
+        let groupedOne = StopPageAccessibilityCopy.groupedCardIdentity(
+            routeShortName: "10", headsign: "Downtown", minutes: 1,
+            arrivalDepartureStatus: .departing, adherence: "on time", moreCount: 1
+        )
+        #expect(groupedOne.contains("1 minute,"), "grouped singular: \(groupedOne)")
+        #expect(groupedOne.contains("1 more departure loaded"), "grouped departures singular: \(groupedOne)")
+    }
+
+    /// The section footer and region time zone switch title must be translated.
+    /// Leaving English in a non-en locale regresses Settings for that language.
+    @Test func `Arrival display section footer and region time zone are localized`() {
+        let bundle = Bundle.obaKit
+        let footerKey = "settings_controller.arrival_display_section.footer"
+        let regionTimeZoneKey = "settings_controller.arrival_display_section.region_time_zone"
+
+        guard let english = strings(in: bundle, localization: "en"),
+              let englishFooter = english[footerKey],
+              let englishRegionTimeZone = english[regionTimeZoneKey] else {
+            Issue.record("en: missing arrival display section strings")
+            return
+        }
+
+        for localization in bundle.localizations where localization != "en" && localization != "Base" {
+            guard let table = strings(in: bundle, localization: localization),
+                  let footer = table[footerKey],
+                  let regionTimeZone = table[regionTimeZoneKey] else {
+                Issue.record("\(localization): missing arrival display section strings")
+                continue
+            }
+            #expect(footer != englishFooter, "\(localization): footer is still English")
+            #expect(regionTimeZone != englishRegionTimeZone, "\(localization): region time zone title is still English")
+        }
+    }
+
     /// The plural keys exist in *both* `Localizable.strings` (as the `value:` fallback) and
     /// `Localizable.stringsdict`. If the stringsdict resource ever stops being bundled, lookup
     /// silently falls back to the bare `%d` form and English renders "1 stops". Assert the
     /// singular actually resolves, which only happens when the stringsdict is present.
     @Test func `Stringsdict is bundled so singulars resolve`() {
-        let bundle = Bundle(for: DonationCell.self)
+        let bundle = Bundle.obaKit
         let expectedSingulars = [
             "stop_page.timeline.skipped_stops_fmt": "1 stop",
             "stop_page.service_alerts.summary_fmt": "1 service alert",
@@ -142,5 +369,287 @@ final class LocalizationTests {
             let format = bundle.localizedString(forKey: key, value: "MISSING", table: nil)
             #expect(String(format: format, 1) == expected, "\(key) did not resolve its singular — is Localizable.stringsdict bundled?")
         }
+    }
+
+    /// The map-type button's VoiceOver value is the one plural key here that takes a
+    /// second argument, so its variable is bound positionally (`%2$#@count@`). Assert
+    /// both categories: the count lands in the right slot only when that binding and the
+    /// `%2$d` inside each category agree.
+    ///
+    /// Regression: this shipped as a flat `"%1$@, %2$d layers on"`. In a region without
+    /// bikeshare the stops layer is the only one, so the singular is the *common* case
+    /// and VoiceOver read "standard, 1 layers on".
+    ///
+    /// Deliberately locale-agnostic — English and the root plural rule agree on
+    /// `one`/`other`, so this says nothing about which categories a *call site* can reach.
+    /// `Polish layer count reaches its few and many forms` covers that.
+    @Test func `Map type layer count reads its singular and plural`() {
+        let bundle = Bundle.obaKit
+        let format = bundle.localizedString(
+            forKey: "map_controller.map_type.accessibility_value_with_layers_fmt",
+            value: "MISSING",
+            table: nil
+        )
+
+        #expect(String(format: format, "standard", 1) == "standard, 1 layer on")
+        #expect(String(format: format, "standard", 2) == "standard, 2 layers on")
+    }
+
+    /// Which plural categories a locale can actually reach is a property of the *call site*:
+    /// `String(format:)` resolves `%#@count@` against the root rule, which only defines
+    /// `one` and `other`, so the `few`/`many` forms hand-written for ar, pl, and ru are dead
+    /// unless the call passes a locale. English can't see the difference, which is why the
+    /// English assertion above passes either way.
+    ///
+    /// Polish is the cheapest locale to prove it with: `few` (2–4) and `many` (5+) are
+    /// different words, and neither is the `other` form. Assert through the same
+    /// locale-aware path `String.localizedStringWithFormat` takes at runtime.
+    ///
+    /// Regression: `MapTypeButton.accessibilityValueText` shipped calling `String(format:)`,
+    /// which rendered a Polish count of 5 as `other` ("5 warstwy włączonej") rather than
+    /// `many` ("5 warstw włączonych").
+    /// Structure checks only prove the categories exist. This proves the countdown actually
+    /// resolves them: Polish needs "minutę" at 1, "minuty" at 2-4 and "minut" at 5+, and the
+    /// plain string these keys used to carry was stuck on the 5+ form at every count.
+    ///
+    /// Note this must use `String.localizedStringWithFormat`, not `String(format:)` — the
+    /// latter resolves against the root plural rule, so `few`/`many` would be unreachable and
+    /// the test would pass against a broken catalog.
+    @Test func `Polish arrival countdown reaches its few and many forms`() throws {
+        let format = try #require(localizedFormat(forKey: "stop_page.row.a11y_arrives_fmt", localization: "pl"))
+        // The locale MUST be passed explicitly. `String.localizedStringWithFormat` selects the
+        // category using `Locale.current`, which on this test host is English — so 5 would pick
+        // `other`, quietly rendering "5 minuty" and passing a `contains("5 minut")` check
+        // without ever reaching Polish's `many`.
+        let polish = Locale(identifier: "pl")
+        func rendered(_ minutes: Int) -> String {
+            String(format: format, locale: polish, "10", "Centrum", minutes, "o czasie")
+        }
+
+        #expect(rendered(1).contains("1 minutę"), "pl one: \(rendered(1))")
+        #expect(rendered(3).contains("3 minuty"), "pl few: \(rendered(3))")
+        #expect(rendered(5).contains("5 minut"), "pl many: \(rendered(5))")
+        #expect(rendered(22).contains("22 minuty"), "pl few at 22: \(rendered(22))")
+    }
+
+    /// The simplest of the countdown keys, and the one a rider hears most: a bare minute count.
+    @Test func `Alarm minute count agrees in Polish and Russian`() throws {
+        let plFormat = try #require(localizedFormat(forKey: "alarm_builder_controller.minutes_fmt", localization: "pl"))
+        let pl = Locale(identifier: "pl")
+        #expect(String(format: plFormat, locale: pl, 1) == "1 minuta", "pl one: \(String(format: plFormat, locale: pl, 1))")
+        #expect(String(format: plFormat, locale: pl, 3) == "3 minuty", "pl few: \(String(format: plFormat, locale: pl, 3))")
+        #expect(String(format: plFormat, locale: pl, 5) == "5 minut", "pl many: \(String(format: plFormat, locale: pl, 5))")
+
+        let ruFormat = try #require(localizedFormat(forKey: "alarm_builder_controller.minutes_fmt", localization: "ru"))
+        let ru = Locale(identifier: "ru")
+        let one = String(format: ruFormat, locale: ru, 1)
+        let few = String(format: ruFormat, locale: ru, 3)
+        let many = String(format: ruFormat, locale: ru, 5)
+        #expect(one != few && few != many, "ru forms must differ across 1/3/5: \(one) / \(few) / \(many)")
+    }
+
+    /// Regression: these screens formatted stringsdict counts with `String(format:)`
+    /// and no locale, so `%#@count@` resolved against the root rule. A Polish 5 hit
+    /// `other` ("minionego") instead of `many` ("minionych"). `CountPlural` is the
+    /// call-site path; the Polish bundle is how the test sees a language the host
+    /// does not prefer. Dropping `locale:` from `CountPlural` fails this.
+    /// Call sites still wrap `OBALoc(...)` so `genstrings -s OBALoc` keeps extracting.
+    @Test func `Count plural call sites reach Polish few and many`() throws {
+        let polish = Locale(identifier: "pl")
+        let bundle = try #require(lprojBundle("pl"))
+
+        let many: [(key: String, fallback: String, expected: String)] = [
+            ("stop_page.past_toggle_show_a11y_fmt", "Show %d past departures", "Pokaż 5 minionych odjazdów"),
+            ("stop_page.service_alerts.show_all_fmt", "Show all %d alerts", "Pokaż wszystkie 5 alertów"),
+            ("stop_page.service_alerts.summary_fmt", "%d service alerts", "5 alertów funkcjonowania komunikacji"),
+            ("stop_page.empty.no_departures_fmt", "No departures in the next %d minutes", "Brak odjazdów w ciągu najbliższych 5 minut"),
+            ("stop_controller.transfer_show_earlier_departures_fmt", "Show %d earlier departures", "Pokaż 5 wcześniejszych odjazdów"),
+            ("data_migration_bulletin.report_summary_number_of_failures", "%d failures", "5 nieudanych zadań"),
+            ("data_migration_bulletin.report_summary_number_of_successes", "%d successful", "5 udanych zadań")
+        ]
+
+        for entry in many {
+            let format = bundle.localizedString(forKey: entry.key, value: entry.fallback, table: nil)
+            let rendered = CountPlural.format(format, count: 5, locale: polish)
+            #expect(rendered == entry.expected, "\(entry.key) many: \(rendered)")
+        }
+
+        let fewFormat = bundle.localizedString(
+            forKey: "stop_page.past_toggle_show_a11y_fmt",
+            value: "Show %d past departures",
+            table: nil
+        )
+        let few = CountPlural.format(fewFormat, count: 3, locale: polish)
+        #expect(few == "Pokaż 3 minione odjazdy", "pl few: \(few)")
+    }
+
+    /// The rental sheet's walk estimate and station count used `String(format:)` on a
+    /// plain string, so no locale could agree a noun or adjective with the count.
+    @Test func `Polish rental counts reach their few and many forms`() throws {
+        let polish = Locale(identifier: "pl")
+
+        let walk = try #require(localizedFormat(forKey: "rental_detail.walk_time_fmt", localization: "pl"))
+        #expect(String(format: walk, locale: polish, 1) == "1 minuta pieszo")
+        #expect(String(format: walk, locale: polish, 3) == "3 minuty pieszo")
+        #expect(String(format: walk, locale: polish, 5) == "5 minut pieszo")
+
+        let available = try #require(localizedFormat(forKey: "rental_annotation.vehicles_available_fmt", localization: "pl"))
+        #expect(String(format: available, locale: polish, 1) == "1 dostępny")
+        #expect(String(format: available, locale: polish, 3) == "3 dostępne")
+        #expect(String(format: available, locale: polish, 5) == "5 dostępnych")
+    }
+
+    @Test func `Polish layer count reaches its few and many forms`() throws {
+        let format = try #require(localizedFormat(
+            forKey: "map_controller.map_type.accessibility_value_with_layers_fmt",
+            localization: "pl"
+        ))
+        let polish = Locale(identifier: "pl")
+
+        #expect(String(format: format, locale: polish, "standardowa", 1) == "standardowa, 1 warstwa włączona")
+        #expect(String(format: format, locale: polish, "standardowa", 3) == "standardowa, 3 warstwy włączone")
+        #expect(String(format: format, locale: polish, "standardowa", 5) == "standardowa, 5 warstw włączonych")
+    }
+
+    /// Siri speaks this countdown, so a wrong plural form is heard, not just seen.
+    @Test func `Polish Siri departure countdown reaches its few and many forms`() throws {
+        let format = try #require(localizedFormat(forKey: "next_departures_intent.in_minutes_fmt", localization: "pl"))
+        let polish = Locale(identifier: "pl")
+
+        #expect(String(format: format, locale: polish, 1) == "za 1 minutę")
+        #expect(String(format: format, locale: polish, 3) == "za 3 minuty")
+        #expect(String(format: format, locale: polish, 5) == "za 5 minut")
+    }
+
+    @Test func `Polish trip card stop count reaches its few and many forms`() throws {
+        let format = try #require(localizedFormat(
+            forKey: "trip_page.card.distance_stops_fmt",
+            localization: "pl"
+        ))
+        let polish = Locale(identifier: "pl")
+
+        #expect(String(format: format, locale: polish, "2 km", 1) == "jeszcze 2 km · 1 przystanek")
+        #expect(String(format: format, locale: polish, "2 km", 3) == "jeszcze 2 km · 3 przystanki")
+        #expect(String(format: format, locale: polish, "2 km", 5) == "jeszcze 2 km · 5 przystanków")
+    }
+
+    /// The trip page's action captions were shortened so four fit on one line (#1577).
+    /// A locale whose caption still reads as the long form ("View schedule", "Add
+    /// Bookmark") wraps again, and nothing else would notice.
+    @Test func `Trip page action captions are shorter than their VoiceOver labels in every locale`() throws {
+        let kit = Bundle.obaKit
+        let english = try #require(strings(in: kit, localization: "en"))
+        #expect(english["trip_page.bookmark"] == "Bookmark")
+        #expect(english["trip_page.schedule"] == "Schedule")
+
+        var compared = 0
+        for localization in kit.localizations where localization != "Base" {
+            guard let table = strings(in: kit, localization: localization),
+                  let addBookmark = strings(in: Bundle.obaKitCore, localization: localization)?["common.add_bookmark"]
+            else { continue }
+            compared += 1
+            let bookmark = try #require(table["trip_page.bookmark"], "\(localization)/trip_page.bookmark is missing")
+            let schedule = try #require(table["trip_page.schedule"], "\(localization)/trip_page.schedule is missing")
+            let viewSchedule = try #require(table["trip_page.view_schedule"], "\(localization)/trip_page.view_schedule is missing")
+
+            #expect(bookmark.count < addBookmark.count, "\(localization): caption \"\(bookmark)\" is no shorter than \"\(addBookmark)\"")
+            #expect(schedule.count < viewSchedule.count, "\(localization): caption \"\(schedule)\" is no shorter than \"\(viewSchedule)\"")
+            if localization != "en" {
+                #expect(schedule != english["trip_page.schedule"], "\(localization): trip_page.schedule is still English")
+            }
+        }
+        #expect(compared == kit.localizations.filter { $0 != "Base" }.count)
+    }
+
+    @Test func `Polish collapsed stop runs reach their few and many forms`() throws {
+        let polish = Locale(identifier: "pl")
+        let count = try #require(localizedFormat(forKey: "trip_page.stop_list.run_count_fmt", localization: "pl"))
+        #expect(CountPlural.format(count, count: 3, locale: polish) == "3 przystanki")
+        #expect(CountPlural.format(count, count: 5, locale: polish) == "5 przystanków")
+
+        let passed = try #require(localizedFormat(forKey: "trip_page.stop_list.a11y_run_passed_fmt", localization: "pl"))
+        #expect(CountPlural.format(passed, count: 3, locale: polish) == "3 minięte przystanki")
+        #expect(CountPlural.format(passed, count: 5, locale: polish) == "5 miniętych przystanków")
+    }
+
+    // MARK: - App Intents and App Shortcuts
+
+    private func table(_ name: String, in bundle: Bundle, localization: String) -> [String: String]? {
+        guard let url = bundle.url(forResource: name, withExtension: "strings",
+                                   subdirectory: nil, localization: localization) else { return nil }
+        return NSDictionary(contentsOf: url) as? [String: String]
+    }
+
+    /// Shortcuts and Siri read `AppIntents.strings` out of process, and
+    /// `scripts/extract_strings` never touches it, so nothing else notices a
+    /// locale that lacks a key or carries a stale one.
+    ///
+    /// Both tables ship in the app (`Apps/Shared/CommonClient`), next to the
+    /// merged `Metadata.appintents`. The test host is the app, so that is
+    /// `Bundle.main` here.
+    @Test func `Every locale has the same App Intents keys as english`() throws {
+        let bundle = Bundle.main
+        let english = try #require(table("AppIntents", in: bundle, localization: "en"))
+        #expect(english["track_bookmark_intent.title"] == "Track Bookmark")
+
+        for localization in bundle.localizations where localization != "en" && localization != "Base" {
+            let translated = try #require(table("AppIntents", in: bundle, localization: localization), "\(localization) has no AppIntents.strings")
+            #expect(Set(translated.keys) == Set(english.keys), "\(localization) AppIntents.strings keys differ from en")
+        }
+    }
+
+    /// The intents' strings name no bundle, so in-process lookups read the
+    /// app's table, the one Shortcuts reads. `#bundle` would point at OBAKit's
+    /// resource bundle, which has no `AppIntents` table, and every lookup would
+    /// quietly fall back to its English default.
+    @Test func `App Intents strings resolve in process from the app's table`() throws {
+        var title = TrackBookmarkIntent.title
+        title.locale = Locale(identifier: "pl")
+        let polish = try #require(table("AppIntents", in: .main, localization: "pl")?["track_bookmark_intent.title"])
+
+        #expect(polish != "Track Bookmark")
+        #expect(String(localized: title) == polish)
+    }
+
+    /// Siri drops an App Shortcut phrase that lacks `${applicationName}`, and a
+    /// phrase that loses `${bookmark}` can no longer pick a bookmark by name.
+    /// Keys are the English phrases, so a renamed English phrase orphans every
+    /// translation; the key check catches that.
+    @Test func `Every locale has every App Shortcut phrase with its tokens`() throws {
+        let bundle = Bundle.main
+        let english = try #require(table("AppShortcuts", in: bundle, localization: "en"))
+        #expect(english.count == 7)
+
+        for localization in bundle.localizations where localization != "Base" {
+            let phrases = try #require(table("AppShortcuts", in: bundle, localization: localization), "\(localization) has no AppShortcuts.strings")
+            #expect(Set(phrases.keys) == Set(english.keys), "\(localization) AppShortcuts.strings keys differ from en")
+            for (key, phrase) in phrases {
+                #expect(phrase.components(separatedBy: "${applicationName}").count == 2,
+                        "\(localization): \"\(phrase)\" must name ${applicationName} exactly once")
+                #expect(phrase.contains("${bookmark}") == key.contains("${bookmark}"),
+                        "\(localization): \"\(phrase)\" must keep ${bookmark} only where English has it")
+            }
+        }
+    }
+
+    /// Chinese runs sentences together after "。"; a hardcoded space between the
+    /// two Siri sentences read as a stray gap there.
+    @Test func `Chinese joins the next departures sentences without a space`() throws {
+        for localization in ["zh-Hans", "zh-Hant"] {
+            let format = try #require(localizedFormat(forKey: "next_departures_intent.sentences_join_fmt", localization: localization))
+            #expect(format == "%1$@%2$@", "\(localization): \(format)")
+        }
+    }
+
+    @Test func `Past departures announcement reaches Slavic few and many forms`() throws {
+        let plFormat = try #require(localizedFormat(forKey: "stop_page.a11y.past_shown_fmt", localization: "pl"))
+        let polish = Locale(identifier: "pl")
+        #expect(String(format: plFormat, locale: polish, 3) == "Wyświetlono 3 minione odjazdy")
+        #expect(String(format: plFormat, locale: polish, 5) == "Wyświetlono 5 minionych odjazdów")
+
+        let ruFormat = try #require(localizedFormat(forKey: "stop_page.a11y.past_shown_fmt", localization: "ru"))
+        let russian = Locale(identifier: "ru")
+        #expect(String(format: ruFormat, locale: russian, 3) == "Показано 3 прошедших отправления")
+        #expect(String(format: ruFormat, locale: russian, 5) == "Показано 5 прошедших отправлений")
     }
 }

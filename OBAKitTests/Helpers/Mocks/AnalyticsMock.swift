@@ -7,6 +7,7 @@
 //  LICENSE file in the root directory of this source tree.
 //
 
+import OBAKitCore
 import Foundation
 import OBAKit
 
@@ -23,10 +24,12 @@ class AnalyticsMock: NSObject, Analytics {
     
     public private(set) var stopViewedCount = 0
     public private(set) var lastReportedStopID: String?
+    public private(set) var lastReportedStopDistance: String?
 
     func reportStopViewed(name: String, id: String, stopDistance: String) {
         stopViewedCount += 1
         lastReportedStopID = id
+        lastReportedStopDistance = stopDistance
     }
     
     func reportSetRegion(_ name: String) {

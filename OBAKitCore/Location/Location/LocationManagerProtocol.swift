@@ -17,6 +17,10 @@ public protocol LocationManager {
 
     func requestWhenInUseAuthorization()
 
+    /// Region monitoring only delivers events in the background under
+    /// `.authorizedAlways`, so proximity alerts must be able to ask for it.
+    func requestAlwaysAuthorization()
+
     @available(iOS 14, *)
     func requestTemporaryFullAccuracyAuthorization(withPurposeKey purposeKey: String)
 
@@ -47,15 +51,21 @@ public protocol LocationManager {
     func stopUpdatingLocation()
     var location: CLLocation? { get }
 
+    // MARK: - One-shot location
+
+    /// Delivers a single fix through `didUpdateLocations`, or an error through
+    /// `didFailWithError`. Available on every platform this module builds for;
+    /// `CLLocationManager` implements it. No default implementation on purpose:
+    /// a mock that forgot it would silently never deliver.
+    func requestLocation()
+
+    /// The accuracy the next fix should aim for. `CLLocationManager` implements it.
+    var desiredAccuracy: CLLocationAccuracy { get set }
+
     // MARK: - Heading
     var isHeadingAvailable: Bool { get }
     func startUpdatingHeading()
     func stopUpdatingHeading()
-
-    // MARK: - Region Monitoring
-    func startMonitoring(for region: CLRegion)
-    func stopMonitoring(for region: CLRegion)
-    var monitoredRegions: Set<CLRegion> { get }
 }
 
 extension CLLocationManager: LocationManager {

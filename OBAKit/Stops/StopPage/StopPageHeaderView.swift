@@ -14,8 +14,9 @@ import OBAKitCore
 /// dark scrim, with the identity block bottom-left in white — the "last
 /// updated" status line, stop name, the code/direction subtitle with inline
 /// route chips (wrapping onto as many lines as needed, never truncated), and
-/// the walk pill (the single visual source of walk time, §4.5). Tapping the
-/// walk pill opens walking directions in an external maps app.
+/// the travel pills — a walk estimate and a bike estimate, each at the user's
+/// respective speed and always shown regardless of Bike Mode (§4.5). What
+/// tapping one does is up to `StopDirectionsPill`.
 ///
 /// A plain-value view: it never touches `StopViewModel`. The map snapshot is
 /// produced by a `snapshotLoader` closure supplied by the hosting VC, so the
@@ -24,13 +25,15 @@ import OBAKitCore
 /// `UIScreen.main`.
 struct StopPageHeaderView: View {
     let stop: Stop
+    /// Walk time at the user's walking speed — always shown, independent of Bike Mode.
     let walkTime: WalkTimeInfo?
+    /// Bike time at the user's cycling speed — always shown, independent of Bike Mode.
+    let bikeTime: WalkTimeInfo?
     /// The "Updated: …" line; empty hides it.
     let statusText: String
     let snapshotLoader: (CGSize) async -> UIImage?
-    /// Opens walking directions to the stop (VC-owned; disambiguates between
-    /// maps apps when more than one is available).
-    let onWalkingDirections: () -> Void
+    /// What the walk and bike chips do (VC-owned); see `StopDirectionsPill`.
+    let pillDirections: StopPillDirections
 
     @State private var snapshot: UIImage?
     @State private var cardWidth: CGFloat = 0
@@ -84,17 +87,38 @@ struct StopPageHeaderView: View {
             // button below stays separate so it remains individually
             // focusable and activatable.
             .accessibilityElement(children: .combine)
-            if let walkTime {
-                Button(action: onWalkingDirections) {
-                    Label(walkChipText(walkTime), systemImage: "figure.walk")
-                        .font(.footnote.weight(.heavy))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 12).padding(.vertical, 6)
-                        .background(Color(uiColor: ThemeColors.shared.departureOnTime), in: Capsule())
-                        .contentShape(Capsule())
+            // What the map pin says (name, direction, "Routes: …", stop ID), so the
+            // Headings rotor lists the stop by name. The "Updated: …" line is the
+            // value: it changes every few seconds, and as the start of the label
+            // it read before the stop's name.
+            .accessibilityLabel(Formatters.formattedAccessibilityLabel(stop: stop))
+            .accessibilityValue(statusText)
+            // The screen's title: mark it a heading so it anchors VoiceOver's
+            // Headings rotor for quick top-of-page navigation.
+            .accessibilityAddTraits(.isHeader)
+            // Two independent estimates: the walk chip (tappable, opens walking
+            // directions) and the bike chip. Both are always shown when
+            // available — Bike Mode only affects the arrival split, not these.
+            // FlowLayout, not HStack: the subtitle/route chips above never
+            // compress or drop at accessibility sizes, and two side-by-side
+            // pills with no wrap would be the one thing on this card that does.
+            //
+            // `FlowLayout` sizes subviews with an unspecified proposal, which a
+            // `Button` answers with a greedy height — that is what once stretched
+            // the sheet header's walk pill down the whole sheet (5a95d4fe), and
+            // neither `.buttonStyle(.plain)` nor `.fixedSize()` on the `Button`
+            // held. So nothing in this row is a `Button`; see `StopTravelPill`.
+            if walkTime != nil || bikeTime != nil {
+                FlowLayout(hSpacing: 8, vSpacing: 8) {
+                    // Each mode gets its own solid fill (walk: on-time green, bike:
+                    // blue) so the two estimates read as distinct at a glance.
+                    if let walkTime {
+                        travelChip(.walk, walkTime, fill: ThemeColors.shared.departureOnTimeFill)
+                    }
+                    if let bikeTime {
+                        travelChip(.bike, bikeTime, fill: ThemeColors.shared.blue)
+                    }
                 }
-                .buttonStyle(.plain)
-                .accessibilityHint(OBALoc("stop_page.header.walk_a11y_hint", value: "Opens walking directions to this stop.", comment: "VoiceOver hint on the header card's walk-time button."))
             }
         }
         .padding(16)
@@ -145,13 +169,13 @@ struct StopPageHeaderView: View {
             .background(Color.white.opacity(0.18), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
 
-    private func walkChipText(_ info: WalkTimeInfo) -> String {
-        let fmt = OBALoc(
-            "stop_page.walk_chip_minutes_fmt",
-            value: "%d min walk",
-            comment: "Walk chip on the header card. %d is the walk time in minutes."
+    private func travelChip(_ pill: StopDirectionsPill, _ info: WalkTimeInfo, fill: UIColor) -> some View {
+        StopTravelPill(
+            pill: pill, info: info,
+            font: .footnote.weight(.heavy), foreground: .white, fill: Color(uiColor: fill),
+            horizontalPadding: 12, verticalPadding: 6,
+            directions: pillDirections
         )
-        return String(format: fmt, info.walkMinutes)
     }
 }
 /// Skeleton stand-in for the header card, shown while `Stop` is still unknown
@@ -268,16 +292,18 @@ private struct HeaderStatusLine: View {
         StopPageHeaderView(
             stop: stop,
             walkTime: WalkTimeInfo(walkMinutes: 7, distance: 520),
+            bikeTime: WalkTimeInfo(walkMinutes: 3, distance: 520),
             statusText: "Updated: 2 min ago",
             snapshotLoader: { _ in nil },
-            onWalkingDirections: {}
+            pillDirections: .none
         )
         StopPageHeaderView(
             stop: stop,
             walkTime: nil,
+            bikeTime: nil,
             statusText: "",
             snapshotLoader: { _ in nil },
-            onWalkingDirections: {}
+            pillDirections: .none
         )
         StopPageHeaderPlaceholderView()
     }
@@ -285,8 +311,13 @@ private struct HeaderStatusLine: View {
 
 /// Minimal leading-aligned wrapping layout: subviews flow left-to-right at
 /// their ideal sizes and break onto new lines as needed, so chips wrap instead
-/// of compressing or truncating. Shared by the header's subtitle + route chips
-/// and the grouped card's upcoming-trip chips at accessibility sizes.
+/// of compressing or truncating. Shared by the header's subtitle + route chips,
+/// its walk/bike travel-pill row, the sheet header's pills + chips row, and the
+/// grouped card's upcoming-trip chips at accessibility sizes.
+///
+/// Subviews are sized with an unspecified proposal, which a `Button` answers with
+/// a greedy height — so callers put `Text`-shaped tappable views in here, never
+/// a `Button` (see `StopTravelPill`).
 struct FlowLayout: Layout {
     var hSpacing: CGFloat = 4
     var vSpacing: CGFloat = 4

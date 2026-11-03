@@ -8,6 +8,7 @@
 //
 
 import Foundation
+import Combine
 import SwiftUI
 import OBAKitCore
 
@@ -23,10 +24,19 @@ class ScheduleForRouteViewModel: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var error: Error?
 
+    /// Bumped when `formatters.timeZone` lands so timetable cells redraw.
+    @Published private(set) var formattersTimeZoneGeneration = 0
+
+    private var formattersTimeZoneCancellable: AnyCancellable?
+
     // MARK: - Public Properties
 
     let routeID: RouteID
     let application: Application
+
+    /// Bumped at the start of each fetch so a cancelled request cannot clear
+    /// `isLoading` or set `error` after a newer fetch has begun.
+    private var fetchGeneration = 0
 
     /// The route name, if available from schedule data
     var routeName: String {
@@ -83,8 +93,9 @@ class ScheduleForRouteViewModel: ObservableObject {
                 tripWithStopTimes.stopTimes.map { ($0.stopID, $0) },
                 uniquingKeysWith: { first, _ in first }
             )
+            let timeZone = application.formatters.timeZone
             return direction.stopIDs.map { stopID in
-                stopTimesDict[stopID]?.departureDate(for: scheduleDate)
+                stopTimesDict[stopID]?.departureDate(for: scheduleDate, timeZone: timeZone)
             }
         }
     }
@@ -125,7 +136,9 @@ class ScheduleForRouteViewModel: ObservableObject {
         guard let minDepartureSeconds = trip.stopTimes.map({ $0.departureTime }).min() else {
             return nil
         }
-        let startOfDay = Calendar.current.startOfDay(for: scheduleDate)
+        var calendar = Calendar.current
+        calendar.timeZone = application.formatters.timeZone
+        let startOfDay = calendar.startOfDay(for: scheduleDate)
         return startOfDay.addingTimeInterval(TimeInterval(minDepartureSeconds))
     }
 
@@ -134,7 +147,7 @@ class ScheduleForRouteViewModel: ObservableObject {
     private lazy var timeFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm"
-        formatter.timeZone = TimeZone.current
+        formatter.timeZone = application.formatters.timeZone
         return formatter
     }()
 
@@ -143,7 +156,7 @@ class ScheduleForRouteViewModel: ObservableObject {
         formatter.dateStyle = .none
         formatter.timeStyle = .short
         formatter.locale = .current
-        formatter.timeZone = TimeZone.current
+        formatter.timeZone = application.formatters.timeZone
         return formatter
     }()
 
@@ -153,6 +166,16 @@ class ScheduleForRouteViewModel: ObservableObject {
         self.routeID = routeID
         self.application = application
         self.selectedDate = initialDate
+
+        formattersTimeZoneCancellable = NotificationCenter.default
+            .publisher(for: .formattersTimeZoneDidChange, object: application.formatters)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.timeFormatter.timeZone = self.application.formatters.timeZone
+                self.accessibilityTimeFormatter.timeZone = self.application.formatters.timeZone
+                self.formattersTimeZoneGeneration += 1
+            }
     }
 
     // MARK: - Public Methods
@@ -164,14 +187,18 @@ class ScheduleForRouteViewModel: ObservableObject {
             return
         }
 
+        fetchGeneration += 1
+        let generation = fetchGeneration
         isLoading = true
         error = nil
-        defer { isLoading = false }
 
         do {
             let response = try await apiService.getScheduleForRoute(routeID: routeID, date: selectedDate)
+            guard generation == fetchGeneration, !Task.isCancelled else { return }
             scheduleData = response.entry
+            isLoading = false
         } catch let apiError as APIError {
+            guard generation == fetchGeneration else { return }
             if case .requestNotFound = apiError {
                 if application.currentRegion?.supportsScheduleForRoute == false {
                     self.error = UnstructuredError(
@@ -187,14 +214,19 @@ class ScheduleForRouteViewModel: ObservableObject {
             } else {
                 self.error = apiError
             }
+            isLoading = false
         } catch {
+            guard generation == fetchGeneration else { return }
+            guard !error.isCancellation else { return }
             self.error = error
+            isLoading = false
         }
     }
 
     /// Formats a time for display in the timetable
     func formatTime(_ date: Date?) -> String {
         guard let date = date else { return "-" }
+        timeFormatter.timeZone = application.formatters.timeZone
         return timeFormatter.string(from: date)
     }
 
@@ -203,6 +235,7 @@ class ScheduleForRouteViewModel: ObservableObject {
         guard let date = date else {
             return OBALoc("schedule_view.no_departure", value: "No departure", comment: "Accessibility text when there is no departure time")
         }
+        accessibilityTimeFormatter.timeZone = application.formatters.timeZone
         return accessibilityTimeFormatter.string(from: date)
     }
 }

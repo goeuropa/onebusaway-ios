@@ -208,10 +208,67 @@ final class UserDefaultsStoreTests: OBATestCase {
     @Test func `Stop UI reduced colors set value persists under the app storage key`() {
         userDefaultsStore.stopUIReducedColors = true
         #expect(self.userDefaultsStore.stopUIReducedColors)
-        // The @AppStorage readers and the Eureka form must see the same key,
+        // The @AppStorage readers and Settings must see the same key,
         // and it must stay dot-free or KVO observation silently stops firing.
         #expect(UserDefaultsStore.stopUIReducedColorsKey == "stopUIReducedColors")
         #expect(self.userDefaultsStore.userDefaults.bool(forKey: UserDefaultsStore.stopUIReducedColorsKey))
+    }
+
+    // MARK: - Compact Stop / Trip Mode
+
+    @Test func `Stop trip compact mode defaults off`() {
+        #expect(!self.userDefaultsStore.stopTripCompactMode)
+        #expect(UserDefaultsStore.stopTripCompactModeKey == "stopTripCompactMode")
+    }
+
+    @Test func `Stop trip compact mode persists under the app storage key`() {
+        userDefaultsStore.stopTripCompactMode = true
+        #expect(self.userDefaultsStore.stopTripCompactMode)
+
+        let reloaded = UserDefaultsStore(userDefaults: userDefaults)
+        #expect(reloaded.stopTripCompactMode)
+        #expect(self.userDefaultsStore.userDefaults.bool(forKey: UserDefaultsStore.stopTripCompactModeKey))
+    }
+
+    // MARK: - Transfer Arrival Banner
+
+    @Test func `Transfer arrival banner defaults on`() {
+        #expect(self.userDefaultsStore.showTransferArrivalBanner)
+        #expect(UserDefaultsStore.showTransferArrivalBannerKey == "showTransferArrivalBanner")
+    }
+
+    @Test func `Transfer arrival banner off persists and drops displayed context`() {
+        let context = TransferContext(
+            arrivalTime: Date(timeIntervalSince1970: 1_700_000_000),
+            fromRouteShortName: "10",
+            fromTripHeadsign: "Capitol Hill"
+        )
+        #expect(self.userDefaultsStore.displayedTransferContext(context) == context)
+
+        userDefaultsStore.showTransferArrivalBanner = false
+        #expect(!self.userDefaultsStore.showTransferArrivalBanner)
+        #expect(self.userDefaultsStore.displayedTransferContext(context) == nil)
+
+        let reloaded = UserDefaultsStore(userDefaults: userDefaults)
+        #expect(!reloaded.showTransferArrivalBanner)
+        #expect(reloaded.displayedTransferContext(context) == nil)
+        #expect(self.userDefaultsStore.userDefaults.bool(forKey: UserDefaultsStore.showTransferArrivalBannerKey) == false)
+    }
+
+    // MARK: - Region Time Zone Display
+
+    @Test func `Region time zone display defaults off`() {
+        #expect(!self.userDefaultsStore.showRegionTimeZone)
+        #expect(UserDefaultsStore.showRegionTimeZoneKey == "showRegionTimeZone")
+    }
+
+    @Test func `Region time zone display on persists`() {
+        userDefaultsStore.showRegionTimeZone = true
+        #expect(self.userDefaultsStore.showRegionTimeZone)
+
+        let reloaded = UserDefaultsStore(userDefaults: userDefaults)
+        #expect(reloaded.showRegionTimeZone)
+        #expect(self.userDefaultsStore.userDefaults.bool(forKey: UserDefaultsStore.showRegionTimeZoneKey))
     }
 
     // MARK: - Survey Properties
@@ -318,6 +375,70 @@ final class UserDefaultsStoreTests: OBATestCase {
     @Test func `Walking speed meters per second clamps above range`() {
         userDefaultsStore.walkingSpeedMetersPerSecond = 10.0
         expectClose(self.userDefaultsStore.walkingSpeedMetersPerSecond, WalkingSpeed.validRange.upperBound)
+    }
+
+    // MARK: - Bike Mode
+
+    @Test func `Bike mode enabled default value`() {
+        #expect(self.userDefaultsStore.bikeModeEnabled == false)
+    }
+
+    @Test func `Bike mode enabled round trip`() {
+        userDefaultsStore.bikeModeEnabled = true
+        #expect(UserDefaultsStore(userDefaults: userDefaults).bikeModeEnabled == true)
+
+        userDefaultsStore.bikeModeEnabled = false
+        #expect(UserDefaultsStore(userDefaults: userDefaults).bikeModeEnabled == false)
+    }
+
+    @Test func `Bike speed default value`() {
+        expectClose(self.userDefaultsStore.bikeSpeedMetersPerSecond, 4.2)
+    }
+
+    @Test func `Bike speed round trip`() {
+        userDefaultsStore.bikeSpeedMetersPerSecond = 5.0
+        expectClose(self.userDefaultsStore.bikeSpeedMetersPerSecond, 5.0)
+
+        let newStore = UserDefaultsStore(userDefaults: userDefaults)
+        expectClose(newStore.bikeSpeedMetersPerSecond, 5.0)
+    }
+
+    @Test func `Bike speed source default value`() {
+        #expect(self.userDefaultsStore.bikeSpeedSource == .manual)
+    }
+
+    @Test func `Bike speed source round trip`() {
+        userDefaultsStore.bikeSpeedSource = .healthKit
+        #expect(UserDefaultsStore(userDefaults: userDefaults).bikeSpeedSource == .healthKit)
+
+        userDefaultsStore.bikeSpeedSource = .manual
+        #expect(UserDefaultsStore(userDefaults: userDefaults).bikeSpeedSource == .manual)
+    }
+
+    @Test func `Bike speed meters per second clamps below range`() {
+        userDefaultsStore.bikeSpeedMetersPerSecond = 0.1
+        expectClose(self.userDefaultsStore.bikeSpeedMetersPerSecond, BikeSpeed.validRange.lowerBound)
+    }
+
+    @Test func `Bike speed meters per second clamps above range`() {
+        userDefaultsStore.bikeSpeedMetersPerSecond = 30.0
+        expectClose(self.userDefaultsStore.bikeSpeedMetersPerSecond, BikeSpeed.validRange.upperBound)
+    }
+
+    @Test func `Effective travel velocity when bike mode disabled returns walking speed`() {
+        userDefaultsStore.bikeModeEnabled = false
+        userDefaultsStore.walkingSpeedMetersPerSecond = 1.6
+        userDefaultsStore.bikeSpeedMetersPerSecond = 5.0
+
+        expectClose(self.userDefaultsStore.effectiveTravelVelocityMetersPerSecond, 1.6)
+    }
+
+    @Test func `Effective travel velocity when bike mode enabled returns bike speed`() {
+        userDefaultsStore.bikeModeEnabled = true
+        userDefaultsStore.walkingSpeedMetersPerSecond = 1.6
+        userDefaultsStore.bikeSpeedMetersPerSecond = 5.0
+
+        expectClose(self.userDefaultsStore.effectiveTravelVelocityMetersPerSecond, 5.0)
     }
 
     // MARK: - Default Alarm Lead Time

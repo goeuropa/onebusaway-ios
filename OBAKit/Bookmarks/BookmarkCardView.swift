@@ -50,7 +50,7 @@ struct BookmarkCardView: View {
         .onAppear { flashIfNeeded() }
         .onChange(of: row.highlightedTripIDs) { flashIfNeeded() }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(formatters.accessibilityLabel(for: row))
+        .accessibilityLabel(row.accessibilityLabel(base: formatters.accessibilityLabel(for: row)))
         .accessibilityValue(formatters.accessibilityValue(for: row) ?? "")
         .accessibilityAddTraits([.isButton, .updatesFrequently])
     }
@@ -67,6 +67,7 @@ struct BookmarkCardView: View {
             VStack(alignment: .leading, spacing: 3) {
                 nameText
                 statusLine
+                destinationLine
             }
             Spacer(minLength: 8)
             if let primary {
@@ -98,14 +99,20 @@ struct BookmarkCardView: View {
             } else {
                 loadingText
             }
+            destinationLine
         }
     }
 
     private var nameText: some View {
-        Text(row.name)
-            .font(.headline.weight(.heavy))
-            .foregroundStyle(.primary)
-            .lineLimit(isAccessibilitySize ? nil : 2)
+        HStack(spacing: 4) {
+            if row.isPinned {
+                BookmarkPinIndicator()
+            }
+            Text(row.name)
+                .font(.headline.weight(.heavy))
+                .foregroundStyle(.primary)
+                .lineLimit(isAccessibilitySize ? nil : 2)
+        }
     }
 
     @ViewBuilder
@@ -140,11 +147,46 @@ struct BookmarkCardView: View {
             .foregroundStyle(Color(uiColor: status.color))
     }
 
+    /// Arrival at the bookmark's destination stop, below the departure it belongs
+    /// to. Shown only for destination bookmarks with a departure to describe;
+    /// the "no trip stops there" case replaces the status line instead (#1080).
+    @ViewBuilder
+    private var destinationLine: some View {
+        if primary != nil, let text = formatters.destinationText(for: row) {
+            Label {
+                Text(text)
+                    .lineLimit(isAccessibilitySize ? nil : 2)
+            } icon: {
+                Image(systemName: "arrow.turn.down.right")
+            }
+            .font(.footnote.weight(.medium))
+            .foregroundStyle(destinationColor)
+        }
+    }
+
+    private var destinationColor: Color {
+        if case .arrives(let arrival) = row.destinationStatus, arrival.isRealTime {
+            return .primary
+        }
+        return .secondary
+    }
+
     /// Placeholder for the status line while there's no primary departure:
     /// "Loading..." until the stop's fetch completes, then an explicit
     /// no-departures message — a fetched-but-empty result must not look like
     /// it's loading forever.
+    @ViewBuilder
     private var loadingText: some View {
+        if row.destinationStatus == .notServed, let text = formatters.destinationText(for: row) {
+            Text(text)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        } else {
+            noDeparturesText
+        }
+    }
+
+    private var noDeparturesText: some View {
         Text(row.hasLoadedArrivalData
             ? OBALoc("bookmarks_controller.no_upcoming_departures", value: "No upcoming departures", comment: "Shown on a bookmark card when arrival data has loaded but there are no departures in the near future")
             : OBALoc("loading", value: "Loading...", comment: "Loading state text"))
@@ -197,9 +239,12 @@ struct BookmarkCardView: View {
         let status = DepartureStatus(arrivalDeparture: departure)
         let color = Color(uiColor: status.color)
         let minutes = max(0, departure.arrivalDepartureMinutes)
-        return Text(minutes == 0
-             ? OBALoc("stop_page.countdown.now", value: "NOW", comment: "Shown in place of the minutes countdown when the vehicle is departing now")
-             : "\(minutes)m")
+        return StatusGlyphLabel(
+            text: minutes == 0
+                ? OBALoc("stop_page.countdown.now", value: "NOW", comment: "Shown in place of the minutes countdown when the vehicle is departing now")
+                : Formatters.shortMinutesText(minutes),
+            status: status
+        )
             .font(.caption.weight(.heavy))
             .monospacedDigit()
             .foregroundStyle(color)
@@ -265,10 +310,15 @@ struct StopBookmarkRow: View {
                     in: RoundedRectangle(cornerRadius: 48 * badgeScale * 0.28, style: .continuous)
                 )
             VStack(alignment: .leading, spacing: 3) {
-                Text(row.name)
-                    .font(.headline.weight(.heavy))
-                    .foregroundStyle(.primary)
-                    .lineLimit(2)
+                HStack(spacing: 4) {
+                    if row.isPinned {
+                        BookmarkPinIndicator()
+                    }
+                    Text(row.name)
+                        .font(.headline.weight(.heavy))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                }
                 if let subtitle = row.routesSubtitle {
                     Text(subtitle)
                         .font(.footnote)
@@ -279,7 +329,7 @@ struct StopBookmarkRow: View {
             Spacer(minLength: 0)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(formatters.accessibilityLabel(for: row))
+        .accessibilityLabel(row.accessibilityLabel(base: formatters.accessibilityLabel(for: row)))
         .accessibilityAddTraits(.isButton)
     }
 }

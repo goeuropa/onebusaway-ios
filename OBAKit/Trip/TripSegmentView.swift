@@ -12,7 +12,8 @@ import OBAKitCore
 
 /// The line/squircle adornment on the leading side of a cell on the `TripFloatingPanelController`.
 ///
-/// Depicts if the associated stop is the user's destination or the current location of the transit vehicle.
+/// Depicts if the associated stop is the user's destination, where the rider boarded, or the current location of the transit vehicle.
+/// Stops the vehicle has passed, and stops outside a shared trip's ride, are drawn faded.
 class TripSegmentView: UIView {
 
     private let lineWidth: CGFloat = 1.0
@@ -50,11 +51,33 @@ class TripSegmentView: UIView {
         didSet { setNeedsDisplay() }
     }
 
+    /// See `TripStopViewModel.isOutsideRide`.
+    var isOutsideRide: Bool = false {
+        didSet { setNeedsDisplay() }
+    }
+
+    /// Whether this stop is the destination of a shared ride.
+    var isRideDestination: Bool = false {
+        didSet { setNeedsDisplay() }
+    }
+
+    /// Drawn in the passed stops' gray. The vehicle's own stop never is, even
+    /// outside a ride.
+    private var isFaded: Bool {
+        switch temporalState {
+        case .past: return true
+        case .current: return false
+        case .future: return isOutsideRide
+        }
+    }
+
+    private(set) var isBoardingStop: Bool = false
     private var isUserDestination: Bool = false
     private var isCurrentVehicleLocation: Bool = false
 
-    public func setDestinationStatus(user: Bool, vehicle: Bool) {
+    public func setDestinationStatus(user: Bool, vehicle: Bool, boarding: Bool) {
         isUserDestination = user
+        isBoardingStop = boarding
         isCurrentVehicleLocation = vehicle
         setAccessibilityLabel()
         setNeedsDisplay()
@@ -67,8 +90,26 @@ class TripSegmentView: UIView {
         CGSize(width: circleRadius + (2.0 * lineWidth), height: UIView.noIntrinsicMetric)
     }
 
-    private var pastLineColor: UIColor {
+    var pastLineColor: UIColor {
         ThemeColors.shared.secondaryLabel.withAlphaComponent(0.4)
+    }
+
+    /// Gray once the vehicle has reached this row, or when the segment leads
+    /// into the boarding stop from outside the shared ride.
+    var topLineColor: UIColor {
+        switch temporalState {
+        case .past, .current:
+            return pastLineColor
+        case .future:
+            return (isFaded || isBoardingStop) ? pastLineColor : lineColor
+        }
+    }
+
+    /// Gray whenever the segment below lies outside the shared ride, leads away
+    /// from the destination, or has already been traversed by the vehicle.
+    /// This includes the vehicle's own row when it is outside the ride.
+    var bottomLineColor: UIColor {
+        (isOutsideRide || isFaded || isRideDestination) ? pastLineColor : lineColor
     }
 
     override public func draw(_ rect: CGRect) {
@@ -103,24 +144,13 @@ class TripSegmentView: UIView {
     }
 
     private func drawRegularTripSegment(_ rect: CGRect, context: CGContext?) {
-        // Top line color depends on temporal state:
-        // past/current → gray (the vehicle has reached or passed here)
-        // future → brand color
-        let topColor: UIColor
-        switch temporalState {
-        case .past, .current:
-            topColor = pastLineColor
-        case .future:
-            topColor = lineColor
-        }
-
-        topColor.setFill()
+        topLineColor.setFill()
         let topLine = UIBezierPath(rect: CGRect(origin: CGPoint(x: rect.midX - (lineWidth / 2.0), y: rect.minY), size: CGSize(width: lineWidth, height: rect.midY - halfRadius)))
         topLine.fill()
 
         let bezierFrame = CGRect(origin: CGPoint(x: rect.midX - halfRadius, y: rect.midY - halfRadius), size: CGSize(width: circleRadius, height: circleRadius))
 
-        let strokeColor: UIColor = temporalState == .past ? pastLineColor : lineColor
+        let strokeColor: UIColor = isFaded ? pastLineColor : lineColor
         strokeColor.setStroke()
 
         let bezierPath = UIBezierPath(roundedRect: bezierFrame, cornerRadius: ThemeMetrics.compactCornerRadius)
@@ -134,19 +164,35 @@ class TripSegmentView: UIView {
             drawUserDestinationBadge(frame: bezierFrame, context: context)
         }
 
+        if isBoardingStop {
+            drawBoardingBadge(frame: bezierFrame, context: context)
+        }
+
         bezierPath.stroke()
 
-        // Bottom line: past → gray, current/future → brand color
-        let bottomColor: UIColor = temporalState == .past ? pastLineColor : lineColor
-        bottomColor.setFill()
+        bottomLineColor.setFill()
         let bottomLine = UIBezierPath(rect: CGRect(origin: CGPoint(x: rect.midX - (lineWidth / 2.0), y: rect.midY + halfRadius), size: CGSize(width: lineWidth, height: rect.midY - halfRadius)))
         bottomLine.fill()
     }
 
+    /// Bottom-right quadrant of the squircle.
     private func drawUserDestinationBadge(frame: CGRect, context: CGContext?) {
-        context?.saveGState()
-
         let miniFrame = CGRect(x: frame.midX - lineWidth, y: frame.midY - lineWidth, width: halfRadius + lineWidth, height: halfRadius + lineWidth)
+        drawRiderBadge(in: miniFrame, context: context)
+    }
+
+    /// Top-left quadrant: the destination badge's mirror image. Read down the
+    /// timeline, the rider steps on at the top of the ridden segment and off at
+    /// the bottom, and the list already puts the boarding row above the exit —
+    /// so the same glyph in the opposite corner reads as the other end of the
+    /// same journey.
+    private func drawBoardingBadge(frame: CGRect, context: CGContext?) {
+        let miniFrame = CGRect(x: frame.minX, y: frame.minY, width: halfRadius + lineWidth, height: halfRadius + lineWidth)
+        drawRiderBadge(in: miniFrame, context: context)
+    }
+
+    private func drawRiderBadge(in miniFrame: CGRect, context: CGContext?) {
+        context?.saveGState()
 
         lineColor.setFill()
         ThemeColors.shared.systemBackground.setStroke()
@@ -176,6 +222,10 @@ class TripSegmentView: UIView {
             flags.append(OBALoc("trip_stop.user_destination.accessibility_label", value: "Your destination", comment: "Voiceover text explaining that this stop is the user's destination"))
         }
 
+        if isBoardingStop {
+            flags.append(OBALoc("trip_stop.boarding_stop.accessibility_label", value: "Boarding stop", comment: "Voiceover text explaining that this stop is where the rider boarded the vehicle"))
+        }
+
         if isCurrentVehicleLocation {
             flags.append(OBALoc("trip_stop.vehicle_location.accessibility_label", value: "Vehicle is here", comment: "Voiceover text explaining that the vehicle is currently at this stop"))
         }
@@ -194,9 +244,9 @@ struct TripSegmentView_Previews: PreviewProvider {
     private static let width: CGFloat = 64
     private static let height: CGFloat = 44
 
-    private static func tripSegmentView(user: Bool, vehicle: Bool) -> TripSegmentView {
+    private static func tripSegmentView(user: Bool, vehicle: Bool, boarding: Bool = false) -> TripSegmentView {
         let view = TripSegmentView()
-        view.setDestinationStatus(user: user, vehicle: vehicle)
+        view.setDestinationStatus(user: user, vehicle: vehicle, boarding: boarding)
         return view
     }
 
@@ -216,6 +266,7 @@ struct TripSegmentView_Previews: PreviewProvider {
             preview(for: tripSegmentView(user: true, vehicle: false), "User")
             preview(for: tripSegmentView(user: false, vehicle: true), "Vehicle")
             preview(for: tripSegmentView(user: true, vehicle: true), "User & Vehicle")
+            preview(for: tripSegmentView(user: false, vehicle: false, boarding: true), "Boarding")
         }
         .previewLayout(.sizeThatFits)
         .padding()

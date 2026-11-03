@@ -84,9 +84,9 @@ nonisolated class Icons: NSObject {
         }
     }
 
-    /// A right-pointing chevron arrow, like the kind used as a disclosure indicator on a table cell.
+    /// A trailing-pointing chevron (right in LTR, left in RTL), like the kind used as a disclosure indicator on a table cell.
     public class var chevron: UIImage {
-        return systemImage(named: "chevron.right")
+        return systemImage(named: "chevron.forward")
                 .withTintColor(.systemGray, renderingMode: .alwaysOriginal)
                 .withConfiguration(UIImage.SymbolConfiguration.init(weight: .bold))
     }
@@ -118,6 +118,11 @@ nonisolated class Icons: NSObject {
         configureForButtonIcon(systemImage(named: "line.horizontal.3.decrease"))
     }
 
+    /// A gear icon, for controls that send the user to the system Settings app.
+    public class var settings: UIImage {
+        configureForButtonIcon(systemImage(named: "gearshape"))
+    }
+
     public class var addAlarm: UIImage {
         imageNamed("add_alarm")
     }
@@ -141,10 +146,8 @@ nonisolated class Icons: NSObject {
 
     // MARK: - Live Activity
 
-    // An icon used for Live Activities ..
-    public class var liveActivity: UIImage {
-        systemImage(named: "waveform.circle.fill")
-    }
+    /// The live-prediction glyph, used wherever a rider starts a Live Activity.
+    public static let liveActivitySymbolName = "dot.radiowaves.up.forward"
 
     // MARK: - Bookmarks
 
@@ -179,9 +182,42 @@ nonisolated class Icons: NSObject {
         imageNamed("header")
     }
 
+    /// The symbol name behind ``departureType(isActive:)``, for the SwiftUI stop
+    /// page — `Label(_:systemImage:)` takes a name, not a `UIImage`, and both
+    /// presentations have to show the same glyph.
+    public class func departureTypeSymbolName(isActive: Bool) -> String {
+        isActive
+            ? "antenna.radiowaves.left.and.right.circle.fill"
+            : "antenna.radiowaves.left.and.right.circle"
+    }
+
     /// An icon for the departure-type filter menu (antenna radiowaves).
-    public class var departureType: UIImage {
-        systemImage(named: "antenna.radiowaves.left.and.right")
+    ///
+    /// Fills when a non-default filter is applied, the same filled/unfilled pair
+    /// the route filter uses. In the sheet presentation the two filters are
+    /// sibling submenus, so each one has to carry its own state — neither glyph
+    /// can stand in for the other.
+    public class func departureType(isActive: Bool) -> UIImage {
+        systemImage(named: departureTypeSymbolName(isActive: isActive))
+    }
+
+    /// The symbol name behind ``proximityAlert(isActive:)``, for the SwiftUI
+    /// stop page's `Label(_:systemImage:)`. Same split as
+    /// ``departureTypeSymbolName(isActive:)``: the two Stop-page presentations
+    /// build their menus from different frameworks and have to show one glyph.
+    public class func proximityAlertSymbolName(isActive: Bool) -> String {
+        isActive
+            ? "bell.and.waves.left.and.right.fill"
+            : "bell.and.waves.left.and.right"
+    }
+
+    /// An icon for the destination proximity alert menu item.
+    ///
+    /// Fills while an alert is armed on the stop, the same filled/unfilled pair
+    /// the departure rows' alarm bell uses — the rider reads "this is on" off the
+    /// glyph without opening the menu.
+    public class func proximityAlert(isActive: Bool) -> UIImage {
+        systemImage(named: proximityAlertSymbolName(isActive: isActive))
     }
 
     /// An icon for the sort-order menu (up/down arrows).
@@ -191,9 +227,9 @@ nonisolated class Icons: NSObject {
 
     // MARK: - Miscellaneous
 
-    /// An image used to represent an offline internet connection.
-    public class var noInternet: UIImage {
-        imageNamed("no_internet")
+    /// The arrow that points from a spotlight's caption down to the highlighted view.
+    class var spotlightArrowDown: UIImage {
+        imageNamed("arrowDownIcon")
     }
 
     /// An image used to represent an error condition.
@@ -355,10 +391,6 @@ nonisolated class Icons: NSObject {
     }
 
     private class var resourceBundle: Bundle {
-        #if SWIFT_PACKAGE
-        return Bundle.module
-        #else
-        return Bundle(for: self)
-        #endif
+        Bundle.module
     }
 }

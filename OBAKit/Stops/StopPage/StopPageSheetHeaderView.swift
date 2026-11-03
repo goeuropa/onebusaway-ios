@@ -47,14 +47,21 @@ nonisolated enum StopSheetHeaderMetrics {
 /// A plain-value view except for `mapFocus` — it never touches `StopViewModel`.
 struct StopPageSheetHeaderView: View {
     let stop: Stop
+    /// Walk time at the user's walking speed — always shown, independent of Bike Mode.
     let walkTime: WalkTimeInfo?
-    /// Opens walking directions to the stop (VC-owned; disambiguates between maps apps when more
-    /// than one is available).
-    let onWalkingDirections: () -> Void
+    /// Bike time at the user's cycling speed — always shown, independent of Bike Mode.
+    var bikeTime: WalkTimeInfo?
+    /// What the walk and bike pills do (VC-owned); see `StopDirectionsPill`.
+    let pillDirections: StopPillDirections
     /// Dismisses the sheet. The close button lives here rather than in a navigation bar: the
     /// sheet's root has no bar (see `StopSheetPresenter`), because a bar would impose a top safe
     /// area on the hosting controller that this header would absorb as dead space above the name.
     let onClose: () -> Void
+    /// `false` where something else already offers a way out — the map sheet's
+    /// pinned top bar carries its own Close, and two ✕ a few points apart read
+    /// as a mistake. Defaults to showing it: the pushed sheet presentation has
+    /// no navigation bar behind it, so this is that presentation's only way out.
+    var showsCloseButton = true
     /// `true` at the sheet's `.tip` detent, where the header has roughly one row's worth of
     /// height to work with. See `collapsedHeight` for what has to survive that budget and why.
     var isCollapsed = false
@@ -139,24 +146,29 @@ struct StopPageSheetHeaderView: View {
                     // identity element instead.
                     .accessibilityLabel(headerAccessibilityLabel)
 
-                    StopSheetCloseButton(action: onClose)
+                    if showsCloseButton {
+                        StopSheetCloseButton(action: onClose)
+                    }
                 }
 
-                if !isCollapsed, walkTime != nil || !chips.isEmpty {
-                    // Walk pill and chips share one flowing row, per the design — the pill
-                    // leads, a hairline separates it from the routes, and everything wraps
-                    // together.
+                if !isCollapsed, walkTime != nil || bikeTime != nil || !chips.isEmpty {
+                    // Walk pill, bike pill, and chips share one flowing row, per the design —
+                    // the pills lead, a hairline separates them from the routes, and everything
+                    // wraps together.
                     //
                     // `FlowLayout` sizes subviews with an unspecified proposal, which a
                     // `Button` answers with a greedy height — that is what once stretched the
                     // walk pill down the whole sheet. So nothing in this row is a `Button`;
-                    // the pill and the chips are `Text`-shaped tappable views instead. See
+                    // the pills and the chips are `Text`-shaped tappable views instead. See
                     // `chipView(_:)`.
                     FlowLayout(hSpacing: 6, vSpacing: 6) {
                         if let walkTime {
-                            walkPill(walkTime)
+                            travelPill(.walk, walkTime, color: ThemeColors.shared.departureOnTime)
                         }
-                        if walkTime != nil, !chips.isEmpty {
+                        if let bikeTime {
+                            travelPill(.bike, bikeTime, color: ThemeColors.shared.blue)
+                        }
+                        if (walkTime != nil || bikeTime != nil) && !chips.isEmpty {
                             rowSeparator
                         }
                         ForEach(chips) { chip in
@@ -192,48 +204,26 @@ struct StopPageSheetHeaderView: View {
             .accessibilityHidden(true)
     }
 
-    /// The walk-time pill: a tinted capsule rather than the dark card's solid green one. The
-    /// foreground keeps the full-strength on-time color, which is already tuned per-appearance
-    /// for legibility at small sizes (see `ThemeColors.departureOnTime`).
+    /// A tinted capsule rather than the dark card's solid one: the foreground keeps the
+    /// full-strength color (walk: on-time green, already tuned per-appearance for legibility
+    /// at small sizes; bike: blue, matching the pushed header's bike chip) over a 14% fill.
     ///
-    /// Deliberately NOT a `Button`, and deliberately the same font and padding as a chip.
-    /// `FlowLayout` places its subviews top-anchored, so pill and chips must resolve to the same
-    /// height or the row reads as ragged — matching their type ramp is what holds that at every
-    /// Dynamic Type size, where a hardcoded height would not.
-    private func walkPill(_ info: WalkTimeInfo) -> some View {
-        let text = walkPillText(info)
-        return HStack(spacing: 4) {
-            Image(systemName: "figure.walk")
-                .accessibilityHidden(true) // the text below carries the meaning
-            // Pinning the text to one unwrappable line makes the pill's width a function of its
-            // content. Without it the pill came out 60pt wide and 168pt tall, with "2 min walk"
-            // broken one character per line.
-            Text(text)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-        }
-        .font(chipFont)
-        .foregroundStyle(Color(uiColor: ThemeColors.shared.departureOnTime))
-        .padding(.horizontal, chipHorizontalPadding)
-        .padding(.vertical, chipVerticalPadding)
-        .background(Color(uiColor: ThemeColors.shared.departureOnTime).opacity(0.14), in: Capsule())
-        .contentShape(Capsule())
-        .onTapGesture(perform: onWalkingDirections)
-        // `.accessibilityHidden(true)` on the glyph above was not enough on its
-        // own: this view adds a trait but named no element, and the walk glyph
-        // surfaced as a second, sibling stop — a 10x16pt target whose whole spoken
-        // content was the symbol's stock name, "Walk". Naming the element is what
-        // collapses the subtree. `chipView(_:)` below never had the bug because it
-        // has always set an explicit `.accessibilityLabel`.
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(text)
-        .accessibilityAddTraits(.isButton)
-        .accessibilityHint(OBALoc("stop_page.header.walk_a11y_hint", value: "Opens walking directions to this stop.", comment: "VoiceOver hint on the header card's walk-time button."))
+    /// Deliberately the same font and padding as a chip. `FlowLayout` places its subviews
+    /// top-anchored, so pill and chips must resolve to the same height or the row reads as
+    /// ragged — matching their type ramp is what holds that at every Dynamic Type size, where
+    /// a hardcoded height would not.
+    private func travelPill(_ pill: StopDirectionsPill, _ info: WalkTimeInfo, color: UIColor) -> some View {
+        StopTravelPill(
+            pill: pill, info: info,
+            font: chipFont, foreground: Color(uiColor: color), fill: Color(uiColor: color).opacity(0.14),
+            horizontalPadding: chipHorizontalPadding, verticalPadding: chipVerticalPadding,
+            directions: pillDirections
+        )
     }
 
     // MARK: - Shared pill metrics
 
-    /// One type ramp for the pill and the chips — see `walkPill(_:)` on why they must match.
+    /// One type ramp for the pill and the chips — see `travelPill(_:_:color:)` on why they must match.
     private var chipFont: Font { .footnote.weight(.semibold) }
     private var chipHorizontalPadding: CGFloat { 10 }
     private var chipVerticalPadding: CGFloat { 5 }
@@ -285,8 +275,17 @@ struct StopPageSheetHeaderView: View {
         // this view.
         .contentShape(Rectangle())
         .onTapGesture { chip.toggleFocus(in: mapFocus) }
+        // One element per chip: the dash and dot are drawn shapes the label
+        // already describes, and the action below needs a single target.
+        .accessibilityElement(children: .ignore)
         .accessibilityAddTraits(chip.isInteractive(in: mapFocus) ? .isButton : [])
+        // `.isSelected` alongside the spoken suffix: the trait is what VoiceOver
+        // users learn to listen for on a toggle, the suffix says what it toggles.
+        .accessibilityAddTraits(isFocused ? .isSelected : [])
         .accessibilityLabel(chipAccessibilityLabel(for: chip, drawn: drawn, isFocused: isFocused))
+        // `.onTapGesture` is invisible to assistive tech. `toggleFocus` is a no-op
+        // for a chip with nothing on the map, matching its missing button trait.
+        .accessibilityAction { chip.toggleFocus(in: mapFocus) }
     }
 
     private func chipAccessibilityLabel(
@@ -308,15 +307,6 @@ struct StopPageSheetHeaderView: View {
     private var highlightedLabel: String {
         OBALoc("stop_header.chip.highlighted", value: "highlighted on map",
                comment: "Spoken suffix on the currently-focused route chip.")
-    }
-
-    private func walkPillText(_ info: WalkTimeInfo) -> String {
-        let fmt = OBALoc(
-            "stop_page.walk_chip_minutes_fmt",
-            value: "%d min walk",
-            comment: "Walk chip on the header card. %d is the walk time in minutes."
-        )
-        return String(format: fmt, info.walkMinutes)
     }
 
     private var routeListAccessibilityLabel: String {
@@ -396,7 +386,10 @@ struct StopSheetCloseButton: View {
                 .foregroundStyle(.secondary)
                 .frame(width: StopSheetHeaderMetrics.closeButtonSize, height: StopSheetHeaderMetrics.closeButtonSize)
                 .background(Color(uiColor: .secondarySystemFill), in: Circle())
-                .contentShape(Circle())
+                // 44pt hit area around the 30pt glyph. A negative inset grows the
+                // shape past the frame, so `collapsedHeight(for:)` — which is sized
+                // off `closeButtonSize` — and the header's layout are unchanged.
+                .contentShape(Circle().inset(by: -7))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(Strings.close)
@@ -415,6 +408,9 @@ struct StopPageSheetHeaderPlaceholderView: View {
     /// `false` once a first fetch has failed; the centered error row below owns the screen.
     var showsSkeleton = true
     let onClose: () -> Void
+    /// See `StopPageSheetHeaderView.showsCloseButton`. Suppressed on the map
+    /// sheet, whose top bar carries Close even while the stop is unknown.
+    var showsCloseButton = true
     /// `true` at the sheet's `.tip` detent. Trims the skeleton to its name line so the strip
     /// costs the same height the real collapsed header does.
     var isCollapsed = false
@@ -433,7 +429,9 @@ struct StopPageSheetHeaderPlaceholderView: View {
                 Spacer(minLength: 0)
             }
 
-            StopSheetCloseButton(action: onClose)
+            if showsCloseButton {
+                StopSheetCloseButton(action: onClose)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.top, StopSheetHeaderMetrics.topPadding)

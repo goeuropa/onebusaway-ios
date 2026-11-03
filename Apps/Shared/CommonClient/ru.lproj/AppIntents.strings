@@ -1,0 +1,41 @@
+/*
+ * App Intents strings. Hand-maintained: scripts/extract_strings (genstrings -s OBALoc)
+ * does not read LocalizedStringResource, so it neither adds nor removes these keys.
+ * Siri and Shortcuts resolve them out of process from this bundle's Metadata.appintents.
+ */
+
+/* App Intents: type name of a bookmarked trip in Shortcuts and Siri. Singular noun. */
+"bookmark_entity.type_name" = "Закладка";
+
+/* App Intents: label of the bookmark parameter on the Track Bookmark and Next Departures actions. */
+"bookmark_entity.parameter_title" = "Закладка";
+
+/* App Intents: name of the Shortcuts action that answers when a bookmarked trip departs next. */
+"next_departures_intent.title" = "Ближайшие отправления";
+
+/* App Intents: description of the Next Departures action in Shortcuts. Siri speaks the answer. */
+"next_departures_intent.description" = "Сообщает голосом, когда ближайшее отправление поездки из закладок.";
+
+/* App Shortcuts: short tile label for Next Departures in Shortcuts and Spotlight. */
+"next_departures_intent.short_title" = "Ближайшие отправления";
+
+/* App Intents: name of the Shortcuts action that opens a transit stop in the app. */
+"open_stop_intent.title" = "Открыть остановку";
+
+/* App Intents: description of the Open Stop action in Shortcuts. */
+"open_stop_intent.description" = "Открывает остановку и показывает её отправления.";
+
+/* App Intents: type name of a transit stop in Shortcuts, Siri and Spotlight. Singular noun. */
+"stop_entity.type_name" = "Остановка";
+
+/* App Intents: label of the stop parameter on the Open Stop action. */
+"stop_entity.parameter_title" = "Остановка";
+
+/* App Intents: name of the Shortcuts action that starts a Live Activity for a bookmarked trip. */
+"track_bookmark_intent.title" = "Отслеживать закладку";
+
+/* App Intents: description of the Track Bookmark action in Shortcuts. */
+"track_bookmark_intent.description" = "Запускает Live-активность для поездки из закладок.";
+
+/* App Shortcuts: short tile label for Track Bookmark in Shortcuts and Spotlight. */
+"track_bookmark_intent.short_title" = "Отслеживать закладку";

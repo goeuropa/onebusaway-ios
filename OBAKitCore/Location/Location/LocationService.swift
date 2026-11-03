@@ -10,6 +10,19 @@
 import Foundation
 import CoreLocation
 
+/// Errors thrown by `LocationService.requestLocation(desiredAccuracy:)`.
+public enum LocationServiceError: LocalizedError {
+    /// The app is not authorized to use location, so no request was made.
+    case notAuthorized
+
+    public var errorDescription: String? {
+        switch self {
+        case .notAuthorized:
+            return OBALoc("location_service.error.not_authorized", value: "Location access is not authorized.", comment: "Error shown when a location request is made without authorization")
+        }
+    }
+}
+
 @objc(OBALocationServiceDelegate)
 @MainActor
 public protocol LocationServiceDelegate: NSObjectProtocol {
@@ -24,7 +37,16 @@ public protocol LocationServiceDelegate: NSObjectProtocol {
     @objc optional func locationService(_ service: LocationService, headingChanged heading: CLHeading?)
     @objc optional func locationService(_ service: LocationService, errorReceived error: Error)
     @objc optional func locationService(_ service: LocationService, didEnterMonitoredRegion identifier: String)
-    @objc optional func locationService(_ service: LocationService, monitoringDidFailFor identifier: String?, error: Error)
+    /// Fired when Core Location fails to monitor one of *our* proximity regions.
+    ///
+    /// Failures for regions the app monitors for other reasons are filtered out
+    /// before this point, mirroring the prefix check in `didEnterMonitoredRegion`.
+    /// `identifier` is nil when Core Location could not attribute the failure to a
+    /// region; those are forwarded anyway, since one of ours may be the cause.
+    ///
+    /// `kind` classifies `error` into what the receiver can actually do about it —
+    /// see `RegionMonitoringFailureKind`.
+    @objc optional func locationService(_ service: LocationService, monitoringDidFailFor identifier: String?, error: Error, kind: RegionMonitoringFailureKind)
 }
 
 // @preconcurrency: CLLocationManager delivers callbacks on the run loop it was
@@ -32,14 +54,26 @@ public protocol LocationServiceDelegate: NSObjectProtocol {
 // Callers of the designated initializer must construct the injected manager
 // on the main thread for the same reason.
 @objc(OBALocationService) @MainActor public class LocationService: NSObject, @preconcurrency CLLocationManagerDelegate {
-    private var locationManager: LocationManager
+    // Internal, not private: `LocationService+ProximityAlerts.swift` is a
+    // cross-file extension and needs to reach it.
+    var locationManager: LocationManager
+
+    private let startsUpdatesOnAuthorization: Bool
 
     public convenience override init() {
         self.init(userDefaults: UserDefaults.standard, locationManager: CLLocationManager())
     }
 
-    public init(userDefaults: UserDefaults, locationManager: LocationManager) {
+    /// - parameter startsUpdatesOnAuthorization: When `true` (the iOS default),
+    ///   a grant starts continuous location and heading updates immediately —
+    ///   Core Location fires the authorization callback the moment the delegate
+    ///   is assigned, so an already-authorized app starts its first fix from
+    ///   `init`. The watch passes `false`: it takes one-shot fixes through
+    ///   ``requestLocation(desiredAccuracy:)`` and never powers the magnetometer.
+    ///   Revocation stops updates either way.
+    public init(userDefaults: UserDefaults, locationManager: LocationManager, startsUpdatesOnAuthorization: Bool = true) {
         self.locationManager = locationManager
+        self.startsUpdatesOnAuthorization = startsUpdatesOnAuthorization
         rawAuthorizationStatus = locationManager.authorizationStatus
         lastAccuracyAuthorization = locationManager.accuracyAuthorization
         currentLocation = locationManager.location
@@ -66,11 +100,15 @@ public protocol LocationServiceDelegate: NSObjectProtocol {
 
     private struct UserDefaultsKeys {
         static let promptUserForLocationPermission = "LocationService.promptUserForLocationPermission"
+        static let promptUserForAlwaysAuthorization = "LocationService.promptUserForAlwaysAuthorization"
         static let locationServicesDenied = "LocationService.locationServicesDenied"
     }
 
     private func registerDefaults() {
-        userDefaults.register(defaults: [UserDefaultsKeys.promptUserForLocationPermission: true])
+        userDefaults.register(defaults: [
+            UserDefaultsKeys.promptUserForLocationPermission: true,
+            UserDefaultsKeys.promptUserForAlwaysAuthorization: true
+        ])
     }
 
     // MARK: - Location Properties
@@ -91,7 +129,7 @@ public protocol LocationServiceDelegate: NSObjectProtocol {
 
     // MARK: - Delegates
 
-    private let delegates = NSHashTable<LocationServiceDelegate>.weakObjects()
+    let delegates = NSHashTable<LocationServiceDelegate>.weakObjects()
 
     public func addDelegate(_ delegate: LocationServiceDelegate) {
         delegates.add(delegate)
@@ -128,18 +166,6 @@ public protocol LocationServiceDelegate: NSObjectProtocol {
     private func notifyDelegatesErrorReceived(_ error: Error) {
         for delegate in delegates.allObjects {
             delegate.locationService?(self, errorReceived: error)
-        }
-    }
-
-    private func notifyDelegatesDidEnterMonitoredRegion(_ identifier: String) {
-        for delegate in delegates.allObjects {
-            delegate.locationService?(self, didEnterMonitoredRegion: identifier)
-        }
-    }
-
-    private func notifyDelegatesMonitoringDidFail(_ identifier: String?, error: Error) {
-        for delegate in delegates.allObjects {
-            delegate.locationService?(self, monitoringDidFailFor: identifier, error: error)
         }
     }
 
@@ -209,7 +235,9 @@ public protocol LocationServiceDelegate: NSObjectProtocol {
         // `CLLocationManager` left running keeps the location-usage indicator lit
         // and the magnetometer powered for the rest of the process.
         if isLocationUseAuthorized {
-            startUpdates()
+            if startsUpdatesOnAuthorization {
+                startUpdates()
+            }
         } else {
             stopUpdates()
         }
@@ -243,6 +271,77 @@ public protocol LocationServiceDelegate: NSObjectProtocol {
     /// Prompts the user for permission to access location services. (e.g. GPS.)
     @objc public func requestInUseAuthorization() {
         locationManager.requestWhenInUseAuthorization()
+    }
+
+    /// Whether the one-time Always upgrade prompt is still available to spend.
+    ///
+    /// iOS surfaces that prompt once per install and silently does nothing on
+    /// every later call, so an app with no record of having spent it cannot tell
+    /// "asking will show a prompt" from "asking will do nothing" — and therefore
+    /// cannot know when to stop asking and send the rider to Settings instead.
+    ///
+    /// Read-only, and persisted rather than held in memory: the limit is per
+    /// install, not per launch. ``requestAlwaysAuthorization()`` is the only
+    /// thing that clears it, deliberately — the sibling
+    /// ``canPromptUserForPermission`` leaves that to its callers, and one of the
+    /// two call sites in this app already forgets to.
+    ///
+    /// - Note: This records what the app *asked*, which is not always what iOS
+    ///   *showed*. A rider who answered the first prompt with "Allow Once" leaves
+    ///   the status at `.authorizedWhenInUse` while Apple documents further
+    ///   upgrade requests as ignored, and `CLAuthorizationStatus` offers no way to
+    ///   tell that apart from an ordinary When In Use grant, so the flag is spent
+    ///   on a prompt nobody saw. That degrades to the Settings route rather than
+    ///   breaking anything, which is why it is documented rather than detected.
+    public var canPromptForAlwaysAuthorization: Bool {
+        userDefaults.bool(forKey: UserDefaultsKeys.promptUserForAlwaysAuthorization)
+    }
+
+    /// Prompts the user to upgrade to Always authorization, which region
+    /// monitoring requires to deliver geofence events in the background.
+    ///
+    /// Apple only surfaces this prompt once, and only from `.authorizedWhenInUse`
+    /// or `.notDetermined` — calling it from `.denied` or `.restricted` does
+    /// nothing at all. Callers should therefore treat it as a one-shot upgrade
+    /// path and fall back to deep-linking Settings when it no-ops.
+    ///
+    /// Refuses, and logs, from any *status* Core Location would reject the
+    /// request from, so nothing is spent where nothing could have been raised. It
+    /// also refuses once ``canPromptForAlwaysAuthorization`` is gone, which is
+    /// what stops a caller asking forever into silence.
+    ///
+    /// - Important: This also requires `NSLocationAlwaysAndWhenInUseUsageDescription`
+    ///   in the host app's Info.plist; without it iOS ignores the call entirely.
+    ///   `Apps/Shared/app_shared.yml` declares it for every white-label app, and
+    ///   KiedyBus overrides the body with its own. A new app that skips both will
+    ///   never reach `.authorizedAlways`, and this method will silently do nothing
+    ///   — while still spending ``canPromptForAlwaysAuthorization``, because the
+    ///   status looks promptable and nothing reports back that no prompt appeared.
+    ///   The status guard above cannot cover this; only the Info.plist can.
+    @objc public func requestAlwaysAuthorization() {
+        guard authorizationStatus == .notDetermined || authorizationStatus == .authorizedWhenInUse else {
+            Logger.warn("Not requesting Always authorization from \(authorizationStatus): iOS only raises that prompt from notDetermined or authorizedWhenInUse.")
+            return
+        }
+
+        guard canPromptForAlwaysAuthorization else {
+            Logger.warn("Not requesting Always authorization: this install already spent its one-time prompt. Settings is the only route left.")
+            return
+        }
+
+        userDefaults.set(false, forKey: UserDefaultsKeys.promptUserForAlwaysAuthorization)
+        locationManager.requestAlwaysAuthorization()
+    }
+
+    /// Whether the app can actually run proximity geofences.
+    ///
+    /// Deliberately stricter than `isLocationUseAuthorized`, which also accepts
+    /// `.authorizedWhenInUse`. Region monitoring started under When In Use is
+    /// accepted by Core Location but only delivers while the app is in use — which
+    /// defeats the entire purpose of a proximity alert, since the user is watching
+    /// the road, not the screen.
+    public var isProximityMonitoringAuthorized: Bool {
+        authorizationStatus == .authorizedAlways
     }
 
     @available(iOS 14, *)
@@ -298,8 +397,64 @@ public protocol LocationServiceDelegate: NSObjectProtocol {
     /// Unlike its `start` counterpart this is unguarded: stopping is always safe,
     /// and gating it on authorization would make a manager we started before
     /// access was revoked impossible to ever turn off.
+    ///
+    /// Also fails any pending one-shot waiters. Stopping cancels a pending
+    /// `requestLocation()` and Core Location sends no callback afterwards, so
+    /// without this they would stay suspended forever, and so would every later
+    /// caller that queued up behind them. Revocation, the services-off latch
+    /// and external stops all come through here.
     public func stopUpdatingLocation() {
+        failOneShotRequests(with: LocationServiceError.notAuthorized)
         locationManager.stopUpdatingLocation()
+    }
+
+    // MARK: - One-shot location
+
+    /// Callers suspended in `requestLocation(desiredAccuracy:)`. All resolve on
+    /// the next `didUpdateLocations` / `didFailWithError`, whichever comes first.
+    /// Internal read access so tests can wait until every caller is suspended.
+    private(set) var pendingOneShotRequests: [CheckedContinuation<CLLocation, Error>] = []
+
+    /// Requests a single fix and suspends until the manager delivers one.
+    ///
+    /// The fix **also becomes `currentLocation`, bypassing the accuracy prune**
+    /// that continuous updates apply, so `locationChanged` reaches every
+    /// delegate (`RegionsService` selects the region from it). A caller asked
+    /// for this fix; a coarser-than-last answer is still the answer. Concurrent
+    /// callers share one manager request. A stop while a request is pending
+    /// (revocation, Location Services turned off, or `stopUpdatingLocation()`)
+    /// fails the waiters with ``LocationServiceError/notAuthorized``.
+    ///
+    /// - throws: ``LocationServiceError/notAuthorized`` when the app may not use
+    ///   location, or the manager's error from `didFailWithError`.
+    public func requestLocation(desiredAccuracy: CLLocationAccuracy) async throws -> CLLocation {
+        guard isLocationUseAuthorized else {
+            throw LocationServiceError.notAuthorized
+        }
+
+        return try await withCheckedThrowingContinuation { continuation in
+            pendingOneShotRequests.append(continuation)
+            if pendingOneShotRequests.count == 1 {
+                locationManager.desiredAccuracy = desiredAccuracy
+                locationManager.requestLocation()
+            }
+        }
+    }
+
+    private func resolveOneShotRequests(with location: CLLocation) {
+        let waiters = pendingOneShotRequests
+        pendingOneShotRequests.removeAll()
+        for waiter in waiters {
+            waiter.resume(returning: location)
+        }
+    }
+
+    private func failOneShotRequests(with error: Error) {
+        let waiters = pendingOneShotRequests
+        pendingOneShotRequests.removeAll()
+        for waiter in waiters {
+            waiter.resume(throwing: error)
+        }
     }
 
     // MARK: - Heading
@@ -436,6 +591,15 @@ public protocol LocationServiceDelegate: NSObjectProtocol {
             applyAuthorizationState(rawStatus: rawAuthorizationStatus, servicesDenied: false)
         }
 
+        // A requested fix is delivered as-is: the prune below exists for
+        // continuous streams, where a coarse reading trailing a fine one is
+        // noise. Here somebody asked for exactly this reading.
+        if !pendingOneShotRequests.isEmpty {
+            self.currentLocation = newLocation
+            resolveOneShotRequests(with: newLocation)
+            return
+        }
+
         guard let currentLocation = currentLocation else {
             self.currentLocation = newLocation
             return
@@ -476,56 +640,7 @@ public protocol LocationServiceDelegate: NSObjectProtocol {
             applyAuthorizationState(rawStatus: rawAuthorizationStatus, servicesDenied: true)
         }
 
+        failOneShotRequests(with: error)
         notifyDelegatesErrorReceived(error)
-    }
-
-    // MARK: - Region Monitoring
-
-    static let proximityRegionPrefix = "oba.proximity."
-
-    /// Starts monitoring a geofence region for the given proximity alert.
-    ///
-    /// - Note: Region monitoring requires `.authorizedAlways` for background delivery.
-    ///   The caller (e.g. ProximityAlertManager) is responsible for ensuring appropriate authorization.
-    public func startMonitoringProximity(for alert: ProximityAlert) {
-        guard isLocationUseAuthorized else { return }
-
-        let region = CLCircularRegion(
-            center: alert.coordinate,
-            radius: alert.radiusMeters,
-            identifier: Self.proximityRegionPrefix + alert.id.uuidString
-        )
-        region.notifyOnEntry = true
-        region.notifyOnExit = false
-        locationManager.startMonitoring(for: region)
-    }
-
-    /// Stops monitoring the geofence region for the given proximity alert.
-    public func stopMonitoringProximity(for alert: ProximityAlert) {
-        let identifier = Self.proximityRegionPrefix + alert.id.uuidString
-        guard let matchingRegion = locationManager.monitoredRegions.first(where: {
-            $0.identifier == identifier
-        }) else {
-            Logger.warn("No monitored region found for proximity alert \(alert.id)")
-            return
-        }
-        locationManager.stopMonitoring(for: matchingRegion)
-    }
-
-    /// Stops monitoring all proximity alert regions without affecting other monitored regions.
-    public func stopMonitoringAllProximityAlerts() {
-        for region in locationManager.monitoredRegions where region.identifier.hasPrefix(Self.proximityRegionPrefix) {
-            locationManager.stopMonitoring(for: region)
-        }
-    }
-
-    public func locationManager(_ manager: CLLocationManager, didEnterRegion region: CLRegion) {
-        guard region is CLCircularRegion, region.identifier.hasPrefix(Self.proximityRegionPrefix) else { return }
-        notifyDelegatesDidEnterMonitoredRegion(region.identifier)
-    }
-
-    public func locationManager(_ manager: CLLocationManager, monitoringDidFailFor region: CLRegion?, withError error: Error) {
-        Logger.error("Region monitoring failed for \(region?.identifier ?? "unknown"): \(error)")
-        notifyDelegatesMonitoringDidFail(region?.identifier, error: error)
     }
 }

@@ -10,6 +10,9 @@
 import SwiftUI
 import Foundation
 import Testing
+import CoreLocation
+import MapKit
+import OTPKit
 @testable import OBAKit
 @testable import OBAKitCore
 
@@ -33,13 +36,39 @@ final class AppSheetViewFactoryTests: OBATestCase {
         queue.cancelAllOperations()
     }
 
+    /// The coordinator, display model, stops observer, and trip planner and trip focus display models are
+    /// required dependencies, so every test builds the factory the same way the app does.
+    @MainActor
+    private func makeFactory(
+        application: Application,
+        coordinator: SheetCoordinator<AppSheetRoute> = SheetCoordinator(root: .home),
+        displayModel: MapSearchDisplayModel = MapSearchDisplayModel(),
+        stopsObserver: MapStopsObserver? = nil,
+        tripPlannerMapDisplayModel: TripPlannerMapDisplayModel? = nil,
+        tripFocusMapDisplayModel: TripFocusMapDisplayModel? = nil
+    ) -> AppSheetViewFactory {
+        AppSheetViewFactory(
+            application: application,
+            mapViewModel: MapViewModel(application: application),
+            layersModel: MapPanelLayersModel(application: application),
+            onPresentTrip: { _ in },
+            onPresentVehicleTrip: { _ in },
+            presentingController: { nil },
+            coordinator: coordinator,
+            searchDisplayModel: displayModel,
+            stopsObserver: stopsObserver ?? MapStopsObserver(application: application),
+            tripPlannerMapDisplayModel: tripPlannerMapDisplayModel ?? TripPlannerMapDisplayModel(),
+            tripFocusMapDisplayModel: tripFocusMapDisplayModel ?? TripFocusMapDisplayModel(userLocation: { nil }),
+            onDemandProbeController: OnDemandProbeController.make(application: application)
+        )
+    }
+
     @Test @MainActor
     func `More view returns more sheet host forwarding application`() {
         let dataLoader = MockDataLoader(testName: name)
         let application = buildApplication(queue: queue, dataLoader: dataLoader)
 
-        let factory = AppSheetViewFactory(application: application, onPresentTrip: { _ in })
-        let host = factory.moreView()
+        let host = makeFactory(application: application).moreView()
 
         // Reference identity: the factory must forward its own `Application`
         // into the host, not construct a new one or drop it. `MoreSheetHost`'s
@@ -49,14 +78,542 @@ final class AppSheetViewFactoryTests: OBATestCase {
         #expect(host.application === application)
     }
 
-    @Test func `Stop detail view returns a stop detail sheet host forwarding the application and stop ID`() {
+    @Test @MainActor
+    func `On-demand service view hosts the service page for the route's service`() throws {
+        let dataLoader = MockDataLoader(testName: name)
+        let application = buildApplication(queue: queue, dataLoader: dataLoader)
+        let service = try JSONDecoder.RESTDecoder().decode(
+            RESTAPIResponse<OnDemandService>.self,
+            from: Fixtures.loadData(file: "ondemand_service_alexandria.json")
+        ).entry
+
+        let host = makeFactory(application: application).onDemandServiceView(service: service)
+
+        #expect(host.application === application)
+        #expect(host.service === service)
+        #expect(host.geometry != nil, "a probe service's page draws the probe's full geometry")
+    }
+
+    @Test @MainActor
+    func `Stop detail view returns the SwiftUI sheet forwarding the stop ID`() {
         let dataLoader = MockDataLoader(testName: name)
         let application = buildApplication(queue: queue, dataLoader: dataLoader)
 
-        let factory = AppSheetViewFactory(application: application, onPresentTrip: { _ in })
-        let host = factory.stopDetailView(stopID: "1_10914")
+        let view = makeFactory(application: application).stopDetailView(stopID: "1_10914")
+
+        #expect(view.stopID == "1_10914")
+    }
+
+    /// The stop sheet takes its dependencies as factory closures rather than as
+    /// built objects, because SwiftUI decides when they are instantiated. That
+    /// moves the handoff `More view returns more sheet host forwarding
+    /// application` checks by reference into the closures, so this asserts it
+    /// there instead: both must resolve against the factory's own `Application`,
+    /// not a second one.
+    @Test @MainActor
+    func `Stop detail view's factories resolve against the factory's application`() {
+        let dataLoader = MockDataLoader(testName: name)
+        let application = buildApplication(queue: queue, dataLoader: dataLoader)
+
+        let view = makeFactory(application: application).stopDetailView(stopID: "1_10914")
+
+        #expect(view.makePresenter().application === application)
+        #expect(view.makeViewModel().stopID == "1_10914")
+        // The remaining dependencies are handed over already built, so they can
+        // be compared directly.
+        #expect(view.formatters === application.formatters)
+        #expect(view.userDefaults === application.userDefaults)
+    }
+
+    private func makeDeparture() throws -> ArrivalDeparture {
+        try Fixtures.loadRESTAPIPayload(
+            type: ArrivalDeparture.self,
+            fileName: "arrival-and-departure-for-stop-1_11420.json"
+        )
+    }
+
+    /// A departure tapped on the Stop sheet opens its trip on top of that sheet,
+    /// so Back from the trip returns to the stop. Going through `onPresentTrip`
+    /// instead unwound to Home, which is what My Trip and vehicle search want.
+    @Test @MainActor
+    func `A Stop sheet departure opens its trip on top, and Back returns to the stop`() throws {
+        let application = buildApplication(queue: queue, dataLoader: MockDataLoader(testName: name))
+        let coordinator = SheetCoordinator<AppSheetRoute>(root: .home)
+        let stop = AppSheetRoute.stopDetails(stopID: "1_10914")
+        let departure = try makeDeparture()
+        coordinator.push(stop)
+
+        let presenter = makeFactory(application: application, coordinator: coordinator)
+            .stopDetailView(stopID: "1_10914")
+            .makePresenter()
+        presenter.onShowTripInSheet?(departure)
+
+        #expect(coordinator.stackedRoutes == [stop, .tripDetails(TripConvertible(arrivalDeparture: departure))])
+
+        coordinator.pop()
+
+        #expect(coordinator.stackedRoutes == [stop])
+    }
+
+    /// Trip X, one of its stops, then trip X's departure at that stop. The trip is
+    /// already open under the Stop sheet, so the tap goes back to it rather than
+    /// doing nothing and leaving it buried.
+    @Test @MainActor
+    func `A Stop sheet departure for a trip already open goes back to that trip`() throws {
+        let application = buildApplication(queue: queue, dataLoader: MockDataLoader(testName: name))
+        let coordinator = SheetCoordinator<AppSheetRoute>(root: .home)
+        let departure = try makeDeparture()
+        let trip = AppSheetRoute.tripDetails(TripConvertible(arrivalDeparture: departure))
+        coordinator.push(trip)
+        coordinator.push(.stopDetails(stopID: "1_10914"))
+
+        let presenter = makeFactory(application: application, coordinator: coordinator)
+            .stopDetailView(stopID: "1_10914")
+            .makePresenter()
+        presenter.onShowTripInSheet?(departure)
+
+        #expect(coordinator.stackedRoutes == [trip])
+    }
+
+    /// The rider came to the trip from this stop's sheet, so tapping the stop in
+    /// the trip's list goes back to it rather than stacking a second copy.
+    @Test @MainActor
+    func `A stop tapped in a trip goes back to that stop when it's already open`() throws {
+        let application = buildApplication(queue: queue, dataLoader: MockDataLoader(testName: name))
+        let coordinator = SheetCoordinator<AppSheetRoute>(root: .home)
+        let stop = AppSheetRoute.stopDetails(stopID: "1_10914")
+        let convertible = try Fixtures.tripConvertible(tripID: "trip_42")
+        coordinator.push(stop)
+        coordinator.push(.tripDetails(convertible))
+
+        let host = makeFactory(application: application, coordinator: coordinator)
+            .tripDetailsView(tripConvertible: convertible)
+        host.onSelectStop("1_10914")
+
+        #expect(coordinator.stackedRoutes == [stop])
+    }
+
+    @Test @MainActor
+    func `Route stops view returns route stops sheet view forwarding the stops for route`() throws {
+        let dataLoader = MockDataLoader(testName: name)
+        let application = buildApplication(queue: queue, dataLoader: dataLoader)
+        let stopsForRoute = try Fixtures.loadRESTAPIPayload(type: StopsForRoute.self, fileName: "stops_for_route_1_44.json")
+
+        let view = makeFactory(application: application).routeStopsView(stopsForRoute: stopsForRoute)
+
+        #expect(view.stopsForRoute.route.id == stopsForRoute.route.id)
+    }
+
+    /// The route-stops sheet clears the map on dismissal, so it has to be handed the
+    /// same display model the map renders — not a private one.
+    @Test @MainActor
+    func `Route stops view forwards the shared display model`() throws {
+        let dataLoader = MockDataLoader(testName: name)
+        let application = buildApplication(queue: queue, dataLoader: dataLoader)
+        let displayModel = MapSearchDisplayModel()
+        let stopsForRoute = try Fixtures.loadRESTAPIPayload(type: StopsForRoute.self, fileName: "stops_for_route_1_44.json")
+
+        let factory = makeFactory(application: application, displayModel: displayModel)
+        let view = factory.routeStopsView(stopsForRoute: stopsForRoute)
+
+        #expect(view.displayModel === displayModel)
+    }
+
+    /// Both search surfaces have to route a picked result through the *same* router,
+    /// or the two screens can drift on what "opening a result" means.
+    @Test @MainActor
+    func `Search results view is handed the factory's shared router`() {
+        let dataLoader = MockDataLoader(testName: name)
+        let application = buildApplication(queue: queue, dataLoader: dataLoader)
+        let request = SearchRequest(query: "test", type: .stopNumber)
+        let response = SearchResponse(request: request, results: [], boundingRegion: nil, error: nil)
+
+        let factory = makeFactory(application: application)
+        let view = factory.searchResultsView(response: response)
+
+        #expect(view.router === factory.searchResultRouter)
+        #expect(view.application === application)
+    }
+
+    @Test @MainActor
+    func `Search view returns search sheet view forwarding the placeholder`() {
+        let dataLoader = MockDataLoader(testName: name)
+        let application = buildApplication(queue: queue, dataLoader: dataLoader)
+
+        let view = makeFactory(application: application).searchView()
+
+        #expect(view.placeholder == SearchPlaceholder.text(for: application))
+        #expect(!view.placeholder.isEmpty)
+    }
+
+    /// The trip sheet's host gets the factory's application and the route's trip,
+    /// and both of the page's ways out land on the coordinator the panel observes.
+    @Test @MainActor
+    func `Trip details view forwards the trip and navigates through the coordinator`() throws {
+        let dataLoader = MockDataLoader(testName: name)
+        let application = buildApplication(queue: queue, dataLoader: dataLoader)
+        let coordinator = SheetCoordinator<AppSheetRoute>(root: .home)
+        let convertible = try Fixtures.tripConvertible(tripID: "trip_42")
+        coordinator.push(.recentStopsAll)
+        coordinator.push(.tripDetails(convertible))
+
+        let host = makeFactory(application: application, coordinator: coordinator)
+            .tripDetailsView(tripConvertible: convertible)
 
         #expect(host.application === application)
-        #expect(host.stopID == "1_10914")
+        #expect(host.tripConvertible === convertible)
+
+        // A tapped stop opens the panel's stop sheet above the trip.
+        host.onSelectStop("1_75403")
+        #expect(coordinator.stackedRoutes == [.recentStopsAll, .tripDetails(convertible), .stopDetails(stopID: "1_75403")])
+
+        // The rider drags the stop sheet away, then taps Back on the trip. Only
+        // the trip goes; the sheet it was opened from stays.
+        coordinator.truncateStacked(toDepth: 2)
+        host.onClose()
+        #expect(coordinator.stackedRoutes == [.recentStopsAll])
+    }
+
+    /// The trip page's map focus goes to the panel's display model, owned by the
+    /// trip's route so the drawing lasts exactly as long as the sheet.
+    ///
+    /// Not synchronously: the page reports from inside SwiftUI's update of the
+    /// sheet, so the handoff waits a turn of the main actor.
+    @Test @MainActor
+    func `Trip details view hands the page's map focus to the panel's map a turn later`() async throws {
+        let dataLoader = MockDataLoader(testName: name)
+        let application = buildApplication(queue: queue, dataLoader: dataLoader)
+        let coordinator = SheetCoordinator<AppSheetRoute>(root: .home)
+        let tripFocusMapDisplayModel = TripFocusMapDisplayModel(userLocation: { nil })
+        let convertible = try Fixtures.tripConvertible(tripID: "trip_42")
+        let focus = TripMapFocus()
+        coordinator.push(.tripDetails(convertible))
+
+        let host = makeFactory(
+            application: application,
+            coordinator: coordinator,
+            tripFocusMapDisplayModel: tripFocusMapDisplayModel
+        ).tripDetailsView(tripConvertible: convertible)
+        host.onMapFocusChanged(focus)
+
+        #expect(tripFocusMapDisplayModel.owner == nil)
+        for _ in 0..<10 where tripFocusMapDisplayModel.owner == nil {
+            await Task.yield()
+        }
+        #expect(tripFocusMapDisplayModel.owner == .tripDetails(convertible))
+
+        // The page's `nil` doesn't end the drawing. The route leaving the stack does.
+        host.onMapFocusChanged(nil)
+        await Task.yield()
+
+        #expect(tripFocusMapDisplayModel.owner == .tripDetails(convertible))
+        withExtendedLifetime(focus) {}
+    }
+
+    /// The sheet can close in the turn the handoff waits, and the stack change that
+    /// would clear the drawing has passed by the time it runs. Drawing then would
+    /// leave the trip on the map, and the ambient stops hidden, until the next one.
+    @Test @MainActor
+    func `Trip details view drops the map focus when the sheet closed before the handoff`() async throws {
+        let dataLoader = MockDataLoader(testName: name)
+        let application = buildApplication(queue: queue, dataLoader: dataLoader)
+        let coordinator = SheetCoordinator<AppSheetRoute>(root: .home)
+        let tripFocusMapDisplayModel = TripFocusMapDisplayModel(userLocation: { nil })
+        let convertible = try Fixtures.tripConvertible(tripID: "trip_42")
+        // Something to draw, so a handoff that ran anyway would show up as a trip.
+        let focus = TripMapFocus()
+        focus.apply(TripMapFocusFixture.content(shape: TripMapFocusFixture.shape(), progress: 0.5))
+        coordinator.push(.tripDetails(convertible))
+
+        let host = makeFactory(
+            application: application,
+            coordinator: coordinator,
+            tripFocusMapDisplayModel: tripFocusMapDisplayModel
+        ).tripDetailsView(tripConvertible: convertible)
+        host.onMapFocusChanged(focus)
+        coordinator.pop()
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+
+        #expect(tripFocusMapDisplayModel.owner == nil)
+        #expect(tripFocusMapDisplayModel.isShowingTrip == false)
+        withExtendedLifetime(focus) {}
+    }
+
+    /// `.bookmarksAll` renders the native index, not the placeholder. With all
+    /// three index routes wired, no route reaches `indexPlaceholderView` any
+    /// more — it survives only as `unimplementedView`'s release-build fallback.
+    @Test @MainActor
+    func `Bookmarks all view forwards the application`() {
+        let dataLoader = MockDataLoader(testName: name)
+        let application = buildApplication(queue: queue, dataLoader: dataLoader)
+
+        let view = makeFactory(application: application).bookmarksAllView()
+
+        #expect(view.application === application)
+    }
+
+    /// `.nearbyAll` carries no coordinate, so the factory resolves one from the
+    /// map's settled viewport.
+    ///
+    /// Asserts against a *seeded* centre rather than against a second call to
+    /// `NearbyCoordinateResolver` with the same inputs: recomputing the
+    /// expectation the same way the factory does would pass even if the factory
+    /// read the wrong sources — swapping location for region, or dropping the
+    /// viewport entirely. `NearbyCoordinateResolverTests` covers the preference
+    /// order; what's under test here is that the factory hands it the right
+    /// three things.
+    @Test @MainActor
+    func `Nearby all view resolves the settled viewport center`() throws {
+        let dataLoader = MockDataLoader(testName: name)
+        let application = buildApplication(queue: queue, dataLoader: dataLoader)
+        let stopsObserver = MapStopsObserver(application: application)
+
+        // A deliberately implausible anchor: far from both the device location
+        // and any region centre, so only the viewport could have produced it.
+        let settled = CLLocationCoordinate2D(latitude: 12.345, longitude: 54.321)
+        stopsObserver.updateViewport(
+            MKCoordinateRegion(
+                center: settled,
+                latitudinalMeters: 1000,
+                longitudinalMeters: 1000
+            )
+        )
+        try #require(stopsObserver.viewportCenter != nil)
+
+        let view = makeFactory(application: application, stopsObserver: stopsObserver).nearbyAllView()
+
+        #expect(view.coordinate?.latitude == settled.latitude)
+        #expect(view.coordinate?.longitude == settled.longitude)
+    }
+
+    /// The second link in the chain: with no settled viewport, the anchor is the
+    /// device's fix. Asserting it separately from the region centre is what shows
+    /// the factory reads `locationService` at all — a factory that skipped
+    /// straight to the region would still satisfy the viewport test above.
+    @Test @MainActor
+    func `Nearby all view falls back to the device location`() throws {
+        let dataLoader = MockDataLoader(testName: name)
+        let application = buildApplication(queue: queue, dataLoader: dataLoader)
+        let stopsObserver = MapStopsObserver(application: application)
+
+        // A published fix sends the app off to fetch agency alerts, and
+        // `MockDataLoader` traps any request it has no stub for — which takes
+        // the whole test process down, not just this test.
+        Fixtures.stubAllAgencyAlerts(dataLoader: dataLoader)
+
+        stopsObserver.reset()
+        try #require(stopsObserver.viewportCenter == nil)
+
+        // The mock manager publishes its fix only once updates start, which is
+        // why `currentLocation` is nil until this call.
+        application.locationService.startUpdatingLocation()
+        let location = try #require(application.locationService.currentLocation)
+
+        let view = makeFactory(application: application, stopsObserver: stopsObserver).nearbyAllView()
+
+        #expect(view.coordinate?.latitude == location.coordinate.latitude)
+        #expect(view.coordinate?.longitude == location.coordinate.longitude)
+    }
+
+    /// The last link: no viewport and no device fix leaves the current region's
+    /// centre.
+    ///
+    /// The all-nil case — where the factory must hand the view nil rather than
+    /// search around (0, 0) — is asserted in `NearbyCoordinateResolverTests`. It
+    /// isn't reachable from here: a test `Application` is built with a fixed
+    /// region, so `currentRegion` is never nil.
+    @Test @MainActor
+    func `Nearby all view falls back to the current region center`() throws {
+        let dataLoader = MockDataLoader(testName: name)
+        let application = buildApplication(queue: queue, dataLoader: dataLoader)
+        let stopsObserver = MapStopsObserver(application: application)
+
+        stopsObserver.reset()
+
+        try #require(stopsObserver.viewportCenter == nil)
+        try #require(application.locationService.currentLocation == nil)
+        let region = try #require(application.currentRegion)
+
+        let view = makeFactory(application: application, stopsObserver: stopsObserver).nearbyAllView()
+
+        #expect(view.coordinate?.latitude == region.centerCoordinate.latitude)
+        #expect(view.coordinate?.longitude == region.centerCoordinate.longitude)
+    }
+
+    /// `.nearbyStops` and `.nearbyAll` are the same screen; only the way the
+    /// coordinate is obtained differs. This one carries its anchor in the route,
+    /// so it must be passed through untouched.
+    @Test @MainActor
+    func `Nearby stops view forwards the route coordinate`() {
+        let dataLoader = MockDataLoader(testName: name)
+        let application = buildApplication(queue: queue, dataLoader: dataLoader)
+        let coordinate = CLLocationCoordinate2D(latitude: 47.6, longitude: -122.3)
+
+        let view = makeFactory(application: application).nearbyStopsView(coordinate: coordinate)
+
+        #expect(view.coordinate?.latitude == coordinate.latitude)
+        #expect(view.coordinate?.longitude == coordinate.longitude)
+    }
+
+    /// `.recentStopsAll` renders the native index, not the placeholder.
+    @Test @MainActor
+    func `Recent stops all view forwards the application`() {
+        let dataLoader = MockDataLoader(testName: name)
+        let application = buildApplication(queue: queue, dataLoader: dataLoader)
+
+        let view = makeFactory(application: application).recentStopsAllView()
+
+        #expect(view.application === application)
+    }
+
+    /// The trip planner sheet builds successfully when the region supports OTP
+    /// and trip planning is enabled. The view is no longer routed to `unimplementedView`.
+    @Test @MainActor
+    func `Trip planner view builds with a valid request`() throws {
+        let dataLoader = MockDataLoader(testName: name)
+        let application = buildApplication(queue: queue, dataLoader: dataLoader)
+        let request = TripPlannerRequest()
+
+        let view = makeFactory(application: application).tripPlannerView(request: request)
+
+        #expect(view.application === application)
+        #expect(view.request == request)
+    }
+
+    /// The trip planner display model is shared with the map, so the sheet must
+    /// receive the same instance the factory was constructed with — not a private copy.
+    @Test @MainActor
+    func `Trip planner view forwards the shared trip planner display model`() {
+        let dataLoader = MockDataLoader(testName: name)
+        let application = buildApplication(queue: queue, dataLoader: dataLoader)
+        let displayModel = TripPlannerMapDisplayModel()
+        let request = TripPlannerRequest()
+
+        let factory = makeFactory(application: application, tripPlannerMapDisplayModel: displayModel)
+        let view = factory.tripPlannerView(request: request)
+
+        #expect(view.tripPlannerMapDisplayModel === displayModel)
+    }
+
+    // MARK: - Rental "plan a trip using this vehicle"
+
+    /// The rental sheets plan a trip *starting at* the vehicle in bike-rental mode,
+    /// matching `MapViewController.rentalLayer(planTripUsing:)` on the UIKit surface.
+    /// That is what rents it on Puget Sound's server; the old via point with
+    /// `.transitBikeRental` never produced a rental leg. Routing *to* the vehicle
+    /// would be the wrong trip too — a rider wants to ride it onward.
+    @Test @MainActor
+    func `Rental plan trip handler pushes the vehicle as the origin in bike rental mode`() throws {
+        let application = buildApplication(queue: queue, dataLoader: MockDataLoader(testName: name))
+        #expect(application.regionsService.currentRegion?.supportsOTP == true)
+
+        let coordinator = SheetCoordinator<AppSheetRoute>(root: .home)
+        let factory = makeFactory(application: application, coordinator: coordinator)
+        let rental = try RentalFixtures.pedalBike(id: "b7")
+
+        let handler = try #require(factory.planTripUsingRental)
+        handler(rental)
+
+        // `.tripPlanner` prefers stacking, so it lands on the stacked layer.
+        guard case .tripPlanner(let request) = coordinator.stackedRoutes.last else {
+            Issue.record("Expected .tripPlanner stacked, got \(String(describing: coordinator.stackedRoutes.last))")
+            return
+        }
+        #expect(request.transportMode == .bikeRental)
+        #expect(request.origin?.placemark.coordinate.latitude == rental.coordinate.latitude)
+        #expect(request.origin?.placemark.coordinate.longitude == rental.coordinate.longitude)
+        #expect(request.origin?.name == rental.displayLabel)
+        #expect(request.viaPoint == nil)
+        // The vehicle is not the destination — that field stays open for the rider.
+        #expect(request.destination == nil)
+    }
+
+    /// No OTP server means no trip planner to route into, so the handler is nil
+    /// and the sheets hide the button rather than showing a dead primary action.
+    ///
+    /// Exercises the gate directly rather than swapping the app's current region:
+    /// `RegionsService.add(customRegion:)` writes to the shared on-disk regions
+    /// store, and doing that mid-suite takes 17 unrelated suites down with it.
+    @Test @MainActor
+    func `Rental trip planning is offered only when the region has an OTP server`() {
+        let userDataStore = buildApplication(queue: queue, dataLoader: MockDataLoader(testName: name)).userDataStore
+        let noOTPRegion = Region(
+            name: "No OTP Region",
+            OBABaseURL: URL(string: "http://example.com")!,
+            coordinateRegion: MKCoordinateRegion(
+                center: CLLocationCoordinate2D(latitude: 40.7128, longitude: -74.0060),
+                latitudinalMeters: 1000.0,
+                longitudinalMeters: 1000.0
+            ),
+            contactEmail: "test@example.com"
+        )
+
+        #expect(AppSheetViewFactory.offersTripPlanning(in: noOTPRegion, userDataStore: userDataStore) == false)
+        #expect(AppSheetViewFactory.offersTripPlanning(in: nil, userDataStore: userDataStore) == false)
+        #expect(AppSheetViewFactory.offersTripPlanning(in: Fixtures.pugetSoundRegion, userDataStore: userDataStore))
+    }
+
+    /// A rider who switched trip planning off for the region gets no button either:
+    /// the planner would only say "unavailable".
+    @Test @MainActor
+    func `Rental trip planning is not offered when the rider turned trip planning off`() {
+        let userDataStore = buildApplication(queue: queue, dataLoader: MockDataLoader(testName: name)).userDataStore
+        let region = Fixtures.pugetSoundRegion
+        userDataStore.setTripPlanningEnabled(false, for: region)
+        defer { userDataStore.setTripPlanningEnabled(true, for: region) }
+
+        #expect(AppSheetViewFactory.offersTripPlanning(in: region, userDataStore: userDataStore) == false)
+    }
+
+    // MARK: - Rental cluster drill-in
+
+    /// Tapping a row in the cluster list pushes the same `.rentalDetail` route a tap on a
+    /// lone map pin opens, rather than letting the list present its own sheet.
+    ///
+    /// The list *can* present one — it does on the UIKit surface — but on the panel that
+    /// sheet and `StackedSheetLayer`'s next route would be two presentations from one view.
+    /// SwiftUI permits one ("Currently, only presenting a single sheet is supported"), so
+    /// the trip planner pushed from inside the rental sheet stayed queued until the rider
+    /// dismissed the rental by hand.
+    @Test @MainActor
+    func `Selecting a rental from the cluster list pushes the rental detail route`() throws {
+        let application = buildApplication(queue: queue, dataLoader: MockDataLoader(testName: name))
+        let coordinator = SheetCoordinator<AppSheetRoute>(root: .home)
+        let factory = makeFactory(application: application, coordinator: coordinator)
+        let rental = try RentalFixtures.pedalBike(id: "b7")
+
+        coordinator.push(.rentalCluster(memberIDs: [rental.id, "b8"]))
+        factory.selectRentalFromCluster(rental)
+
+        #expect(coordinator.stackedRoutes == [
+            .rentalCluster(memberIDs: [rental.id, "b8"]),
+            .rentalDetail(rentalID: rental.id)
+        ])
+    }
+
+    /// The whole reported flow, as routes: cluster, then vehicle, then planner. Each is its
+    /// own stacked entry, which is what gives each one its own presenting host — the
+    /// property that was violated when the list presented the vehicle sheet itself.
+    @Test @MainActor
+    func `Cluster to vehicle to trip planner produces three distinct stacked sheets`() throws {
+        let application = buildApplication(queue: queue, dataLoader: MockDataLoader(testName: name))
+        let coordinator = SheetCoordinator<AppSheetRoute>(root: .home)
+        let factory = makeFactory(application: application, coordinator: coordinator)
+        let rental = try RentalFixtures.pedalBike(id: "b7")
+
+        coordinator.push(.rentalCluster(memberIDs: [rental.id]))
+        factory.selectRentalFromCluster(rental)
+        let planTrip = try #require(factory.planTripUsingRental)
+        planTrip(rental)
+
+        #expect(coordinator.stackedRoutes.count == 3)
+        guard case .tripPlanner(let request) = coordinator.stackedRoutes.last else {
+            Issue.record("Expected .tripPlanner on top, got \(String(describing: coordinator.stackedRoutes.last))")
+            return
+        }
+        #expect(request.transportMode == .bikeRental)
+        #expect(request.origin?.placemark.coordinate.latitude == rental.coordinate.latitude)
     }
 }

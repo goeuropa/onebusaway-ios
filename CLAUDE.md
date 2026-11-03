@@ -13,20 +13,133 @@ OneBusAway iOS (OBAKit) is a white-label transit app framework written in Swift.
 scripts/generate_project [APP_NAME]     # Generate Xcode project for specific app
 scripts/generate_project OneBusAway     # Generate default OneBusAway app
 scripts/generate_project                # Defaults to OneBusAway if no app specified
+scripts/generate_project OneBusAway --no-watch   # iOS only; no watchOS platform needed
 ```
+
+The OneBusAway project includes the watchOS `WatchApp` shell, which links the `OBAKitWatch` package product, opted in through `Apps/OneBusAway/watch.yml`. Building the `App` scheme also builds them, so a machine without the watchOS platform must pass `--no-watch`. TestFlight builds embed the watch app (`fastlane/Fastfile` generates without `--no-watch`); the `build` job in `tests.yml` still uses it, and the `watch` job covers the watch stack. Build the watch app with `WATCH_UDID=$(scripts/resolve_watch_simulator_udid)` and `-scheme WatchApp -destination "platform=watchOS Simulator,id=$WATCH_UDID"`; `scripts/watch_smoke_test` installs, launches, and asserts it stays alive, which a compile cannot. Watch code never builds a `CoreApplication` and never reads `\.coreApplication`; `OBAKitWatch/Host/WatchAppHost.swift` is the assembly.
 
 **Available Apps**: OneBusAway, KiedyBus
 
-### Building & Testing
+### Picking a Simulator
+
+The `xcodebuild` and `xcodebuildmcp` blocks below need a simulator UDID —
+`scripts/swiftlint.sh`, `scripts/docs` (which builds for `generic/platform=iOS`),
+`scripts/version` and the `--help` blocks need nothing. Resolve one with:
+
 ```bash
+SIMULATOR_UDID=$(scripts/resolve_simulator_udid)
+```
+
+That prints the first iPhone on the newest installed iOS runtime — the same
+selection `.github/workflows/tests.yml` makes, from the same implementation, so
+the two cannot drift apart.
+
+**Run it in the same shell invocation as the command that uses it.** It sets an
+ordinary shell variable, and this file's audience is Claude Code, whose Bash tool
+starts a fresh shell per call — the working directory persists, environment does
+not. Resolve it in one call and build in the next and `$SIMULATOR_UDID` is empty,
+so `-destination "platform=iOS Simulator,id="` is rejected while parsing
+arguments, before any device lookup happens:
+
+```
+xcodebuild: error: missing value for key 'id' of option 'Destination'
+```
+
+That is neither of the errors in the table below, and it is the friendlier of the
+three — it names the problem rather than implying the device is missing. Each
+block that follows repeats the resolve line so this cannot arise; keep it when
+copying one.
+
+Address the device by `id=` rather than `name=`. A hardcoded name breaks two ways,
+and they report differently — which is why neither `OS=latest` nor a fresh device
+name fixes both:
+
+| | Error |
+|---|---|
+| not installed | "Unable to find a device matching the provided destination specifier" |
+| ambiguous across runtimes | "The requested device could not be found because multiple devices matched the request" |
+
+The first is verified on the current toolchain. The second is the historical
+wording and has shifted between Xcode releases — treat the text as indicative and
+the cause as the reliable part. `id=` avoids both.
+
+A name also goes stale on every Xcode release: this file has already carried
+`iPhone 16` and `iPhone 17 Pro`.
+
+### Building, Testing, and Driving the App: use `xcodebuildmcp`
+
+**Reach for `xcodebuildmcp` first.** It wraps `xcodebuild`/`xcrun simctl` and — critically —
+is the only thing in this repo that reliably drives the simulator's UI. Discover commands
+from the CLI itself rather than from memory:
+
+```bash
+xcodebuildmcp --help                 # workflows
+xcodebuildmcp <workflow> --help      # commands in a workflow
+xcodebuildmcp ui-automation --help   # snapshot-ui, tap, swipe, type-text, screenshot, ...
+```
+
+Typical loop for verifying a change in the running app:
+
+```bash
+scripts/generate_project OneBusAway                      # required before any build
+SIMULATOR_UDID=$(scripts/resolve_simulator_udid)         # same shell invocation as the commands below
+xcodebuildmcp simulator build-and-run --project-path OBAKit.xcodeproj --scheme App --simulator-id "$SIMULATOR_UDID"
+xcodebuildmcp ui-automation snapshot-ui  --simulator-id "$SIMULATOR_UDID" --style minimal
+xcodebuildmcp ui-automation touch        --simulator-id "$SIMULATOR_UDID" --element-ref e26 --down --up --delay 0.08
+xcodebuildmcp ui-automation screenshot   --simulator-id "$SIMULATOR_UDID" --return-format path --style minimal
+```
+
+`snapshot-ui` returns semantic `elementRef` handles; drive those refs instead of
+coordinates, and re-snapshot after any navigation or layout change.
+
+Two things that cost real time here:
+
+- **Flag spelling differs between the CLI and the MCP tools.** The CLI documents
+  kebab-case (`--simulator-id`, `--element-ref`, `--project-path`,
+  `--return-format`); the MCP tool schema uses camelCase (`simulatorId`,
+  `elementRef`). The CLI tolerates camelCase on some commands and rejects it on
+  others (`simulator open` errors with "Unknown arguments"), so always use
+  kebab-case — `<workflow> <command> --help` prints the canonical names.
+- **Prefer `touch --down --up` over `tap`.** `tap` reports
+  "simulated successfully" and frequently changes nothing — notably on SwiftUI
+  onboarding buttons. `touch` reaches the same refs and actually lands. If a screen
+  will not advance, swap `tap` for `touch` before suspecting anything else.
+
+Map annotations are not exposed as snapshot targets, so map pins still cannot be
+driven this way — verify those with hosted unit tests instead.
+
+**If `xcodebuildmcp` is not installed, install it — do not hand-roll simulator automation.**
+
+```bash
+brew tap getsentry/xcodebuildmcp && brew install xcodebuildmcp
+# or, with Node.js 18+: npm install -g xcodebuildmcp@latest
+```
+
+Homebrew is the path with no Node dependency. XcodeBuildMCP itself requires
+macOS 14.5+ and Xcode 16+.
+
+Every homegrown alternative on this codebase has been a dead end or a time sink: `idb` is
+broken on current Xcode, AppleScript/System Events hit an empty accessibility tree, and
+synthesizing `CGEvent` clicks against the Simulator window means recalibrating a window→device
+coordinate mapping that silently drifts whenever the window moves or another simulator window
+overlaps it. Those taps fail *silently* — they report success and change nothing — which is
+the single most expensive failure mode here. Install the CLI instead.
+
+### Building & Testing (raw xcodebuild)
+
+Use these only when `xcodebuildmcp` genuinely cannot do the job.
+
+```bash
+SIMULATOR_UDID=$(scripts/resolve_simulator_udid)         # same shell invocation as the commands below
+
 # Build for testing
-xcodebuild clean build-for-testing -scheme 'App' -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+xcodebuild clean build-for-testing -scheme 'App' -destination "platform=iOS Simulator,id=$SIMULATOR_UDID"
 
 # Run unit tests
-xcodebuild test-without-building -only-testing:OBAKitTests -project 'OBAKit.xcodeproj' -scheme 'App' -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+xcodebuild test-without-building -only-testing:OBAKitTests -project 'OBAKit.xcodeproj' -scheme 'App' -destination "platform=iOS Simulator,id=$SIMULATOR_UDID"
 
 # Run specific test class
-xcodebuild test-without-building -only-testing:OBAKitTests/SpecificTestClass -project 'OBAKit.xcodeproj' -scheme 'App' -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+xcodebuild test-without-building -only-testing:OBAKitTests/SpecificTestClass -project 'OBAKit.xcodeproj' -scheme 'App' -destination "platform=iOS Simulator,id=$SIMULATOR_UDID"
 ```
 
 ### Code Quality
@@ -45,13 +158,23 @@ scripts/docs                          # Generate DocC documentation (output in a
 scripts/version                        # Version management
 scripts/update_package_resolved        # Update Swift Package Manager dependencies
 scripts/extract_strings               # Extract strings for localization
+scripts/app_store_screenshots         # App Store slides: capture, frame, caption; --duo, --watch, --all-sets (docs/app-store/README.md)
 ```
 
 ## Architecture
 
 ### Framework Structure
-- **OBAKitCore**: Core business logic, networking, data models (application extension safe)
-- **OBAKit**: UI framework with view controllers and user interface components
+- **OBAKitCore**: Core business logic, networking, data models (application extension safe). A **Swift package target**, declared in the root `Package.swift`; the apps consume it as a local package (`packages:` in `Apps/Shared/app_shared.yml`). One module, two directories:
+  - `OBAKitCore/` — portable. Builds for **iOS and watchOS**. No UIKit view code, no ActivityKit, no region-monitoring API calls.
+  - `OBAKitCore/iOS/` — iOS-only files of the *same module* (no separate `import`). UIKit views, Live Activities, geofencing. SwiftPM can't include a file on one platform only, so **every file here is wrapped in `#if os(iOS)` … `#endif // os(iOS)`**; a new file needs the same wrapper or the watchOS build breaks.
+  - **If a file outside `OBAKitCore/iOS/` needs a platform `#if`, move the iOS-only part into `OBAKitCore/iOS/` instead.** The portable tree carries exactly two conditionals (`CoreApplication.swift`'s `canImport(ActivityKit)` and `ThemeColors.swift`'s watch palette); keep it that way.
+  - Its resources (string tables, privacy manifest) are in a resource bundle of their own: use `Bundle.module` in Core and `Bundle.obaKitCore` from `@testable` tests. `Bundle(for:)` on a Core type finds the code, not the resources.
+  - Extension safety is not enforced by the package itself (it has no `APPLICATION_EXTENSION_API_ONLY`); the `watch` CI job builds it from the bare `Package.swift` with `APPLICATION_EXTENSION_API_ONLY=YES` to catch it.
+- **OBAKitWatch**: watchOS UI (SwiftUI). Host, models, and screens; logic stays in OBAKitCore so OBAKitTests covers it. A **Swift package target** (watchOS only) in the root `Package.swift`; strings load from `Bundle.module`. The `watch` CI job builds it with `APPLICATION_EXTENSION_API_ONLY=YES`, the same way as OBAKitCore.
+- **WatchApp**: watchOS application shell. White-label; per-app identity comes from Apps/<App>/watch.yml.
+- **OBAKit**: UI framework with view controllers and user interface components. Also a **Swift package target** in the root `Package.swift` (iOS only), with main-actor default isolation.
+  - Resources load from `Bundle.module` (`Bundle.obaKit` from `@testable` tests). String tables, the asset catalog and the privacy manifest are picked up automatically; any other file it loads (`OBAKit_Credits.plist`, `document_web_view_content.html`) must be listed in `resources:` in `Package.swift`, or it is silently left out of the bundle.
+  - **App Intents**: Xcode merges OBAKit's intent metadata into the app's own `Metadata.appintents`. Do **not** add an `AppIntentsPackage` that includes OBAKit: the indexer looks for framework metadata that a package doesn't have, and then ignores every intent in the app. The `AppShortcutsProvider` (`Apps/Shared/CommonClient/OBAAppShortcuts.swift`) and the `AppIntents`/`AppShortcuts` string tables live in the app for the same reason; OBAKit gets the provider through `AppConfig.appShortcutsProvider`. `scripts/check_app_intents`, run in CI, fails on any of these.
 - **App**: Main application target that combines the frameworks
 
 ### Key Architectural Patterns
@@ -62,6 +185,7 @@ scripts/extract_strings               # Extract strings for localization
 
 ### Core Components
 - **Models**: REST API models, Protobuf models, user data models, view models
+- **On-demand (GTFS-Flex)**: `OBAKitCore/Models/REST/OnDemand/` holds the `/api/ondemand` wire models; `OBAKitCore/Models/OnDemand/` holds `BookingDeadlineEvaluator` (normative; verified against `OBAKitTests/fixtures/flex-booking-vectors.json`, mirrored from maglev) and the `OnDemandServiceSummary` presenter. `OnDemandSupport` remembers servers without the namespace; only `services-for-location` may record there. UI lives in `OBAKit/OnDemand/` and `OBAKit/Mapping/Layers/OnDemand/`.
 - **Services**: RESTAPIService, RegionsService, LocationService, UserDataStore
 - **Controllers**: Tab-based navigation with map, stops, bookmarks, search, and more
 - **Extensions**: Foundation, CoreLocation, UIKit, and MapKit extensions
@@ -74,6 +198,10 @@ scripts/extract_strings               # Extract strings for localization
   - `Network/`: API services and networking
   - `Location/`: Location services and region management
   - `Orchestration/`: Application setup and configuration
+- `OBAKitCore/iOS/`: iOS-only files of the OBAKitCore module (same module, no separate import; each file wrapped in `#if os(iOS)`)
+  - `UIKit/`: UIKit view code
+  - `LiveActivities/`: Everything that imports or renders ActivityKit
+  - `Location/`: Region monitoring / geofencing
 - `OBAKit/`: UI framework
   - `Controls/`: Reusable UI components
   - `Mapping/`: Map views and location features
@@ -106,24 +234,25 @@ scripts/extract_strings               # Extract strings for localization
 
 ## Third-Party Dependencies
 
-**UI Libraries**: BulletinBoard, Eureka, FloatingPanel, MarqueeLabel
-**Networking**: CocoaLumberjack, Hyperconnectivity, SwiftProtobuf
+**UI Libraries**: FloatingPanel
+**Vendored**: BulletinBoard 5.0.0 (`e8ba81d`) lives in `OBAKit/ThirdParty/BulletinBoard/`, compiled into OBAKit with internal access, so there is no `import BLTNBoard`. It has been modified for Swift 6 and fixes; changes are marked `OBA:` in comments. Its MIT license is in that directory and on the Credits screen (`OBAKit/Settings/OBAKit_Credits.plist`). Hyperconnectivity 1.2.0 (`0503595`) is vendored the same way in `OBAKit/ThirdParty/Hyperconnectivity/` (no `import Hyperconnectivity`), trimmed to the connectivity publisher, with the same `OBA:` markers and Credits entry. MarqueeLabel 4.5.3 (`c6b4da4`, the last upstream release) is vendored the same way in `OBAKit/ThirdParty/MarqueeLabel/` (no `import MarqueeLabel`), with Interface Builder support and deprecated API removed. Unlike upstream, it does not scroll while Reduce Motion is on
+**Networking**: CocoaLumberjack, SwiftProtobuf
 **Testing**: Swift Testing (first-party; Nimble was removed)
 
 ## Configuration & Deployment
 
 - **Target iOS Version**: 18.0+
-- **Swift Version**: every target builds in the **Swift 6 language mode** with main-actor default isolation (`Apps/Shared/app_shared.yml`); OBAKitCore is the one target that pins `SWIFT_DEFAULT_ACTOR_ISOLATION` back to `nonisolated`. The five concurrency diagnostic groups are escalated to errors, so a data-race warning fails the build. Modern syntax (shorthand optional binding, `URL.host()`) is fine — the iOS 18 deployment target exceeds their requirements.
+- **Swift Version**: every target builds in the **Swift 6 language mode** with main-actor default isolation (`Apps/Shared/app_shared.yml`); OBAKitCore, OBAKit and OBAKitWatch are package targets, and `Package.swift` reproduces these settings for them, except that OBAKitCore's default isolation stays `nonisolated`. The five concurrency diagnostic groups are escalated to errors, so a data-race warning fails the build. Modern syntax (shorthand optional binding, `URL.host()`) is fine — the iOS 18 deployment target exceeds their requirements.
 - **Package Manager**: Swift Package Manager
 - **Project Generation**: XcodeGen from YAML configurations
-- **Localization**: in-repo .strings files (OBAKit/Strings, OBAKitCore/Strings)
+- **Localization**: in-repo .strings files (OBAKit/Strings, OBAKitCore/Strings; App Intents tables in Apps/Shared/CommonClient)
 - **Linting**: SwiftLint with relaxed rules for flexibility
 
 ## White-Label Features
 
 The codebase supports easy customization through:
 - Separate app configurations in `Apps/` directory
-- Pluggable analytics systems (Firebase, Plausible)
+- Pluggable analytics systems (Firebase, Umami)
 - Custom region support via deep links
 - Theming and branding capabilities
 
@@ -133,7 +262,10 @@ Custom region addition:
 ```
 onebusaway://add-region?name=REGION_NAME
     &oba-url=ENCODED_OBA_URL
+    &region-id=SIDECAR_REGION_ID
     &otp-url=ENCODED_OTP_URL
+    &otp-graphql-url=ENCODED_OTP_GRAPHQL_URL
+    &otp-graphql-bikeshare=true
     &sidecar-url=ENCODED_SIDECAR_URL
     &umami-url=ENCODED_UMAMI_URL
     &umami-id=UMAMI_WEBSITE_ID
@@ -142,7 +274,10 @@ onebusaway://add-region?name=REGION_NAME
 **Parameter details:**
 - `name` (required): Region display name
 - `oba-url` (required): OneBusAway server base URL
-- `otp-url` (optional): OpenTripPlanner server URL
+- `region-id` (optional): the region's id on the Obaco sidecar. Without it the region gets a random id, and every sidecar feature (alerts, alarms, push, surveys) 404s
+- `otp-url` (optional): OpenTripPlanner 1.x REST server URL
+- `otp-graphql-url` (optional): OTP 2.x GTFS GraphQL server URL (e.g. `https://…/otp/gtfs/v1`). Preferred over `otp-url` for trip planning when both are set
+- `otp-graphql-bikeshare` (optional): `true` or `1` when the GraphQL server serves vehicle rental data. Turns on the map's Bikes and Scooters layers and the rental trip modes; meaningless without `otp-graphql-url`
 - `sidecar-url` (optional): Obaco sidecar server URL for OneBusAway.co features
 - `umami-url` and `umami-id` (optional, both required together): Umami analytics URL and website ID—omit both to disable analytics
 
@@ -152,10 +287,24 @@ onebusaway://add-region?name=REGION_NAME
 3. URL parameters must be percent-encoded (e.g., query strings in nested URLs: `https://example.com/api?a=1&b=2` must be encoded as `https%3A%2F%2Fexample.com%2Fapi%3Fa%3D1%26b%3D2`)
 4. New URL fields are validated for well-formedness only; invalid optional URLs degrade to nil. The Add Custom Region form live-validates the base URL on save; the deep link path checks well-formedness only
 
+Bikes and scooters on the map:
+```
+onebusaway://rentals?lat=47.6097&lon=-122.3422
+```
+
+- `lat` and `lon` (both required): decimal degrees, on the globe. A missing, non-numeric, non-finite, or out-of-range value makes the link undecodable, and the app ignores it
+- Switches on the Bikes and Scooters layers and centres the map on the coordinate, close enough that rentals draw
+- Ignored, with a log line, when the current region has no rental layers or the coordinate is outside it
+- Arriving before the map exists (cold launch, onboarding), it is held in `Application.pendingRentalsCoordinate` and applied once the map appears and the region has loaded — the same stash pattern as `pendingStopID`. Both map surfaces claim it with `Application.claimPendingRentalsFocus()`
+- `URLSchemeRouter.encodeViewRentals(coordinate:)` builds one
+
 ## Development Notes
 
 - Always run `scripts/generate_project` before building
 - SwiftLint has relaxed rules - check `.swiftlint.yml` for disabled rules
 - Core framework (OBAKitCore) must remain application extension safe
+- **The root `Package.swift` is published** (Swift Package Index reads `.spi.yml`). Other apps depend on it by version, resolving dependencies from its version ranges, not the apps' `Package.resolved`. The `watch` CI job builds `OBAKit` and `OBAKitWatch` from the bare manifest, before the project is generated, to keep that working. A dependency added to the apps that OBAKit code imports must also go in `Package.swift`.
 - UI tests are minimal - focus is on unit tests
 - Documentation is generated with DocC via `scripts/docs`
+- **`Int` is 32 bits on most Apple Watches** (`arm64_32`), and watch simulators hide it. In `OBAKitCore/`, never decode an epoch value as `Int` — use `Int64` or `Date`. Check with `xcodebuild build -scheme OBAKitCore -destination 'generic/platform=watchOS' CODE_SIGNING_ALLOWED=NO` (the package's scheme, listed in the generated project); CI builds the watch app for watchOS devices, which compiles Core the same way.
+- **Extensions do not build a `CoreApplication`.** It starts a regions fetch, opens the stop cache, and bumps the launch counter. A widget reads the app-group suite instead: `ResolvedRegionStore` for the region (the app writes it via `ResolvedRegionPersister`; extensions only read), `UserUUID` for the client id, `RESTAPIService.standalone(…)` for the API, and `BookmarkArrivalsLoader` for arrivals.

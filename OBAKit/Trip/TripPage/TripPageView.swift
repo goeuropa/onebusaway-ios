@@ -18,12 +18,54 @@ struct TripPageActions {
     var canSchedule = false
     var canAlarm = false
     var canStartLiveActivity = false
+    var canReportGhostBus = false
     var onBack: () -> Void = {}
     var onSelectStop: (StopID) -> Void = { _ in }
     var onLiveActivity: () -> Void = {}
     var onBookmark: () -> Void = {}
     var onSchedule: () -> Void = {}
     var onAlarm: () -> Void = {}
+    var onReportGhostBus: () -> Void = {}
+}
+
+/// Thin hosting wrapper for `TripPageView`. Its only job is to apply
+/// `.defaultAppStorage` so the page's `@AppStorage` reads and writes the
+/// app-group suite (matching Settings / `UserDefaultsStore`) rather than
+/// `UserDefaults.standard`. Without this, compact mode and reduced colors on
+/// the trip page are a no-op — `TripCardView`'s existing
+/// `@AppStorage(stopUIReducedColorsKey)` had the same bug.
+///
+/// It has to be a separate view. `.defaultAppStorage(_:)` only reaches
+/// `@AppStorage` *below* the view it is applied to.
+struct TripPageRootView: View {
+    let viewModel: TripViewModel
+    let userDefaults: UserDefaults
+    /// The app's instance, carrying the region time zone and locale. Without it
+    /// the page falls back to the environment default built from `.current`.
+    let formatters: Formatters
+    let originTitle: String?
+    let actions: TripPageActions
+    var backBehavior: TripPageBackBehavior = .pop
+    var showsBackRow = true
+    var hasAlarm = false
+    var isTrackingLiveActivity = false
+    /// Mutable so `TripPageViewController.setAtTip` can flip it without rebuilding.
+    var isCollapsed = false
+
+    var body: some View {
+        TripPageView(
+            viewModel: viewModel,
+            originTitle: originTitle,
+            actions: actions,
+            backBehavior: backBehavior,
+            showsBackRow: showsBackRow,
+            hasAlarm: hasAlarm,
+            isTrackingLiveActivity: isTrackingLiveActivity,
+            isCollapsed: isCollapsed
+        )
+        .defaultAppStorage(userDefaults)
+        .environment(\.obaFormatters, formatters)
+    }
 }
 
 /// The trip page: which vehicle, when it gets to you, and every stop on its way.
@@ -40,14 +82,33 @@ struct TripPageView: View {
     let originTitle: String?
     let actions: TripPageActions
 
+    /// Which way out the back row offers. Set by the host, which is the only
+    /// thing that knows whether this page was pushed or presented.
+    var backBehavior: TripPageBackBehavior = .pop
+
+    /// `false` where the host shows the system navigation bar instead, whose back
+    /// button would duplicate the row. See `TripPageViewController.showsSystemNavigationBar`.
+    var showsBackRow = true
+
     /// Set by the host so the alarm and Live Activity buttons render their
     /// current state rather than always offering to start something.
     var hasAlarm = false
     var isTrackingLiveActivity = false
 
+    /// `true` while the sheet showing this page sits at its `.tip` detent, where the only thing
+    /// that fits is the back row.
+    ///
+    /// The action bar is pinned as a bottom `safeAreaInset`, and at `.tip` it is taller than the
+    /// whole detent — so SwiftUI squeezes the back row and the list to nothing and the sheet peeks
+    /// as a Live Activity button floating over the map, with no indication of which trip it
+    /// belongs to. Dropping the bar at this detent leaves the row that names the trip's origin,
+    /// which is what a peek is for. Mirrors `StopPageView.isCollapsed`.
+    var isCollapsed = false
+
     /// The page's laid-out height, which is the sheet detent's — not the screen's. Feeds the
     /// action bar's ceiling at accessibility sizes; see `TripActionBar.maxHeight`.
     @State private var pageHeight: CGFloat = 0
+    @AppStorage(UserDefaultsStore.stopTripCompactModeKey) private var compactMode = false
 
     /// The largest share of the page the pinned action bar may take before it starts scrolling.
     ///
@@ -76,18 +137,28 @@ struct TripPageView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            TripPageBackRow(title: originTitle, onBack: actions.onBack)
+            if showsBackRow {
+                TripPageBackRow(
+                    title: originTitle,
+                    behavior: backBehavior,
+                    isRefreshing: viewModel.isLoading,
+                    lastUpdated: viewModel.lastUpdated,
+                    showsLastUpdated: !isCollapsed,
+                    onBack: actions.onBack,
+                    onRefresh: viewModel.refresh
+                )
+            }
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: StopTripSpacing.tripPage(compactMode)) {
                     card
 
-                    let rows = stopList.rows
-                    if !rows.isEmpty {
-                        sectionHeader(stopCountTitle(rows.count))
+                    let list = stopList
+                    if !list.rows.isEmpty {
+                        sectionHeader(stopCountTitle(list.rows.count))
 
                         TripStopListView(
-                            rows: rows,
+                            model: list,
                             routeColor: routeColor,
                             routeType: route?.routeType ?? .unknown,
                             onSelect: { actions.onSelectStop($0.stopID) }
@@ -98,12 +169,18 @@ struct TripPageView: View {
                         // reads as a broken screen rather than one still working.
                         sectionHeader(stopsSectionPlaceholderTitle)
 
-                        Text(stopsUnavailableMessage)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(14)
-                            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+                        HStack {
+                            Text(stopsPlaceholderMessage)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            if viewModel.stopListState == .failed {
+                                Button(Strings.retry) { viewModel.refresh() }
+                                    .font(.subheadline.weight(.semibold))
+                            }
+                        }
+                        .padding(14)
+                        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
                     }
                 }
                 .padding(.horizontal, 16)
@@ -124,18 +201,22 @@ struct TripPageView: View {
         // discards the reservation. Until someone can explain the difference,
         // this stays where it is empirically correct.
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            TripActionBar(
-                canStartLiveActivity: actions.canStartLiveActivity,
-                isTrackingLiveActivity: isTrackingLiveActivity,
-                canSchedule: actions.canSchedule,
-                canAlarm: actions.canAlarm,
-                hasAlarm: hasAlarm,
-                maxHeight: pageHeight > 0 ? pageHeight * Self.actionBarHeightShare : nil,
-                onLiveActivity: actions.onLiveActivity,
-                onBookmark: actions.onBookmark,
-                onSchedule: actions.onSchedule,
-                onAlarm: actions.onAlarm
-            )
+            if !isCollapsed {
+                TripActionBar(
+                    canStartLiveActivity: actions.canStartLiveActivity,
+                    isTrackingLiveActivity: isTrackingLiveActivity,
+                    canSchedule: actions.canSchedule,
+                    canAlarm: actions.canAlarm,
+                    hasAlarm: hasAlarm,
+                    canReportGhostBus: actions.canReportGhostBus,
+                    maxHeight: pageHeight > 0 ? pageHeight * Self.actionBarHeightShare : nil,
+                    onLiveActivity: actions.onLiveActivity,
+                    onBookmark: actions.onBookmark,
+                    onSchedule: actions.onSchedule,
+                    onAlarm: actions.onAlarm,
+                    onReportGhostBus: actions.onReportGhostBus
+                )
+            }
         }
         // The page's height is imposed by the host (the sheet detent), not derived from this
         // content, so feeding it back in to bound the bar converges instead of looping.
@@ -190,19 +271,28 @@ struct TripPageView: View {
             .foregroundStyle(.secondary)
             .textCase(.uppercase)
             .padding(.leading, 4)
+            // Anchors the Headings rotor, so a VoiceOver rider can jump past the
+            // trip card straight to "All N stops".
+            .accessibilityAddTraits(.isHeader)
     }
 
     private var stopsSectionPlaceholderTitle: String {
         OBALoc("trip_page.stops_header", value: "Stops", comment: "Header above the trip's stop list before the stops are known.")
     }
 
-    /// Deliberately distinguishes "still loading" from "we asked and got nothing":
-    /// the second is a real answer and the rider shouldn't sit waiting on it.
-    private var stopsUnavailableMessage: String {
-        if viewModel.isLoading {
-            return OBALoc("trip_page.stops_loading", value: "Loading this trip's stops…", comment: "Shown while the trip's stop list is being fetched.")
+    /// Keeps "still loading", "couldn't load, try again" and "we asked and got
+    /// nothing" apart. Only the last is a real answer the rider shouldn't wait on;
+    /// a load that failed is one a retry may fix, and saying the list doesn't
+    /// exist sent riders away from a page that was about to fill in (#1548).
+    private var stopsPlaceholderMessage: String {
+        switch viewModel.stopListState {
+        case .loading, .loaded:
+            OBALoc("trip_page.stops_loading", value: "Loading this trip's stops…", comment: "Shown while the trip's stop list is being fetched.")
+        case .failed:
+            OBALoc("trip_page.stops_failed", value: "Couldn't load this trip's stops.", comment: "Shown beside a Retry button when loading the trip's stop list failed.")
+        case .unavailable:
+            OBALoc("trip_page.stops_unavailable", value: "This trip's stop list isn't available right now.", comment: "Shown when the trip's details came back with no stops in them.")
         }
-        return OBALoc("trip_page.stops_unavailable", value: "This trip's stop list isn't available right now.", comment: "Shown when the trip's stop list could not be loaded.")
     }
 
     private func stopCountTitle(_ count: Int) -> String {
@@ -213,34 +303,101 @@ struct TripPageView: View {
     }
 }
 
-/// The back affordance. A circular button beside the originating screen's name,
-/// rather than a navigation bar: the page is pushed into a sheet whose root has
-/// no bar, and adding one would impose a top safe area that eats the sheet's
-/// scarce height.
+/// The back affordance, and refresh (#1581). A circular button beside the
+/// originating screen's name, rather than a navigation bar: the page is pushed
+/// into a sheet whose root has no bar, and adding one would impose a top safe
+/// area that eats the sheet's scarce height.
 private struct TripPageBackRow: View {
     let title: String?
+    /// Drives the glyph and the VoiceOver label together — the two must never
+    /// disagree about whether this goes back or closes.
+    let behavior: TripPageBackBehavior
+    /// Spins the refresh glyph and disables the button, so a second tap can't
+    /// cancel the load the first one started.
+    let isRefreshing: Bool
+    /// When the page's data last arrived; see `TripViewModel.lastUpdated`.
+    let lastUpdated: Date?
+    /// `false` at the sheet's `.tip` detent, which has room for one line only.
+    let showsLastUpdated: Bool
     let onBack: () -> Void
+    let onRefresh: () -> Void
+
+    @Environment(\.obaFormatters) private var formatters
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 12) {
+            backElement
+            refreshButton
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+
+    private var backElement: some View {
+        HStack(spacing: 12) {
             Button(action: onBack) {
-                Image(systemName: "chevron.backward")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(width: 32, height: 32)
-                    .background(Color(uiColor: .tertiarySystemFill), in: Circle())
+                circleGlyph(behavior.systemImage)
             }
             .tint(Color(uiColor: .label))
-            .accessibilityLabel(Strings.back)
+            .accessibilityLabel(behavior.accessibilityLabel(originTitle: title))
 
-            if let title {
-                Text(title)
-                    .font(.headline)
-                    .lineLimit(1)
+            VStack(alignment: .leading, spacing: 1) {
+                // Stop names routinely outrun the row, so the title scrolls rather than truncating.
+                if let title {
+                    MarqueeText(text: title, textStyle: .headline)
+                }
+                if showsLastUpdated, let lastUpdated {
+                    // Re-evaluated on a timer, so "Just Now" ages without a refresh.
+                    TimelineView(.periodic(from: .now, by: 15)) { _ in
+                        Text(formatters.updatedText(since: lastUpdated))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
             }
 
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        // One element for the back button and its title, so VoiceOver says "Back to
+        // <title>" once instead of the button and then the title again. The title is
+        // a UIKit label in a representable, which `.accessibilityHidden` doesn't
+        // reach. The update time is left out of it: refresh speaks it as its value.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(behavior.accessibilityLabel(originTitle: title))
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { onBack() }
+    }
+
+    private var refreshButton: some View {
+        // On the caption's timer, so the spoken age keeps up with the visible one.
+        TimelineView(.periodic(from: .now, by: 15)) { _ in
+            Button(action: onRefresh) {
+                circleGlyph(AppSymbol.refresh, isSpinning: isRefreshing && !reduceMotion)
+            }
+            .tint(Color(uiColor: .label))
+            .disabled(isRefreshing)
+            .accessibilityLabel(Strings.refresh)
+            .accessibilityValue(refreshAccessibilityValue)
+        }
+    }
+
+    /// Same wording as the Stop page's refresh: "Updating…" while it runs, then
+    /// "Updated: 2 min. ago".
+    private var refreshAccessibilityValue: String {
+        if isRefreshing { return Strings.updating }
+        return lastUpdated.map(formatters.updatedText(since:)) ?? ""
+    }
+
+    private func circleGlyph(_ systemImage: String, isSpinning: Bool = false) -> some View {
+        Image(systemName: systemImage)
+            .font(.subheadline.weight(.semibold))
+            .symbolEffect(.rotate, options: .repeat(.continuous), isActive: isSpinning)
+            .frame(width: 32, height: 32)
+            .background(Color(uiColor: .tertiarySystemFill), in: Circle())
+            // Hit area grows to the 44pt minimum without growing the glyph or
+            // the row: a negative inset extends the shape past the frame.
+            .contentShape(Circle().inset(by: -6))
     }
 }

@@ -14,8 +14,8 @@ import Testing
 
 // swiftlint:disable force_cast force_try
 
-/// Tests for `TripViewModel`. Regression coverage for the `catch is CancellationError`
-/// branch added in the VM refactor.
+/// Tests for `TripViewModel`: cancellation, the shared destination, and loads
+/// that fail in part.
 @Suite(.serialized)
 final class TripViewModelTests: OBATestCase {
     var queue: OperationQueue!
@@ -34,11 +34,7 @@ final class TripViewModelTests: OBATestCase {
     // MARK: - Helpers
 
     private func createApplication(dataLoader: MockDataLoader) -> Application {
-        stubRegions(dataLoader: dataLoader)
-        stubAgenciesWithCoverage(dataLoader: dataLoader, baseURL: Fixtures.pugetSoundRegion.OBABaseURL)
-        Fixtures.stubAllAgencyAlerts(dataLoader: dataLoader)
-        stubTripEndpoints(dataLoader: dataLoader)
-        stubSurveys(dataLoader: dataLoader)
+        stubCommonEndpoints(dataLoader: dataLoader)
 
         let locManager = MockAuthorizedLocationManager(
             updateLocation: TestData.mockSeattleLocation,
@@ -62,6 +58,16 @@ final class TripViewModelTests: OBATestCase {
         )
 
         return Application(config: config)
+    }
+
+    /// Everything `createApplication` needs answered. Separate so a test can
+    /// re-register it inside `MockDataLoader.replaceMappedResponses`.
+    private func stubCommonEndpoints(dataLoader: MockDataLoader) {
+        stubRegions(dataLoader: dataLoader)
+        stubAgenciesWithCoverage(dataLoader: dataLoader, baseURL: Fixtures.pugetSoundRegion.OBABaseURL)
+        Fixtures.stubAllAgencyAlerts(dataLoader: dataLoader)
+        stubTripEndpoints(dataLoader: dataLoader)
+        stubSurveys(dataLoader: dataLoader)
     }
 
     /// Broad-match stubs for the three endpoints `TripViewModel.loadData()` may hit.
@@ -99,9 +105,8 @@ final class TripViewModelTests: OBATestCase {
 
     // MARK: - Tests
 
-    /// A cancelled `loadData()` task must not surface a user-facing error. The `catch is
-    /// CancellationError { return }` branch in `loadData()` handles this; if it's removed,
-    /// the cancellation would fall through to the generic `catch { operationError = error }`.
+    /// A cancelled `loadData()` task must not surface a user-facing error: its
+    /// fetches fail with cancellation, which is not something the rider did.
     @Test @MainActor
     func `Load data does not surface cancellation error`() async throws {
         let dataLoader = MockDataLoader(testName: name)
@@ -120,5 +125,316 @@ final class TripViewModelTests: OBATestCase {
         for _ in 0..<5 { await Task.yield() }
 
         #expect(viewModel.operationError == nil)
+    }
+
+    // MARK: - Shared destination (#449)
+
+    // The two fixtures do not share a trip. The arrival is on trip 1_40989208,
+    // and the details the broad stub serves are trip 1_18196913, so the
+    // boarding stop has no row in them. The destination is then found by
+    // searching the whole trip, which puts stop 1_29930 at row 10.
+
+    /// Arrivals for a trip opened from a shared link: the boarding stop's, and
+    /// the destination's, which can be made to fail. Register these before
+    /// `createApplication`'s broad stubs: `MockDataLoader` serves the first
+    /// stub that matches.
+    private func stubSharedTripArrivals(dataLoader: MockDataLoader, destinationFails: Bool) {
+        let boardingPath = "/arrival-and-departure-for-stop/1_11420.json"
+        dataLoader.mock(data: Fixtures.loadData(file: "arrival-and-departure-for-stop-1_11420.json")) { request in
+            request.url?.path.hasSuffix(boardingPath) ?? false
+        }
+
+        let destinationPath = "/arrival-and-departure-for-stop/1_29930.json"
+        let destinationData = destinationFails ? Data() : Fixtures.loadData(file: "arrival-and-departure-for-stop-MTS_11589.json")
+        dataLoader.mock(data: destinationData, statusCode: destinationFails ? 404 : 200) { request in
+            request.url?.path.hasSuffix(destinationPath) ?? false
+        }
+    }
+
+    private func boardingTrip() throws -> TripConvertible {
+        let arrivalDeparture = try Fixtures.loadRESTAPIPayload(
+            type: ArrivalDeparture.self,
+            fileName: "arrival-and-departure-for-stop-1_11420.json"
+        )
+        return TripConvertible(arrivalDeparture: arrivalDeparture)
+    }
+
+    private func destinationRequests(in dataLoader: MockDataLoader) -> [URL] {
+        dataLoader.recordedRequestURLs.filter { $0.path.hasSuffix("/arrival-and-departure-for-stop/1_29930.json") }
+    }
+
+    /// A trip opened from a shared link asks for the destination's own arrival,
+    /// for the destination's row and on the boarding arrival's trip, and
+    /// publishes it.
+    @Test @MainActor
+    func `A shared destination's arrival is loaded for its row`() async throws {
+        let dataLoader = MockDataLoader(testName: name)
+        stubSharedTripArrivals(dataLoader: dataLoader, destinationFails: false)
+        let app = createApplication(dataLoader: dataLoader)
+        try #require(app.apiService != nil)
+        let trip = try boardingTrip()
+        let viewModel = TripViewModel(application: app, tripConvertible: trip, destinationStopID: "1_29930")
+
+        viewModel.loadData()
+        await poll(until: { viewModel.destinationArrivalDeparture != nil }, timeout: .seconds(10), "the destination's arrival never loaded")
+
+        // The payload served for the destination, not the boarding stop's.
+        #expect(viewModel.destinationArrivalDeparture?.stopID == "MTS_11589")
+
+        let request = try #require(destinationRequests(in: dataLoader).last)
+        let query = try #require(URLComponents(url: request, resolvingAgainstBaseURL: false)?.queryItems)
+        #expect(query.first(where: { $0.name == "stopSequence" })?.value == "10")
+        #expect(query.first(where: { $0.name == "tripId" })?.value == "1_40989208")
+    }
+
+    /// Every other trip makes the one arrival request it always made, for the
+    /// boarding stop.
+    @Test @MainActor
+    func `Without a shared destination only the boarding arrival is requested`() async throws {
+        let dataLoader = MockDataLoader(testName: name)
+        stubSharedTripArrivals(dataLoader: dataLoader, destinationFails: false)
+        let app = createApplication(dataLoader: dataLoader)
+        try #require(app.apiService != nil)
+        let trip = try boardingTrip()
+        let viewModel = TripViewModel(application: app, tripConvertible: trip)
+
+        viewModel.loadData()
+        await poll(until: { viewModel.tripDetails != nil && !viewModel.isLoading }, timeout: .seconds(10), "the trip never finished loading")
+
+        let arrivalRequests = dataLoader.recordedRequestURLs.filter { $0.path.contains("/arrival-and-departure-for-stop/") }
+        #expect(arrivalRequests.map(\.lastPathComponent) == ["1_11420.json"])
+        #expect(viewModel.destinationArrivalDeparture == nil)
+    }
+
+    /// A refresh that fails to load the destination's arrival clears the
+    /// countdown rather than leave the last prediction on screen, and raises
+    /// no error alert: the trip itself still loaded.
+    @Test @MainActor
+    func `A failed refresh clears the destination's arrival without an error`() async throws {
+        let dataLoader = MockDataLoader(testName: name)
+        stubSharedTripArrivals(dataLoader: dataLoader, destinationFails: false)
+        let app = createApplication(dataLoader: dataLoader)
+        try #require(app.apiService != nil)
+        let trip = try boardingTrip()
+        let viewModel = TripViewModel(application: app, tripConvertible: trip, destinationStopID: "1_29930")
+        viewModel.loadData()
+        await poll(until: { viewModel.destinationArrivalDeparture != nil }, timeout: .seconds(10), "the first load never published the destination's arrival")
+
+        dataLoader.replaceMappedResponses { staging in
+            stubSharedTripArrivals(dataLoader: staging, destinationFails: true)
+            stubCommonEndpoints(dataLoader: staging)
+        }
+        dataLoader.resetRecordedRequestURLs()
+        viewModel.refresh()
+        await poll(
+            until: { !destinationRequests(in: dataLoader).isEmpty && !viewModel.isLoading },
+            timeout: .seconds(10),
+            "the refresh never finished asking for the destination's arrival"
+        )
+
+        #expect(viewModel.destinationArrivalDeparture == nil)
+        #expect(viewModel.operationError == nil)
+        #expect(viewModel.tripDetails != nil)
+    }
+
+    /// A load cancelled while the destination's request is in flight, by a
+    /// newer refresh or by leaving the screen, publishes nothing, even though
+    /// the request still comes back with an arrival.
+    @Test @MainActor
+    func `A cancelled load does not publish the destination's arrival`() async throws {
+        let dataLoader = MockDataLoader(testName: name)
+        // Ahead of the shared trip's stubs, so it is the one served. The
+        // matcher runs inside the load's own task, after `MockDataLoader`'s
+        // cancellation check, so the request is answered normally.
+        dataLoader.mock(data: Fixtures.loadData(file: "arrival-and-departure-for-stop-MTS_11589.json")) { request in
+            guard request.url?.path.hasSuffix("/arrival-and-departure-for-stop/1_29930.json") ?? false else { return false }
+            withUnsafeCurrentTask { $0?.cancel() }
+            return true
+        }
+        stubSharedTripArrivals(dataLoader: dataLoader, destinationFails: false)
+        let app = createApplication(dataLoader: dataLoader)
+        try #require(app.apiService != nil)
+        let trip = try boardingTrip()
+        let viewModel = TripViewModel(application: app, tripConvertible: trip, destinationStopID: "1_29930")
+
+        viewModel.loadData()
+        await viewModel.loadDataTask?.value
+        #expect(!destinationRequests(in: dataLoader).isEmpty, "the load never asked for the destination's arrival")
+
+        #expect(viewModel.destinationArrivalDeparture == nil)
+        #expect(viewModel.operationError == nil)
+        // The load got as far as the destination: only the arrival was dropped.
+        #expect(viewModel.tripDetails != nil)
+    }
+
+    // MARK: - Cancelled loads (#1514)
+
+    /// A load cancelled after its response came back, by a newer refresh or by
+    /// leaving the screen, publishes nothing: not the trip it fetched, and not
+    /// the end of the spinner, which belongs to the load that replaced it.
+    @Test @MainActor
+    func `A cancelled load does not publish the trip or clear the spinner`() async throws {
+        let dataLoader = MockDataLoader(testName: name)
+        let app = createApplication(dataLoader: dataLoader)
+        try #require(app.apiService != nil)
+        let viewModel = TripViewModel(application: app, tripConvertible: try makeTripConvertible())
+        viewModel.loadData()
+        await viewModel.loadDataTask?.value
+        let firstServiceDate = try #require(viewModel.tripDetails?.serviceDate)
+
+        // From here a load asks only for the trip's details: the route line is
+        // already loaded, and a trip opened without an arrival has none to
+        // refresh. They come back for the next day's service, so the first
+        // load's trip can be told apart. The matcher runs after
+        // `MockDataLoader`'s cancellation check, so the request is answered
+        // normally.
+        let nextDaysTrip = try #require(String(bytes: Fixtures.loadData(file: "trip_details_1_18196913.json"), encoding: .utf8))
+            .replacingOccurrences(of: #""serviceDate": 1343631600000"#, with: #""serviceDate": 1343718000000"#)
+        let load = SendableBox<Task<Void, Never>?>(nil)
+        dataLoader.replaceMappedResponses { staging in
+            staging.mock(data: Data(nextDaysTrip.utf8)) { request in
+                guard request.url?.path.contains("/api/where/trip-details") ?? false else { return false }
+                load.value?.cancel()
+                return true
+            }
+            stubCommonEndpoints(dataLoader: staging)
+        }
+
+        viewModel.refresh()
+        // The task's body runs on the main actor, so it cannot reach the
+        // matcher before this line hands the task over.
+        load.value = viewModel.loadDataTask
+        await load.value?.value
+
+        #expect(viewModel.tripDetails?.serviceDate == firstServiceDate)
+        #expect(viewModel.isLoading, "Only the load that replaced it may clear the spinner")
+        #expect(viewModel.operationError == nil)
+
+        // The load that replaced it publishes as usual.
+        viewModel.refresh()
+        await viewModel.loadDataTask?.value
+        #expect(viewModel.operationError == nil)
+        #expect(viewModel.tripDetails?.serviceDate == firstServiceDate.addingTimeInterval(86400))
+        #expect(!viewModel.isLoading)
+    }
+
+    // MARK: - Partial loads (#1548)
+
+    /// Registered before `createApplication`'s broad stubs, which answer the same
+    /// paths: `MockDataLoader` serves the first stub that matches.
+    private func failRequests(to path: String, dataLoader: MockDataLoader) {
+        dataLoader.mock(data: Data(), statusCode: 500) { request in
+            request.url?.path.contains(path) ?? false
+        }
+    }
+
+    /// The shape only draws the line on the map. Losing it used to throw away the
+    /// trip's details too, and with them the stop list.
+    @Test @MainActor
+    func `A failed route line still shows the stop list`() async throws {
+        let dataLoader = MockDataLoader(testName: name)
+        failRequests(to: "/api/where/shape", dataLoader: dataLoader)
+        let app = createApplication(dataLoader: dataLoader)
+        try #require(app.apiService != nil)
+        let viewModel = TripViewModel(application: app, tripConvertible: try makeTripConvertible())
+
+        viewModel.loadData()
+        await viewModel.loadDataTask?.value
+
+        #expect(viewModel.tripDetails?.stopTimes.count == 53)
+        #expect(viewModel.stopListState == .loaded)
+        #expect(viewModel.routePolylineCoordinates == nil)
+        #expect(viewModel.operationError != nil)
+    }
+
+    /// A stop list that failed to load is not one that doesn't exist: the rider
+    /// gets a retry, never "isn't available".
+    @Test @MainActor
+    func `A failed stop list offers a retry, and the retry shows it`() async throws {
+        let dataLoader = MockDataLoader(testName: name)
+        failRequests(to: "/api/where/trip-details", dataLoader: dataLoader)
+        let app = createApplication(dataLoader: dataLoader)
+        try #require(app.apiService != nil)
+        let viewModel = TripViewModel(application: app, tripConvertible: try makeTripConvertible())
+
+        #expect(viewModel.stopListState == .loading)
+        viewModel.loadData()
+        await viewModel.loadDataTask?.value
+
+        #expect(viewModel.tripDetails == nil)
+        #expect(viewModel.stopListState == .failed)
+
+        dataLoader.replaceMappedResponses { staging in
+            stubCommonEndpoints(dataLoader: staging)
+        }
+        viewModel.refresh()
+        await viewModel.loadDataTask?.value
+
+        #expect(viewModel.stopListState == .loaded)
+        #expect(viewModel.tripDetails?.stopTimes.count == 53)
+    }
+
+    // MARK: - Refresh button (#1581)
+
+    /// The page says when it was last updated, so the time must mean the trip's
+    /// data arrived, not merely that a request was made.
+    @Test @MainActor
+    func `The update time is set only once a load brings the trip back`() async throws {
+        let dataLoader = MockDataLoader(testName: name)
+        let app = createApplication(dataLoader: dataLoader)
+        try #require(app.apiService != nil)
+        let viewModel = TripViewModel(application: app, tripConvertible: try makeTripConvertible())
+
+        #expect(viewModel.lastUpdated == nil)
+
+        let before = Date()
+        viewModel.loadData()
+        await viewModel.loadDataTask?.value
+
+        let updated = try #require(viewModel.lastUpdated)
+        #expect(updated >= before)
+        #expect(updated <= Date())
+    }
+
+    /// A refresh that fails leaves the old trip on screen, so the page must keep
+    /// saying how old it is rather than claim it was just updated.
+    @Test @MainActor
+    func `A failed refresh keeps the previous update time`() async throws {
+        let dataLoader = MockDataLoader(testName: name)
+        let app = createApplication(dataLoader: dataLoader)
+        try #require(app.apiService != nil)
+        let viewModel = TripViewModel(application: app, tripConvertible: try makeTripConvertible())
+
+        viewModel.loadData()
+        await viewModel.loadDataTask?.value
+        let firstUpdate = try #require(viewModel.lastUpdated)
+
+        dataLoader.replaceMappedResponses { staging in
+            failRequests(to: "/api/where/trip-details", dataLoader: staging)
+            stubCommonEndpoints(dataLoader: staging)
+        }
+        viewModel.refresh()
+        await viewModel.loadDataTask?.value
+
+        #expect(viewModel.operationError != nil)
+        #expect(viewModel.lastUpdated == firstUpdate)
+    }
+
+    /// The refresh button disables itself off `isLoading`. Set inside the load's
+    /// task, it would stay `false` until that task first ran, leaving a window in
+    /// which a second tap starts a second load and cancels the first.
+    @Test @MainActor
+    func `A refresh reports loading as soon as it is asked for`() async throws {
+        let dataLoader = MockDataLoader(testName: name)
+        let app = createApplication(dataLoader: dataLoader)
+        try #require(app.apiService != nil)
+        let viewModel = TripViewModel(application: app, tripConvertible: try makeTripConvertible())
+
+        #expect(viewModel.isLoading == false)
+        viewModel.refresh()
+        #expect(viewModel.isLoading)
+
+        await viewModel.loadDataTask?.value
+        #expect(viewModel.isLoading == false)
     }
 }

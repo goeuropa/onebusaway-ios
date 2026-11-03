@@ -18,11 +18,15 @@ struct BookmarksNavigationHandler {
     let selectBookmark: (Bookmark) -> Void
     /// Presents the bookmark editor modal (row context menu).
     let editBookmark: (Bookmark) -> Void
-    /// Deletes the bookmark, reporting analytics first (row context menu; the
-    /// menu's nested confirm step has already happened by the time this runs).
+    /// Deletes the bookmark, reporting analytics first (row swipe action, or row
+    /// context menu, whose nested confirm step has already happened by the time
+    /// this runs).
     let deleteBookmark: (Bookmark) -> Void
     /// Starts a Live Activity tracking the bookmark on the Lock Screen.
     let trackBookmark: (Bookmark) -> Void
+    /// Pins or unpins the bookmark (row context menu). Pinning affects the home
+    /// sheet's bookmarks section only; this tab's ordering is unchanged.
+    let togglePin: (Bookmark) -> Void
     /// Whether the system allows starting Live Activities; gates the Track item.
     let liveActivitiesEnabled: () -> Bool
     /// Drives pull-to-refresh: kicks off a batch, returns when it completes,
@@ -56,6 +60,23 @@ struct BookmarksListView: View {
     @ObservedObject var viewModel: BookmarksViewModel
     let navigation: BookmarksNavigationHandler
 
+    /// Where this list is being shown. The two surfaces differ in chrome, not
+    /// in content: one parameter rather than a flag per difference, so the
+    /// call site says which screen it is and the differences stay listed
+    /// together in `list` below.
+    enum Presentation {
+        /// The Bookmarks tab: a full-screen plain list with pull-to-refresh.
+        case tab
+
+        /// The home sheet's Bookmarks index: inset-grouped cards matching the
+        /// Nearby and Recent index sheets, and no pull-to-refresh — a downward
+        /// drag there is the sheet's own dismiss gesture, so refreshing is a
+        /// toolbar button driving the same `navigation.refresh()`.
+        case sheet
+    }
+
+    var presentation: Presentation = .tab
+
     var body: some View {
         if viewModel.sections.isEmpty {
             let empty = viewModel.emptyState
@@ -65,7 +86,32 @@ struct BookmarksListView: View {
         }
     }
 
+    /// Branches rather than applying the modifiers conditionally: an installed
+    /// `.refreshable` shows the pull spinner whether or not its body does
+    /// anything, and `listStyle` has no "leave it alone" value. `presentation`
+    /// is fixed per call site, so the branch doesn't churn view identity.
+    @ViewBuilder
     private var list: some View {
+        switch presentation {
+        case .tab:
+            baseList
+                .listStyle(.plain)
+                .refreshable {
+                    await navigation.refresh()
+                }
+        case .sheet:
+            baseList
+                // The same chrome the Nearby and Recent index sheets wear, so
+                // all three read as one family. Pairs with
+                // `searchSheetBackground()` on the enclosing sheet.
+                .searchListChrome()
+                // Grouped styles uppercase section headers by default, which
+                // would shout the user's own group names back at them.
+                .textCase(nil)
+        }
+    }
+
+    private var baseList: some View {
         List {
             ForEach(viewModel.sections) { section in
                 Section {
@@ -78,10 +124,6 @@ struct BookmarksListView: View {
                     sectionHeader(section)
                 }
             }
-        }
-        .listStyle(.plain)
-        .refreshable {
-            await navigation.refresh()
         }
         .sensoryFeedback(.selection, trigger: viewModel.collapsedSectionIDs)
     }
@@ -110,8 +152,8 @@ struct BookmarksListView: View {
         .buttonStyle(.plain)
         .accessibilityLabel(section.title)
         .accessibilityValue(collapsed
-            ? OBALoc("stop_page.grouped.a11y_collapsed", value: "collapsed", comment: "VoiceOver value of a collapsible section header when its contents are hidden.")
-            : OBALoc("stop_page.grouped.a11y_expanded", value: "expanded", comment: "VoiceOver value of a collapsible section header when its contents are visible."))
+            ? OBALoc("stop_page.grouped.a11y_collapsed", value: "collapsed", comment: "VoiceOver value of a collapsible header or grouped route card whose contents are hidden.")
+            : OBALoc("stop_page.grouped.a11y_expanded", value: "expanded", comment: "VoiceOver value of a collapsible header or grouped route card whose contents are showing."))
     }
 
     // MARK: - Rows
@@ -127,6 +169,17 @@ struct BookmarksListView: View {
         .contentShape(Rectangle())
         .onTapGesture {
             navigation.selectBookmark(row.bookmark)
+        }
+        // Both row views announce `.isButton`, but `.onTapGesture` is invisible
+        // to assistive tech — without a default action VoiceOver says "button"
+        // and activating does nothing. Same contract as `DepartureRowView`.
+        .accessibilityAction {
+            navigation.selectBookmark(row.bookmark)
+        }
+        .swipeActions(edge: .trailing) {
+            Button(Strings.delete, role: .destructive) {
+                navigation.deleteBookmark(row.bookmark)
+            }
         }
         .contextMenu {
             contextMenuItems(for: row)
@@ -146,10 +199,14 @@ struct BookmarksListView: View {
                 navigation.trackBookmark(row.bookmark)
             } label: {
                 Label(
-                    OBALoc("bookmarks_controller.context_menu.track_live_activity", value: "Track", comment: "Action to start a Live Activity for a specific bookmark"),
-                    systemImage: "waveform.circle.fill"
+                    OBALoc("bookmarks_controller.context_menu.track_live_activity", value: "Track on Lock Screen", comment: "Action to start a Live Activity, which follows the next arrival for a specific bookmark on the Lock Screen"),
+                    systemImage: Icons.liveActivitySymbolName
                 )
             }
+        }
+
+        BookmarkPinButton(isPinned: row.isPinned) {
+            navigation.togglePin(row.bookmark)
         }
 
         Button {

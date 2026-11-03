@@ -7,16 +7,25 @@
 //  LICENSE file in the root directory of this source tree.
 //
 
+import AppIntents
 import Foundation
 import CoreLocation
 import OBAKitCore
-import Hyperconnectivity
 
 @objc(OBAAppConfig)
 public class AppConfig: CoreAppConfig {
 
     let analytics: Analytics?
     @objc public var pushServiceProvider: PushServiceProvider?
+
+    /// The app's App Shortcuts. OBAKit refreshes their bookmark parameter at
+    /// launch, on region change, and whenever bookmarks change. It has to be
+    /// declared in the app target: the metadata processor ignores an
+    /// `AppShortcutsProvider` inside a Swift package.
+    public var appShortcutsProvider: (any AppShortcutsProvider.Type)?
+
+    /// The raw `OBAKitConfig.LaunchRouteID`: a route the map opens on at launch. See `LaunchRouteGate`.
+    public let launchRouteID: String?
 
     /// Convenience initializer that pulls from the host application's main `Bundle`.
     /// - Parameter appBundle: The application `Bundle` from which initialization properties will be extracted.
@@ -40,7 +49,8 @@ public class AppConfig: CoreAppConfig {
             dataLoader: URLSession.shared,
             fixedRegionName: appBundle.fixedRegionName,
             fixedRegionOBABaseURL: appBundle.fixedRegionOBABaseURL,
-            defaultArrivalDepartureFilter: appBundle.defaultArrivalDepartureFilter
+            defaultArrivalDepartureFilter: appBundle.defaultArrivalDepartureFilter,
+            launchRouteID: appBundle.launchRouteID
         )
     }
 
@@ -54,6 +64,7 @@ public class AppConfig: CoreAppConfig {
     /// - Parameter locationService: The location service object.
     /// - Parameter bundledRegionsFilePath: The path to the `regions.json` file in the app bundle.
     /// - Parameter regionsAPIPath: The API Path on the Regions server to the regions file.
+    /// - Parameter onDemandSupport: Where the REST service records servers that lack `/api/ondemand`.
     public init(
         regionsBaseURL: URL?,
         apiKey: String,
@@ -67,9 +78,12 @@ public class AppConfig: CoreAppConfig {
         dataLoader: URLDataLoader,
         fixedRegionName: String? = nil,
         fixedRegionOBABaseURL: URL? = nil,
-        defaultArrivalDepartureFilter: ArrivalDepartureFilter = .all
+        defaultArrivalDepartureFilter: ArrivalDepartureFilter = .all,
+        launchRouteID: String? = nil,
+        onDemandSupport: OnDemandSupport = .shared
     ) {
         self.analytics = analytics
+        self.launchRouteID = launchRouteID
         super.init(
             regionsBaseURL: regionsBaseURL,
             apiKey: apiKey,
@@ -82,7 +96,8 @@ public class AppConfig: CoreAppConfig {
             dataLoader: dataLoader,
             fixedRegionName: fixedRegionName,
             fixedRegionOBABaseURL: fixedRegionOBABaseURL,
-            defaultArrivalDepartureFilter: defaultArrivalDepartureFilter
+            defaultArrivalDepartureFilter: defaultArrivalDepartureFilter,
+            onDemandSupport: onDemandSupport
         )
     }
 }

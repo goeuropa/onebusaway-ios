@@ -50,6 +50,28 @@ class Fixtures {
         NSData(contentsOfFile: path(to: file))! as Data
     }
 
+    /// Loads a REST fixture with `onDemandServiceIds` stamped on every stop
+    /// reference — or removed, for an empty `ids` — so a stop fetched from it
+    /// carries exactly that on-demand pointer set.
+    class func loadData(file: String, stampingOnDemandServiceIDs ids: [String]) throws -> Data {
+        var json = try JSONSerialization.jsonObject(with: loadData(file: file)) as? [String: Any] ?? [:]
+        var data = json["data"] as? [String: Any] ?? [:]
+        var references = data["references"] as? [String: Any] ?? [:]
+        let stops = references["stops"] as? [[String: Any]] ?? []
+        references["stops"] = stops.map { stop in
+            var stop = stop
+            if ids.isEmpty {
+                stop.removeValue(forKey: "onDemandServiceIds")
+            } else {
+                stop["onDemandServiceIds"] = ids
+            }
+            return stop
+        }
+        data["references"] = references
+        json["data"] = data
+        return try JSONSerialization.data(withJSONObject: json)
+    }
+
     class func loadRESTAPIPayload<T>(type: T.Type, fileName: String) throws -> T where T: Decodable {
         let data = loadData(file: fileName)
         let apiResponse = try JSONDecoder.RESTDecoder().decode(RESTAPIResponse<T>.self, from: data)
@@ -57,8 +79,17 @@ class Fixtures {
     }
 
     /// Builds an `ArrivalDeparture` from timestamps, defaulting the ~15 keys of
-    /// decoder boilerplate that no test cares about. Times are seconds since the
-    /// epoch; pass the predicted ones as `nil` to model a schedule-only trip.
+    /// decoder boilerplate that no test cares about. Pass the predicted times as
+    /// `nil` to model a schedule-only trip.
+    ///
+    /// - Note: `dictionaryToModel` uses a plain `JSONDecoder`, so these are
+    ///   `.deferredToDate` values — **seconds since Date's 2001 reference
+    ///   date**, not since the epoch, and not the `.millisecondsSince1970` that
+    ///   `JSONDecoder.RESTDecoder()` applies to real API payloads. The default
+    ///   below therefore lands in the 2050s, which is why fixtures built with it
+    ///   read as upcoming departures. Tests that care whether a departure is
+    ///   past or future should derive their values from
+    ///   `Date.timeIntervalSinceReferenceDate` rather than hard-coding one.
     ///
     /// `stopSequence` selects `arrivalDepartureStatus`: 0 is `.departing`,
     /// anything else `.arriving`.
@@ -68,7 +99,11 @@ class Fixtures {
         predictedArrival: Int? = nil,
         scheduledDeparture: Int = 1_700_000_000,
         predictedDeparture: Int? = nil,
-        stopSequence: Int = 5
+        stopSequence: Int = 5,
+        stopID: String = "stop_1",
+        routeID: String = "route_1",
+        tripID: String = "trip_1",
+        vehicleID: String = "vehicle_1"
     ) throws -> ArrivalDeparture {
         var dictionary: [String: Any] = [
             "arrivalEnabled": true,
@@ -78,21 +113,27 @@ class Fixtures {
             "lastUpdateTime": scheduledArrival,
             "numberOfStopsAway": 1,
             "predicted": predicted,
-            "routeId": "route_1",
+            "routeId": routeID,
             "scheduledArrivalTime": scheduledArrival,
             "scheduledDepartureTime": scheduledDeparture,
             "serviceDate": scheduledArrival,
             "situationIds": [],
             "status": "SCHEDULED",
-            "stopId": "stop_1",
+            "stopId": stopID,
             "stopSequence": stopSequence,
-            "tripId": "trip_1",
-            "vehicleId": "vehicle_1"
+            "tripId": tripID,
+            "vehicleId": vehicleID
         ]
         if let predictedArrival { dictionary["predictedArrivalTime"] = predictedArrival }
         if let predictedDeparture { dictionary["predictedDepartureTime"] = predictedDeparture }
 
         return try dictionaryToModel(type: ArrivalDeparture.self, dictionary: dictionary)
+    }
+
+    /// A trip carried by an arrival from `arrivalDeparture(...)`, with the same caveat:
+    /// no references are loaded, so `trip` is nil on it and only `tripID` is safe to read.
+    class func tripConvertible(stopID: String = "stop_1", tripID: String = "trip_1") throws -> TripConvertible {
+        TripConvertible(arrivalDeparture: try arrivalDeparture(stopID: stopID, tripID: tripID))
     }
 
     class func loadAlarm(id: String = "1234567890", region: String = "1") throws -> Alarm {
@@ -135,11 +176,70 @@ class Fixtures {
         return regions[0]
     }
 
+    /// Stubs the alerts feeds from `puget_sound_alerts.pb`, shaped the way the
+    /// servers shape them: each agency's REST feed holds only that agency's
+    /// alerts (plus any region-wide ones), and the Obaco regional feed holds
+    /// the whole file.
+    ///
+    /// Answering every agency with the whole file would make the client drop
+    /// the other agencies' alerts as `unknownAgency` and log an error for each
+    /// one — tens of thousands of lines per test run.
     class func stubAllAgencyAlerts(dataLoader: MockDataLoader) {
-        let agencyAlertsData = loadData(file: "puget_sound_alerts.pb")
-        dataLoader.mock(data: agencyAlertsData) { (request) -> Bool in
-            request.url!.absoluteString.contains("/api/gtfs_realtime/alerts-for-agency")
-            || request.url!.absoluteString.contains("alerts.pb")
+        let regionalData = loadData(file: "puget_sound_alerts.pb")
+        let regionalFeed = try! TransitRealtime_FeedMessage(serializedBytes: regionalData)
+
+        // The same selector AgencyAlert matches on: the first informed entity
+        // that names an agency. An empty ID is a region-wide alert.
+        func agencyID(_ entity: TransitRealtime_FeedEntity) -> String {
+            entity.alert.informedEntity.first(where: \.hasAgencyID)?.agencyID ?? ""
+        }
+        let regionWide = regionalFeed.entity.filter { agencyID($0).isEmpty }
+        let byAgency = Dictionary(grouping: regionalFeed.entity.filter { !agencyID($0).isEmpty }, by: agencyID)
+
+        func feedData(_ entities: [TransitRealtime_FeedEntity]) -> Data {
+            var feed = regionalFeed
+            feed.entity = entities + regionWide
+            return try! feed.serializedData()
+        }
+
+        for (id, entities) in byAgency {
+            let suffix = "/api/gtfs_realtime/alerts-for-agency/\(id).pb"
+            dataLoader.mock(data: feedData(entities)) { request in
+                request.url?.path.hasSuffix(suffix) ?? false
+            }
+        }
+
+        // Agencies with no alerts of their own. Registered after the
+        // per-agency mocks, since the first matching mock wins.
+        dataLoader.mock(data: feedData([])) { request in
+            request.url?.path.contains("/api/gtfs_realtime/alerts-for-agency/") ?? false
+        }
+
+        dataLoader.mock(data: regionalData) { request in
+            request.url?.absoluteString.contains("alerts.pb") ?? false
+        }
+    }
+
+    /// Answers the on-demand zones layer's `services-for-location` probe with
+    /// one Alexandria zone. Needed by any suite that pushes a viewport through
+    /// an `Application` whose `MapLayerRegistrar` has registered that layer:
+    /// the layer is on by default and probes on every viewport inside its zoom
+    /// window, and an unstubbed probe is a `MockDataLoader` fatalError.
+    ///
+    /// Also answers the full-geometry fetch for that zone's service. The
+    /// fixture's service matches any probe point, so once a viewport settles in
+    /// front of a `MapViewController`, `OnDemandProbeController` follows its
+    /// point probe with `service/5088_77652.json?geometryDetail=full`. That
+    /// fetch runs in an unstructured task inside `OnDemandGeometryCache`, so it
+    /// can land after the test body has returned and outlive the controller
+    /// that asked for it; a stub is the only thing that keeps it from trapping
+    /// whenever it arrives.
+    class func stubOnDemandViewportProbe(dataLoader: MockDataLoader) {
+        dataLoader.mock(data: loadData(file: "ondemand_services_for_location_viewport.json")) { request in
+            request.url?.path.contains("/api/ondemand/services-for-location") ?? false
+        }
+        dataLoader.mock(data: loadData(file: "ondemand_service_alexandria.json")) { request in
+            request.url?.path.contains("/api/ondemand/service/5088_77652.json") ?? false
         }
     }
 
@@ -148,7 +248,16 @@ class Fixtures {
             "agencyId": "test_agency",
             "id": id,
             "shortName": "1",
-            "type": 3
+            "type": 3,
+            "agency": [
+                "id": "test_agency",
+                "name": "Test Agency",
+                "lang": "en",
+                "phone": "555-0000",
+                "privateService": false,
+                "timezone": "America/Los_Angeles",
+                "url": "https://example.com"
+            ]
         ]
         return try dictionaryToModel(type: Route.self, dictionary: dictionary)
     }

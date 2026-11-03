@@ -24,6 +24,12 @@ class TripViewController: UIViewController,
 
     let viewModel: TripViewModel
 
+    /// The stop a shared trip link named as the sharer's exit, or `nil` for every
+    /// other way into this screen. Read by `TripFloatingPanelController` and the
+    /// map's stop pins when they decide which row carries the destination marker.
+    /// See #449.
+    var destinationStopID: StopID? { viewModel.destinationStopID }
+
     var tripConvertible: TripConvertible { viewModel.tripConvertible }
 
     private var cancellables = Set<AnyCancellable>()
@@ -38,11 +44,14 @@ class TripViewController: UIViewController,
         registerTraitChangeCallback()
     }
 
-    init(application: Application, arrivalDeparture: ArrivalDeparture) {
+    /// - Parameter destinationStopID: Where the sharer said they will step off,
+    ///   when this trip was opened from a shared link that named one. See #449.
+    init(application: Application, arrivalDeparture: ArrivalDeparture, destinationStopID: StopID? = nil) {
         self.application = application
         self.viewModel = TripViewModel(
             application: application,
-            tripConvertible: TripConvertible(arrivalDeparture: arrivalDeparture)
+            tripConvertible: TripConvertible(arrivalDeparture: arrivalDeparture),
+            destinationStopID: destinationStopID
         )
 
         super.init(nibName: nil, bundle: nil)
@@ -120,6 +129,10 @@ class TripViewController: UIViewController,
 
     // MARK: - NSUserActivity
 
+    /// The builder's `userInfo` for the published activity, which
+    /// `updateUserActivityState(_:)` puts back.
+    private var activityUserInfo: [AnyHashable: Any]?
+
     /// Creates and assigns an `NSUserActivity` object corresponding to this trip.
     private func beginUserActivity() {
         guard
@@ -129,7 +142,21 @@ class TripViewController: UIViewController,
             return
         }
 
+        // Stashed first: once the activity is assigned, UIKit may call the override at any save.
+        activityUserInfo = activity.userInfo
         self.userActivity = activity
+        // Asks UIKit to call `updateUserActivityState(_:)` at its next save.
+        activity.needsSave = true
+    }
+
+    /// Puts back the trip and region, which UIKit clears before calling this. The
+    /// activity needs them to route in a region without a sidecar.
+    /// See: https://developer.apple.com/documentation/uikit/uiresponder/useractivity
+    override func updateUserActivityState(_ activity: NSUserActivity) {
+        super.updateUserActivityState(activity)
+        if let activityUserInfo {
+            activity.addUserInfoEntries(from: activityUserInfo)
+        }
     }
 
     // MARK: Previewable
@@ -152,10 +179,6 @@ class TripViewController: UIViewController,
 
         tripDetailsController.listView.applyData()
     }
-
-    // MARK: - Idle Timer
-
-    public var idleTimerFailsafe: Timer?
 
     // MARK: - Title View
 
@@ -255,9 +278,8 @@ class TripViewController: UIViewController,
     }
 
     func showStopOnMap(_ tripStop: TripStopViewModel) {
-        self.floatingPanel.move(to: .half, animated: true) {
-            self.skipNextStopTimeHighlight = true
-            self.selectedStopTime = tripStop.stopTime
+        floatingPanel.move(to: .half, animated: true) { [weak self] in
+            self?.selectedStopTime = tripStop.stopTime
         }
     }
 
@@ -277,7 +299,23 @@ class TripViewController: UIViewController,
             }
 
             if let vehicleAnnotation = vehicleAnnotation {
+                // `tripStatus`'s didSet writes lastKnownLocation onto coordinate
+                // immediately. Restore `from` so `VehicleCoordinateUpdate` can
+                // interpolate instead of teleporting (#1341) — same pattern as
+                // `TripFocusMapLayer.drawVehicle`.
+                let from = vehicleAnnotation.coordinate
                 vehicleAnnotation.tripStatus = currentTripStatus
+                vehicleAnnotation.coordinate = from
+                // No lastKnownLocation → drop the pin, matching `TripFocusMapLayer`
+                // (`removeVehicle()` when the feed omits a coordinate). Keeping a
+                // stale real coordinate used to drag `showAnnotations` zoom and
+                // skip the null-island filter that the old `(0,0)` fallback hit.
+                guard let to = currentTripStatus.lastKnownLocation?.coordinate else {
+                    removeVehicleAnnotation()
+                    updateTitleView()
+                    return
+                }
+                VehicleCoordinateUpdate.apply(from: from, to: to, on: vehicleAnnotation)
                 // Update the annotation view's heading and real-time state since
                 // the annotation property didSet on the view won't re-fire.
                 if let vehicleAnnotationView = vehicleAnnotationView as? PulsingVehicleAnnotationView {
@@ -285,6 +323,11 @@ class TripViewController: UIViewController,
                 }
             }
             else {
+                // Don't mint a pin on null island when the feed has no location yet.
+                guard currentTripStatus.lastKnownLocation != nil else {
+                    updateTitleView()
+                    return
+                }
                 vehicleAnnotation = VehicleAnnotation(tripStatus: currentTripStatus)
                 self.mapView.addAnnotation(vehicleAnnotation!)
             }
@@ -337,25 +380,34 @@ class TripViewController: UIViewController,
         return map
     }()
 
+    /// Armed by `selectedStopTime`'s `didSet` immediately before a programmatic
+    /// `selectAnnotation`, and consumed by the `didSelect` it provokes. Riders never
+    /// assign `selectedStopTime` — their taps arrive as `didSelect` — so every
+    /// selection this controller makes itself is one the rider did not ask for and
+    /// must not open a stop page.
     public var skipNextStopTimeHighlight = false
+
     public func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
         guard let stopTime = view.annotation as? TripStopTime else { return }
         defer { skipNextStopTimeHighlight = false }
-        guard !skipNextStopTimeHighlight else { return }
-
-        func mapViewAnnotationSelectionComplete() {
-            self.tripDetailsController.highlightStopInList(stopTime.stop)
+        if skipNextStopTimeHighlight {
+            // Programmatic select leaves the pin selected. MapKit will not
+            // re-fire `didSelect` for an already-selected annotation, so the
+            // first tap on the origin stop would do nothing.
+            mapView.deselectAnnotation(view.annotation, animated: false)
+            return
         }
 
-        if self.mapView.hasBeenTouched {
-            mapViewAnnotationSelectionComplete()
+        // Scroll the list without blinking the row: `openStop` pushes the stop page on
+        // the next line, so the delayed blink would play underneath it and be over
+        // before the rider comes back. The scroll still leaves the row on screen for them.
+        if let stopTimes = tripDetailsController.tripDetails?.stopTimes,
+           let stopIndex = stopTimes.firstIndex(where: { $0 == stopTime }) {
+            tripDetailsController.highlightStopInList(stopTime.stop, stopIndex: stopIndex, blinksAfterScroll: false)
         } else {
-            if traitCollection.horizontalSizeClass == .regular {
-                floatingPanel.move(to: .full, animated: true, completion: mapViewAnnotationSelectionComplete)
-            } else {
-                floatingPanel.move(to: .half, animated: true, completion: mapViewAnnotationSelectionComplete)
-            }
+            tripDetailsController.highlightStopInList(stopTime.stop, blinksAfterScroll: false)
         }
+        openStop(stopTime, on: mapView)
     }
 
     public func mapView(_ mapView: MKMapView, didDeselect view: MKAnnotationView) {
@@ -365,14 +417,24 @@ class TripViewController: UIViewController,
         self.selectedStopTime = nil
     }
 
-    public func mapView(_ mapView: MKMapView, annotationView view: MKAnnotationView, calloutAccessoryControlTapped control: UIControl) {
-        guard let stopTime = view.annotation as? TripStopTime else { return }
-
+    private func openStop(_ stopTime: TripStopTime, on mapView: MKMapView) {
         var transferContext: TransferContext?
         if let arrivalDeparture = tripConvertible.arrivalDeparture,
            stopTime.stopID != arrivalDeparture.stopID {
             transferContext = .from(arrivalDeparture: arrivalDeparture, arrivalDate: stopTime.arrivalDate)
         }
+
+        // Same reason as `MapViewController`: leaving the tapped pin selected
+        // only strands a highlight. MapKit will not fire `didSelect` again.
+        mapView.deselectAnnotation(stopTime, animated: false)
+
+        // Callouts are off here, so selection is the open gesture — the same case
+        // `MapViewController` reports when a stop annotation has no chevron to tap.
+        application.analytics?.reportEvent(
+            pageURL: "app://localhost/trip",
+            label: AnalyticsLabels.mapStopAnnotationTapped,
+            value: nil
+        )
 
         application.viewRouter.navigateTo(stop: stopTime.stop, from: self, transferContext: transferContext)
     }
@@ -382,28 +444,25 @@ class TripViewController: UIViewController,
     public func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
         let renderer = MKPolylineRenderer(polyline: overlay as! MKPolyline) // swiftlint:disable:this force_cast
 
-        // Tries to use an agency provided color, if available.
-        var strokeColor = tripConvertible.arrivalDeparture?.route.color ?? ThemeColors.shared.brand
-
-        // If the user has High Contrast or Reduce Transparency turned ON in iOS,
-        // don't apply the transparency to the stroke color.
+        let isSpent = (overlay as? TripShapeOverlay)?.isSpent ?? false
         let needsIncreasedVisibility =
             traitCollection.userInterfaceStyle == .dark ||
             traitCollection.accessibilityContrast == .high ||
             UIAccessibility.isReduceTransparencyEnabled
 
-        if !needsIncreasedVisibility {
-            strokeColor = strokeColor.withAlphaComponent(0.75)
-        }
-        renderer.strokeColor = strokeColor
-
-        renderer.lineWidth = 6.0
+        let appearance = TripRouteOverlayAppearance.make(
+            isSpent: isSpent,
+            routeColor: routeColor,
+            needsIncreasedVisibility: needsIncreasedVisibility
+        )
+        renderer.strokeColor = appearance.strokeColor
+        renderer.lineWidth = appearance.lineWidth
         renderer.lineCap = .round
 
         return renderer
     }
 
-    private var routeOverlay: MKPolyline?
+    private var routeOverlays: [MKOverlay] = []
     private var userLocationAnnotationView: PulsingAnnotationView?
 
     private var vehicleAnnotationView: PulsingAnnotationView?
@@ -425,22 +484,17 @@ class TripViewController: UIViewController,
         else if let annotationView = annotationView as? PulsingAnnotationView {
             userLocationAnnotationView = annotationView
         }
-        else if let view = annotationView as? MinimalStopAnnotationView, let arrivalDeparture = tripConvertible.arrivalDeparture {
-            view.selectedArrivalDeparture = arrivalDeparture
-
-            if let stopTime = annotation as? TripStopTime {
-                view.rightCalloutAccessoryView = UIButton.chevronButton
-
-                let calloutLabel = UILabel.autolayoutNew()
-                calloutLabel.textColor = ThemeColors.shared.secondaryLabel
-                calloutLabel.text = application.formatters.timeFormatter.string(from: stopTime.arrivalDate)
-                view.detailCalloutAccessoryView = calloutLabel
-            }
-
-            view.canShowCallout = true
+        else if let view = annotationView as? MinimalStopAnnotationView, let stopTime = annotation as? TripStopTime {
+            TripMapAnnotationPolicy.apply(to: view)
+            markStopPin(view, for: stopTime)
         }
 
         return annotationView
+    }
+
+    /// The route's color, for its line and the stop pins marked on it.
+    private var routeColor: UIColor {
+        tripConvertible.arrivalDeparture?.route?.color ?? ThemeColors.shared.brand
     }
 
     private func reuseIdentifier(for annotation: MKAnnotation) -> String? {
@@ -463,18 +517,85 @@ class TripViewController: UIViewController,
             }
             self.mapView.deselectAnnotation(oldValue, animated: animated)
 
-            guard oldValue != self.selectedStopTime,
-                let selectedStopTime = self.selectedStopTime else { return }
+            guard let selectedStopTime = self.selectedStopTime else { return }
 
             // Fixes #220: Find matching trip stop using stop ID instead of using pointers.
             if let annotation = self.mapView.annotations
                 .filter(type: TripStopTime.self)
                 .filter({ $0.stopID == selectedStopTime.stopID }).first {
+                // Arm the skip here rather than at the call sites: this is the only
+                // statement that can provoke `didSelect`, so an arm can never outlive
+                // an assignment that found no annotation to select.
+                skipNextStopTimeHighlight = true
                 self.mapView.selectAnnotation(annotation, animated: true)
             }
         }
     }
     private var isFirstStopTimeLoad = true
+    private var hasAppliedOriginStopSelection = false
+
+    /// Selects the rider's origin stop when trip details first arrive, and only then.
+    ///
+    /// `$tripDetails` republishes about every 30 seconds. A second programmatic select
+    /// would fire `didSelect` → `openStop` and push the stop page out from under
+    /// whatever the rider is doing. There is no rider selection to compare against
+    /// either: the load-time select is torn down inside its own call stack, because
+    /// `didSelect` consumes the skip, deselects the pin, and `didDeselect` clears
+    /// `selectedStopTime`.
+    func applyOriginStopSelection(from details: TripDetails) {
+        guard !hasAppliedOriginStopSelection else { return }
+        guard let arrivalDeparture = tripConvertible.arrivalDeparture else { return }
+        guard let origin = details.stopTimes.first(where: { $0.stopID == arrivalDeparture.stopID }) else { return }
+
+        hasAppliedOriginStopSelection = true
+        selectedStopTime = origin
+    }
+
+    // MARK: - Stop Pin Marks
+
+    /// What the stop pins are marked from. Kept here rather than read off
+    /// `viewModel`: `@Published` emits before its property changes, so inside a
+    /// sink the view model still holds the previous load.
+    private var stopMarks = TripMapAnnotationPolicy.StopMarks()
+
+    /// Resolves which pins to mark from a load, and re-marks the pins already on
+    /// the map. Run before `updateAnnotations`, so the pins it adds are marked
+    /// from this load too. See #449, #1513.
+    func applyStopMarks(from details: TripDetails) {
+        stopMarks.destinationArrival = nil
+        stopMarks.stopTimes = details.stopTimes
+        stopMarks.riderStops = TripStopListModel.riderStops(
+            in: details.stopTimes,
+            arrivalDeparture: tripConvertible.arrivalDeparture,
+            sharedDestinationStopID: destinationStopID
+        )
+        remarkStopPins()
+    }
+
+    /// Puts the shared destination's arrival on its pin, or takes it off when `nil`.
+    func applyDestinationArrival(_ arrival: ArrivalDeparture?) {
+        stopMarks.destinationArrival = arrival
+        remarkStopPins()
+    }
+
+    private func markStopPin(_ view: MinimalStopAnnotationView, for stopTime: TripStopTime) {
+        view.configure(
+            marking: stopMarks.marking(for: stopTime),
+            routeColor: routeColor,
+            arrival: stopMarks.arrival(for: stopTime).map {
+                DepartureTimeBadge.Configuration(withArrivalDeparture: $0, formatters: application.formatters)
+            }
+        )
+    }
+
+    /// `viewFor` marks a pin when MapKit makes its view, but a refresh keeps every
+    /// annotation whose stop time did not change, and the view along with it.
+    private func remarkStopPins() {
+        for stopTime in mapView.annotations.filter(type: TripStopTime.self) {
+            guard let view = mapView.view(for: stopTime) as? MinimalStopAnnotationView else { continue }
+            markStopPin(view, for: stopTime)
+        }
+    }
 }
 
 // MARK: - ViewModel Binding
@@ -495,6 +616,7 @@ private extension TripViewController {
                 floatingPanel.surfaceView.grabberHandle.isHidden = details == nil
                 guard let details else { return }
                 tripDetailsController.tripDetails = details
+                applyStopMarks(from: details)
                 mapView.updateAnnotations(with: details.stopTimes)
                 currentTripStatus = details.status
 
@@ -504,26 +626,43 @@ private extension TripViewController {
                     mapView.showAnnotations(annotationsToShow, animated: true)
                 }
 
-                if let arrivalDeparture = tripConvertible.arrivalDeparture {
-                    selectedStopTime = details.stopTimes.filter { $0.stopID == arrivalDeparture.stopID }.first
-                }
+                applyOriginStopSelection(from: details)
+            }
+            .store(in: &cancellables)
+
+        viewModel.$destinationArrivalDeparture
+            .sink { [weak self] arrival in
+                guard let self else { return }
+                tripDetailsController.destinationArrivalDeparture = arrival
+                applyDestinationArrival(arrival)
             }
             .store(in: &cancellables)
     }
 
     func bindRouteOverlay() {
         viewModel.$routePolylineCoordinates
-            .compactMap { $0 }
-            .sink { [weak self] coordinates in
-                guard let self else { return }
-                if let existing = routeOverlay { mapView.removeOverlay(existing) }
-                let polyline = MKPolyline(coordinates: coordinates, count: coordinates.count)
-                routeOverlay = polyline
-                mapView.addOverlay(polyline)
+            .combineLatest(viewModel.$tripDetails)
+            .sink { [weak self] coordinates, details in
+                guard let self, let coordinates, coordinates.count >= 2 else { return }
+
+                let fraction = details?.status.flatMap {
+                    TripShapeSplit.fraction(
+                        distanceAlongTrip: $0.distanceAlongTrip,
+                        totalDistanceAlongTrip: $0.totalDistanceAlongTrip
+                    )
+                }
+
+                mapView.removeOverlays(routeOverlays)
+                let overlays = TripRouteOverlays.make(coordinates: coordinates, fraction: fraction)
+                routeOverlays = overlays
+                mapView.addOverlays(overlays)
+
                 if !mapView.hasBeenTouched {
+                    let fit = overlays.reduce(MKMapRect.null) { $0.union($1.boundingMapRect) }
+                    guard !fit.isNull else { return }
                     mapView.visibleMapRect = mapView.mapRectThatFits(
-                        polyline.boundingMapRect,
-                        edgePadding: UIEdgeInsets(top: 60, left: 20, bottom: 128, right: 20)
+                        fit,
+                        edgePadding: mapView.edgePadding(top: 60, horizontal: 20, bottom: 128)
                     )
                 }
             }

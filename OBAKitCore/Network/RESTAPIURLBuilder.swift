@@ -159,6 +159,28 @@ extension RESTAPIURLBuilder {
         ])
     }
 
+    /// Creates a full URL for a stop-code search across a coordinate region.
+    ///
+    /// Uses `latSpan`/`lonSpan` instead of `radius` so the query can cover an
+    /// entire agency region. The circular overload caps radius at 15 km, which
+    /// drops same-code stops at distant agencies (#1432).
+    ///
+    /// - API Endpoint: `/api/where/stops-for-location.json`
+    ///
+    /// - Parameters:
+    ///   - region: The coordinate region to search within.
+    ///   - query: A stop code / stop number query.
+    /// - Returns: An URL suitable for making a request to retrieve information.
+    public func getStops(region: MKCoordinateRegion, query: String) -> URL {
+        generateURL(path: getStopsAPIPath, params: [
+            "lat": region.center.latitude,
+            "lon": region.center.longitude,
+            "latSpan": region.span.latitudeDelta,
+            "lonSpan": region.span.longitudeDelta,
+            "query": query
+        ])
+    }
+
     /// Creates a full URL for the `getStop` API call, including query params.
     ///
     /// - API Endpoint: `/api/where/stop/{id}.json`
@@ -259,6 +281,20 @@ extension RESTAPIURLBuilder {
         ))
     }
 
+    /// Creates a full URL for the `getStopsForAgency` API call, including query params.
+    ///
+    /// - API Endpoint: `/api/where/stops-for-agency/{id}.json`
+    ///
+    /// - Parameters:
+    ///   - id: The agency ID.
+    /// - Returns: An URL suitable for making a request to retrieve information.
+    public func getStopsForAgency(id: String) -> URL {
+        generateURL(path: String(
+            format: "/api/where/stops-for-agency/%@.json",
+            NetworkHelpers.escapePathVariable(id)
+        ))
+    }
+
     /// Creates a full URL for the `getRoute` API call, including query params.
     ///
     /// - API Endpoint: `/api/where/routes-for-location.json`
@@ -309,6 +345,15 @@ extension RESTAPIURLBuilder {
     /// - Returns: An URL suitable for making a request to retrieve information.
     public func getAgenciesWithCoverage() -> URL {
         generateURL(path: "/api/where/agencies-with-coverage.json")
+    }
+
+    /// Creates a full URL for the server's `config` API call.
+    ///
+    /// - API Endpoint: `/api/where/config.json`
+    ///
+    /// - Returns: An URL suitable for making a request to retrieve information.
+    public func getConfig() -> URL {
+        generateURL(path: "/api/where/config.json")
     }
 
     // MARK: - Schedules
@@ -442,6 +487,61 @@ extension RESTAPIURLBuilder {
         }
 
         return generateURL(path: apiPath, params: args)
+    }
+
+    // MARK: - On-demand
+
+    /// Creates a full URL for the `getOnDemandService` API call.
+    ///
+    /// - API Endpoint: `/api/ondemand/service/{id}.json`
+    ///
+    /// - Parameters:
+    ///   - id: The combined on-demand service ID.
+    ///   - geometryDetail: How much zone geometry to embed in the references.
+    /// - Returns: An URL suitable for making a request to retrieve information.
+    public func getOnDemandService(id: String, geometryDetail: OnDemandGeometryDetail) -> URL {
+        generateURL(
+            path: String(format: "/api/ondemand/service/%@.json", NetworkHelpers.escapePathVariable(id)),
+            params: ["geometryDetail": geometryDetail.rawValue]
+        )
+    }
+
+    /// Creates a full URL for the `getOnDemandServices(agencyID:)` API call.
+    ///
+    /// - API Endpoint: `/api/ondemand/services-for-agency/{id}.json`
+    public func getOnDemandServices(agencyID: String, geometryDetail: OnDemandGeometryDetail) -> URL {
+        generateURL(
+            path: String(format: "/api/ondemand/services-for-agency/%@.json", NetworkHelpers.escapePathVariable(agencyID)),
+            params: ["geometryDetail": geometryDetail.rawValue]
+        )
+    }
+
+    /// Creates a full URL for the `getOnDemandServices(region:)` API call, in
+    /// the server's viewport mode (`latSpan`/`lonSpan`, no `radius`).
+    ///
+    /// - API Endpoint: `/api/ondemand/services-for-location.json`
+    public func getOnDemandServices(region: MKCoordinateRegion, geometryDetail: OnDemandGeometryDetail) -> URL {
+        generateURL(path: "/api/ondemand/services-for-location.json", params: [
+            "lat": region.center.latitude,
+            "lon": region.center.longitude,
+            "latSpan": region.span.latitudeDelta,
+            "lonSpan": region.span.longitudeDelta,
+            "geometryDetail": geometryDetail.rawValue
+        ])
+    }
+
+    /// Creates a full URL for the `getOnDemandServices(near:radiusMeters:)` API
+    /// call, in the server's point mode (`radius`, no span). The server lets a
+    /// positive radius win over a span, so none is sent.
+    ///
+    /// - API Endpoint: `/api/ondemand/services-for-location.json`
+    public func getOnDemandServices(near coordinate: CLLocationCoordinate2D, radiusMeters: Double, geometryDetail: OnDemandGeometryDetail) -> URL {
+        generateURL(path: "/api/ondemand/services-for-location.json", params: [
+            "lat": coordinate.latitude,
+            "lon": coordinate.longitude,
+            "radius": radiusMeters,
+            "geometryDetail": geometryDetail.rawValue
+        ])
     }
 
     // MARK: - Survey API URL Builders

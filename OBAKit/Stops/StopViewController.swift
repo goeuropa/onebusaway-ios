@@ -43,6 +43,7 @@ public class StopViewController: UIViewController,
         case survey
         case emptyData
         case serviceAlerts
+        case onDemandServices
         case pastArrivalDepartures(suffix: String)
         case arrivalDepartures(suffix: String)
         case loadMoreButton
@@ -96,6 +97,13 @@ public class StopViewController: UIViewController,
         set { viewModel.transferContext = newValue }
     }
 
+    /// Honors Settings > Arrival & Departure Display > transfer banner. When the rider
+    /// turns that off, the stop page ignores the trip-sourced transfer context
+    /// so times are wall-clock and the full list is shown (#1277).
+    private var displayedTransferContext: TransferContext? {
+        application.userDataStore.displayedTransferContext(transferContext)
+    }
+
     var stop: Stop? { viewModel.stop }
     var stopArrivals: StopArrivals? { viewModel.stopArrivals }
     var stopPreferences: StopPreferences { viewModel.stopPreferences }
@@ -105,8 +113,15 @@ public class StopViewController: UIViewController,
     var operationError: Error? { viewModel.operationError }
     var isBrokenBookmark: Bool { viewModel.isBrokenBookmark }
 
+    /// The server has no stop at this ID, with or without a bookmark behind it.
+    var stopIsMissing: Bool { viewModel.stopIsMissing }
+
     /// Controls whether departures before the transfer arrival time are visible (local UI state).
     private var showAllTransferDepartures = false
+
+    /// What `$onDemandServices` last emitted. `@Published` emits before the
+    /// view model stores the value, so the list reads this copy instead.
+    private var displayedOnDemandServices: [OnDemandService] = []
 
     private var schedulesButton: UIBarButtonItem?
 
@@ -179,8 +194,8 @@ public class StopViewController: UIViewController,
 
         NSLayoutConstraint.activate([
             statusLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 4),
-            statusLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
-            statusLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            statusLabel.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
+            statusLabel.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
 
             listView.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 4),
             listView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -218,15 +233,7 @@ public class StopViewController: UIViewController,
         super.viewDidAppear(animated)
 
         if let schedulesButton {
-            scheduleTipPresenter.showIfNeeded(sourceItem: schedulesButton) { [weak self] vc in
-                guard let self else { return }
-                present(vc, animated: animated)
-            } presentedController: { [weak self] in
-                guard let self else { return nil }
-                return self.presentedViewController
-            } dismiss: { vc in
-                vc.dismiss(animated: animated)
-            }
+            scheduleTipPresenter.showIfNeeded(in: self, sourceItem: schedulesButton, animated: animated)
         }
     }
 
@@ -234,15 +241,12 @@ public class StopViewController: UIViewController,
         super.viewWillDisappear(animated)
         enableIdleTimer()
         viewModel.deactivate()
+        scheduleTipPresenter.stop()
     }
 
     // MARK: - Tips
 
     private let scheduleTipPresenter = TipPresenter(tip: ScheduleTip())
-
-    // MARK: - Idle Timer
-
-    public var idleTimerFailsafe: Timer?
 
     // MARK: - Options Nudge
     private func showSwipeOptionsNudge(on cell: StopArrivalCell) {
@@ -312,7 +316,7 @@ public class StopViewController: UIViewController,
         }
 
         let filterMenuButton = UIBarButtonItem(title: filterButtonTitle, image: filterButtonImage, menu: filterMenu())
-        let moreMenuButton = UIBarButtonItem(title: "MORE", image: UIImage(systemName: "ellipsis.circle"), menu: pulldownMenu())
+        let moreMenuButton = UIBarButtonItem(title: Strings.more, image: UIImage(systemName: "ellipsis.circle"), menu: pulldownMenu())
         let schedulesBtn = UIBarButtonItem(image: UIImage(systemName: "calendar"), style: .plain, target: self, action: #selector(showScheduleForStop))
         schedulesBtn.accessibilityLabel = Strings.schedules
         self.schedulesButton = schedulesBtn
@@ -348,11 +352,12 @@ public class StopViewController: UIViewController,
         var children = [showAll]
 
         if stop.routes.count > 1 {
-            if viewModel.isListFiltered && viewModel.stopPreferences.hasHiddenRoutes {
-                showFiltered.image = UIImage(systemName: "checkmark")
-            } else {
-                showAll.image = UIImage(systemName: "checkmark")
-            }
+            // `state`, not a checkmark image: it draws the same checkmark but is
+            // also what VoiceOver reads as "selected". An image is decoration the
+            // accessibility layer never announces.
+            let routesAreFiltered = viewModel.isListFiltered && viewModel.stopPreferences.hasHiddenRoutes
+            showFiltered.state = routesAreFiltered ? .on : .off
+            showAll.state = routesAreFiltered ? .off : .on
 
             children.append(showFiltered)
         }
@@ -375,7 +380,7 @@ public class StopViewController: UIViewController,
             alertsAction.attributes = .disabled
         }
 
-        return UIMenu(title: "File", options: .displayInline, children: [bookmarkAction, alertsAction])
+        return UIMenu(title: StopMenuTitles.file, options: .displayInline, children: [bookmarkAction, alertsAction])
     }
 
     fileprivate func locationMenu() -> UIMenu {
@@ -418,7 +423,25 @@ public class StopViewController: UIViewController,
             walkingDirectionsElement = UIMenu(title: walkingDirectionsTitle, image: walkingDirectionsImage, children: walkingDirectionActions)
         }
 
-        return UIMenu(title: "Location", options: .displayInline, children: [nearbyAction, walkingDirectionsElement])
+        var locationChildren: [UIMenuElement] = [nearbyAction, walkingDirectionsElement]
+
+        if StopTripPlannerAction.canPresent(application: application, from: self), let stop {
+            let directionsToHere = UIAction(
+                title: StopTripPlannerAction.directionsToHereTitle,
+                image: UIImage(systemName: "arrow.triangle.turn.up.right.diamond")
+            ) { [unowned self] _ in
+                StopTripPlannerAction.present(.directionsToStop, stop: stop, application: self.application, from: self)
+            }
+            let directionsFromHere = UIAction(
+                title: StopTripPlannerAction.directionsFromHereTitle,
+                image: UIImage(systemName: "arrow.triangle.turn.up.right.diamond.fill")
+            ) { [unowned self] _ in
+                StopTripPlannerAction.present(.directionsFromStop, stop: stop, application: self.application, from: self)
+            }
+            locationChildren.append(contentsOf: [directionsToHere, directionsFromHere])
+        }
+
+        return UIMenu(title: StopMenuTitles.location, options: .displayInline, children: locationChildren)
     }
 
     fileprivate func sortMenu() -> UIMenu {
@@ -435,10 +458,8 @@ public class StopViewController: UIViewController,
             self.viewModel.updateSortType(.route)
         }
 
-        switch currentSort {
-        case .time:  sortByTime.image =  Icons.checkmark
-        case .route: sortByRoute.image = Icons.checkmark
-        }
+        sortByTime.state = currentSort == .time ? .on : .off
+        sortByRoute.state = currentSort == .route ? .on : .off
 
         let sortMenuTitle = OBALoc("stop_preferences_controller.sorting_section.header_title", value: "Sort By", comment: "Title of the Sorting section")
         return UIMenu(title: sortMenuTitle, image: Icons.sort, children: [sortByTime, sortByRoute])
@@ -458,12 +479,12 @@ public class StopViewController: UIViewController,
                 self.viewModel.updateArrivalDepartureFilter(filter)
                 self.dataDidReload()
             }
-            if filter == currentFilter { action.image = Icons.checkmark }
+            action.state = filter == currentFilter ? .on : .off
             return action
         }
 
         let menuTitle = OBALoc("stop_controller.arrival_filter.menu_title", value: "Departure Type", comment: "Title for the menu that filters departures by data type")
-        return UIMenu(title: menuTitle, image: Icons.departureType, children: actions)
+        return UIMenu(title: menuTitle, image: Icons.departureType(isActive: currentFilter != .all), children: actions)
     }
 
     fileprivate func helpMenu() -> UIMenu {
@@ -471,10 +492,14 @@ public class StopViewController: UIViewController,
             self.showReportProblem()
         }
 
-        return UIMenu(title: "Help", options: .displayInline, children: [reportButton])
+        return UIMenu(title: StopMenuTitles.help, options: .displayInline, children: [reportButton])
     }
 
     // MARK: - NSUserActivity
+
+    /// The builder's `userInfo` for the published activity, from the same build, so
+    /// it names the same stop and region as the activity's identifier and URL.
+    private var activityUserInfo: [AnyHashable: Any]?
 
     /// Creates and assigns an `NSUserActivity` object corresponding to this stop.
     private func beginUserActivity() {
@@ -483,14 +508,32 @@ public class StopViewController: UIViewController,
               let userActivityBuilder = application.userActivityBuilder
         else { return }
 
-        self.userActivity = userActivityBuilder.userActivity(for: stop, region: region)
+        let activity = userActivityBuilder.userActivity(for: stop, region: region)
+        // Stashed first: once the activity is assigned, UIKit may call the override at any save.
+        activityUserInfo = activity.userInfo
+        self.userActivity = activity
+        // Asks UIKit to call `updateUserActivityState(_:)` at its next save.
+        activity.needsSave = true
+    }
+
+    /// Puts back the stop and region, which UIKit clears before calling this. A
+    /// suggestion needs them to route in a region without a sidecar.
+    /// See: https://developer.apple.com/documentation/uikit/uiresponder/useractivity
+    public override func updateUserActivityState(_ activity: NSUserActivity) {
+        super.updateUserActivityState(activity)
+        if let activityUserInfo {
+            activity.addUserInfoEntries(from: activityUserInfo)
+        }
     }
 
     private lazy var dataLoadFeedbackGenerator = DataLoadFeedbackGenerator(application: application)
 
     // MARK: - OBAListView
     public func items(for listView: OBAListView) -> [OBAListViewSection] {
-        if isBrokenBookmark { return [] }
+        // Both are terminal states for a stop the server doesn't have, so there is
+        // nothing to list. Returning no sections is what hands the screen to
+        // `emptyData(for:)`, which explains which of the two it is.
+        if isBrokenBookmark || stopIsMissing { return [] }
 
         guard stopArrivals != nil else {
             if let error = self.operationError {
@@ -524,6 +567,7 @@ public class StopViewController: UIViewController,
         }
 
         sections.append(serviceAlertsSection)
+        sections.append(onDemandServicesSection)
         sections.append(contentsOf: stopArrivalsSection)
 
         if self.stopPreferences.sortType == .route {
@@ -546,7 +590,23 @@ public class StopViewController: UIViewController,
             let message = OBALoc("stop_controller.bad_bookmark_error_message", value: "This bookmark may not work anymore. Did your transit agency change something? Please delete and recreate the bookmark.", comment: "An error message displayed when a stop is shown by tapping on a bookmark—and the bookmark doesn't seem to point to a valid stop any longer. This problem will occur when a transit agency changes its stop IDs, perhaps as part of an annual transit system realignment.")
 
             let bookmarkBrokenImage = UIImage(systemName: "bookmark.slash.fill")?.withTintColor(.systemRed)    // iOS 14+ only.
-            return .standard(.init(alignment: .center, title: "Broken Bookmark", body: message, image: bookmarkBrokenImage, buttonConfig: .none))
+            return .standard(.init(alignment: .center, title: OBALoc("stop_controller.bad_bookmark_error_title", value: "Broken Bookmark", comment: "Title of the error shown when a stop is opened from a bookmark that no longer points to a valid stop."), body: message, image: bookmarkBrokenImage, buttonConfig: .none))
+        }
+
+        // No bookmark to repair, but the server still has no stop at this ID. Say so
+        // rather than leaving a bare header and no explanation (#1336).
+        if stopIsMissing {
+            let title = OBALoc(
+                "stop_controller.stop_not_found_title",
+                value: "Stop Not Found",
+                comment: "Title of the message shown when the server has no stop at the requested ID."
+            )
+            let message = OBALoc(
+                "stop_page.empty.stop_not_found",
+                value: "This stop isn't in the transit agency's data anymore. It may have been moved or removed.",
+                comment: "Empty state shown when the server has no stop at the requested ID and there is no bookmark to repair — the rider arrived from a deep link, a search result or a map pin."
+            )
+            return .standard(.init(title: title, body: message, image: UIImage(systemName: "mappin.slash")))
         }
 
         if let error = self.operationError {
@@ -607,7 +667,7 @@ public class StopViewController: UIViewController,
             .environmentObject(donationModel)
             .environmentObject(AnalyticsModel(application.analytics))
 
-        present(UIHostingController(rootView: learnMoreView), animated: true)
+        present(SheetHostingController(rootView: learnMoreView), animated: true)
     }
 
     private func showDonationDismissUI() {
@@ -725,14 +785,19 @@ public class StopViewController: UIViewController,
                 sections.append(arrivalFilterNoResultsSection())
             } else {
                 let pastDeps = filtered.filter { $0.arrivalDepartureMinutes < 0 }
-                let upcomingDeps = filtered.filter { $0.arrivalDepartureMinutes >= 0 }
-
                 if !pastDeps.isEmpty {
                     sections.append(sectionForPastDepartures(groupRoute: nil, arrDeps: pastDeps))
                 }
-                // Always append upcoming section (even if empty) to display load more and walk times
-                sections.append(sectionForGroup(groupRoute: nil, arrDeps: upcomingDeps))
             }
+
+            // Always append the upcoming section, even when it is empty and even
+            // behind the filter's empty state, because it carries Load More —
+            // the one control that can resolve a filtered-empty stop, since
+            // widening the window is how a real-time departure appears when the
+            // loaded window holds only scheduled ones. (The walk-time row rides
+            // along here too, but suppresses itself on an empty list.)
+            let upcomingDeps = filtered.filter { $0.arrivalDepartureMinutes >= 0 }
+            sections.append(sectionForGroup(groupRoute: nil, arrDeps: upcomingDeps))
 
         } else {
             let plausible = stopArrivals.arrivalsAndDepartures.filteringImplausibleDates()
@@ -795,19 +860,15 @@ public class StopViewController: UIViewController,
         let addAlarmAction: OBAListViewAction<ArrivalDepartureItem> = { [unowned self] item in self.addAlarm(viewModel: item) }
         let bookmarkAction: OBAListViewAction<ArrivalDepartureItem> = { [unowned self] item in self.addBookmark(viewModel: item) }
 
-        // Only show the schedule-for-route action if the current region supports it.
-        let scheduleAction: OBAListViewAction<ArrivalDepartureItem>?
-        if application.currentRegion?.supportsScheduleForRoute ?? true {
-            scheduleAction = { [unowned self] item in self.showScheduleForRoute(viewModel: item) }
-        } else {
-            scheduleAction = nil
+        let scheduleAction: OBAListViewAction<ArrivalDepartureItem> = { [unowned self] item in
+            self.showScheduleForRoute(viewModel: item)
         }
 
         return ArrivalDepartureItem(
             arrivalDeparture: arrivalDeparture,
             isAlarmAvailable: alarmAvailable,
             highlightTimeOnDisplay: highlightTimeOnDisplay,
-            transferContext: transferContext,
+            transferContext: displayedTransferContext,
             onSelectAction: onSelectAction,
             alarmAction: addAlarmAction,
             bookmarkAction: bookmarkAction,
@@ -855,7 +916,7 @@ public class StopViewController: UIViewController,
         // Filter departures before transfer arrival time, unless user opted to show all.
         // Only insert the "Show earlier" button when sorting by time (groupRoute == nil)
         // to avoid duplicate item IDs across route groups. See #409.
-        if let transferContext = transferContext, !showAllTransferDepartures {
+        if let transferContext = displayedTransferContext, !showAllTransferDepartures {
             let (visible, hidden) = partitionTransferDepartures(items: items, arrivalTime: transferContext.arrivalTime)
             items = visible
             if !hidden.isEmpty && groupRoute == nil {
@@ -920,15 +981,12 @@ public class StopViewController: UIViewController,
             }
             actions.append(addBookmark)
 
-            // Only show the schedule-for-route action if the current region supports it.
-            if application.currentRegion?.supportsScheduleForRoute ?? true {
-                let schedule = UIAction(title: Strings.schedule, image: UIImage(systemName: "calendar")) { [unowned self] _ in
-                    self.showScheduleForRoute(viewModel: viewModel)
-                }
-                actions.append(schedule)
+            let schedule = UIAction(title: Strings.schedule, image: UIImage(systemName: "calendar")) { [unowned self] _ in
+                self.showScheduleForRoute(viewModel: viewModel)
             }
+            actions.append(schedule)
 
-            let shareTrip = UIAction(title: OBALoc("stop_controller.share_trip", value: "Share Trip", comment: "Context menu button that allows the user to share their trip status."), image: Icons.share) { [weak self] _ in
+            let shareTrip = UIAction(title: Strings.shareTrip, image: Icons.share) { [weak self] _ in
                 self?.shareTripStatus(viewModel: viewModel)
             }
             actions.append(shareTrip)
@@ -987,7 +1045,7 @@ public class StopViewController: UIViewController,
 
     /// Inserts either a transfer arrival banner or the GPS-based walk time row.
     private func addWalkTimeOrTransferBanner(to items: inout [AnyOBAListViewItem]) {
-        if let transferContext = transferContext {
+        if let transferContext = displayedTransferContext {
             let bannerItem = TransferArrivalItem(
                 id: "transfer_arrival_banner",
                 arrivalTime: transferContext.arrivalTime,
@@ -1004,12 +1062,12 @@ public class StopViewController: UIViewController,
         guard items.count > 0,
               let currentLocation = application.locationService.currentLocation,
               let stopLocation = stop?.location,
-              let walkingTime = WalkingDirections.travelTime(from: currentLocation, to: stopLocation, velocity: application.userDataStore.walkingSpeedMetersPerSecond)
+              let walkingTime = WalkingDirections.travelTime(from: currentLocation, to: stopLocation, velocity: application.userDataStore.effectiveTravelVelocityMetersPerSecond)
         else { return }
 
         if let insertionIndex = findInsertionIndexForWalkTime(walkingTime, items: items) {
             let distance = currentLocation.distance(from: stopLocation)
-            let walkItem = StopArrivalWalkItem(id: "walk_item", distance: distance, timeToWalk: walkingTime)
+            let walkItem = StopArrivalWalkItem(id: "walk_item", distance: distance, timeToWalk: walkingTime, isBikeMode: application.userDataStore.bikeModeEnabled)
             items.insert(walkItem.typeErased, at: insertionIndex)
         }
     }
@@ -1070,7 +1128,7 @@ public class StopViewController: UIViewController,
         self.configureTabBarButtons()
     }
 
-    lazy var operationRetryButton = ActivityIndicatedButton.Configuration(text: "Retry", largeContentImage: Icons.refresh, showsActivityIndicatorOnTap: true) { [weak self] in
+    lazy var operationRetryButton = ActivityIndicatedButton.Configuration(text: Strings.retry, largeContentImage: Icons.refresh, showsActivityIndicatorOnTap: true) { [weak self] in
         self?.refresh()
     }
 
@@ -1153,10 +1211,6 @@ public class StopViewController: UIViewController,
         alarmBuilder?.showBulletin(above: self)
     }
 
-    func alarmBuilderStartedRequest(_ alarmBuilder: AlarmBuilder) {
-        ProgressHUD.show()
-    }
-
     func alarmBuilder(_ alarmBuilder: AlarmBuilder, alarmCreated alarm: Alarm) {
         viewModel.recordAlarmCreated(alarm)
 
@@ -1168,32 +1222,6 @@ public class StopViewController: UIViewController,
         ProgressHUD.dismiss()
         Task { @MainActor in
             await AlertPresenter.show(error: error, presentingController: self)
-        }
-    }
-
-    // MARK: - Bookmarks
-    private func addBookmark(viewModel: ArrivalDepartureItem) {
-        guard let arrivalDeparture = arrivalDeparture(forViewModel: viewModel) else { return }
-        addBookmark(arrivalDeparture: arrivalDeparture)
-    }
-
-    private func addBookmark(arrivalDeparture: ArrivalDeparture) {
-        let bookmarkController = EditBookmarkViewController(application: application, arrivalDeparture: arrivalDeparture, bookmark: nil, delegate: self)
-        let navigation = UINavigationController(rootViewController: bookmarkController)
-
-        application.viewRouter.present(navigation, from: self)
-    }
-
-    // MARK: - Bookmark Editor
-
-    func bookmarkEditorCancelled(_ viewController: UIViewController) {
-        viewController.dismiss(animated: true, completion: nil)
-    }
-
-    func bookmarkEditor(_ viewController: UIViewController, editedBookmark bookmark: Bookmark, isNewBookmark: Bool) {
-        viewController.dismiss(animated: true) {
-            let msg = isNewBookmark ? OBALoc("stops_controller.created_new_bookmark", value: "Added Bookmark", comment: "Message displayed when a new bookmark is created.") : OBALoc("stops_controller.updated_bookmark", value: "Updated Bookmark", comment: "Message displayed an existing bookmark is updated.")
-            ProgressHUD.showSuccessAndDismiss(message: msg, dismissAfter: 1.0)
         }
     }
 
@@ -1214,8 +1242,14 @@ public class StopViewController: UIViewController,
 
     // MARK: - Schedules
 
+    /// Presents the schedule for a route or falls back to the stop schedule when the current region lacks route schedule support.
+    /// - Parameter viewModel: The arrival departure item containing route and stop identifiers.
     func showScheduleForRoute(viewModel: ArrivalDepartureItem) {
-        let scheduleVC = ScheduleForRouteViewController(routeID: viewModel.routeID, application: application)
+        guard let scheduleVC = ScheduleViewControllerFactory.makeScheduleViewController(
+            routeID: viewModel.routeID,
+            stopID: viewModel.stopID,
+            application: application
+        ) else { return }
         present(scheduleVC, animated: true)
     }
 
@@ -1251,7 +1285,7 @@ public class StopViewController: UIViewController,
         let hiddenRoutes = Set(stopPreferences.hiddenRoutes)
         let stopPreferencesView = StopPreferencesWrappedView(stop, initialHiddenRoutes: hiddenRoutes, delegate: self)
             .environment(\.coreApplication, application)
-        present(UIHostingController(rootView: stopPreferencesView), animated: true)
+        present(SheetHostingController(rootView: stopPreferencesView), animated: true)
     }
 
     @objc private func loadMoreDepartures() {
@@ -1294,11 +1328,64 @@ public class StopViewController: UIViewController,
 
 }
 
+// MARK: - Bookmarks
+
+extension StopViewController {
+    private func addBookmark(viewModel: ArrivalDepartureItem) {
+        guard let arrivalDeparture = arrivalDeparture(forViewModel: viewModel) else { return }
+        addBookmark(arrivalDeparture: arrivalDeparture)
+    }
+
+    private func addBookmark(arrivalDeparture: ArrivalDeparture) {
+        let bookmarkController = EditBookmarkViewController(application: application, arrivalDeparture: arrivalDeparture, bookmark: nil, delegate: self)
+        let navigation = UINavigationController(rootViewController: bookmarkController)
+
+        application.viewRouter.present(navigation, from: self)
+    }
+
+    // MARK: - Bookmark Editor
+
+    func bookmarkEditorCancelled(_ viewController: UIViewController) {
+        viewController.dismiss(animated: true, completion: nil)
+    }
+
+    func bookmarkEditor(_ viewController: UIViewController, editedBookmark bookmark: Bookmark, isNewBookmark: Bool) {
+        viewController.dismiss(animated: true) {
+            let msg = isNewBookmark ? OBALoc("stops_controller.created_new_bookmark", value: "Added Bookmark", comment: "Message displayed when a new bookmark is created.") : OBALoc("stops_controller.updated_bookmark", value: "Updated Bookmark", comment: "Message displayed an existing bookmark is updated.")
+            ProgressHUD.showSuccessAndDismiss(message: msg, dismissAfter: 1.0)
+        }
+    }
+}
+
 // MARK: - ViewModel Binding
 
 private extension StopViewController {
+    // MARK: - Data/On-demand services
+
+    /// Mirrors the redesigned page's `OnDemandServicesSection`: one row per
+    /// service, named after it.
+    var onDemandServicesSection: OBAListViewSection? {
+        let services = displayedOnDemandServices
+        guard !services.isEmpty else { return nil }
+
+        let rows = services.map { service in
+            let listing = OnDemandServiceListing(service)
+            return OBAListRowView.DefaultViewModel(
+                title: listing.title,
+                onSelectAction: { [weak self] _ in
+                    guard let self else { return }
+                    self.application.viewRouter.navigateTo(onDemandService: service, from: self)
+                }
+            )
+        }
+        return listViewSection(for: .onDemandServices, title: Strings.onDemandSectionTitle, items: rows)
+    }
+
+    // MARK: - List data bindings
+
     func bindListData() {
         bindArrivalsSink()
+        bindOnDemandServicesSink()
         bindStopSink()
         bindSurveysSink()
         bindPreferencesSinks()
@@ -1316,6 +1403,17 @@ private extension StopViewController {
                 listView.applyData(animated: false)
                 configureTabBarButtons()
                 beginUserActivity()
+            }
+            .store(in: &cancellables)
+    }
+
+    func bindOnDemandServicesSink() {
+        viewModel.$onDemandServices
+            .dropFirst()
+            .sink { [weak self] services in
+                guard let self else { return }
+                displayedOnDemandServices = services
+                listView.applyData(animated: false)
             }
             .store(in: &cancellables)
     }
@@ -1369,6 +1467,13 @@ private extension StopViewController {
                     self?.listView.applyData(animated: false)
                     self?.configureTabBarButtons()
                 }
+            }
+            .store(in: &cancellables)
+
+        viewModel.$formattersTimeZoneGeneration
+            .dropFirst()
+            .sink { [weak self] _ in
+                self?.listView.applyData(animated: false)
             }
             .store(in: &cancellables)
     }
@@ -1434,12 +1539,14 @@ private extension StopViewController {
     }
 
     func showEarlierDeparturesItem(hiddenCount: Int) -> MessageButtonItem {
-        let fmt = OBALoc(
-            "stop_controller.transfer_show_earlier_departures_fmt",
-            value: "Show %d earlier departures",
-            comment: "Button to reveal departures that leave before the rider's transfer arrival. Parameter is the count of hidden departures. Plural forms live in Localizable.stringsdict; the value above is only the not-found fallback."
+        let buttonText = CountPlural.format(
+            OBALoc(
+                "stop_controller.transfer_show_earlier_departures_fmt",
+                value: "Show %d earlier departures",
+                comment: "Button to reveal departures that leave before the rider's transfer arrival. Parameter is the count of hidden departures. Plural forms live in Localizable.stringsdict; the value above is only the not-found fallback."
+            ),
+            count: hiddenCount
         )
-        let buttonText = String(format: fmt, hiddenCount)
         return MessageButtonItem(
             id: "transfer_show_earlier",
             buttonText: buttonText,

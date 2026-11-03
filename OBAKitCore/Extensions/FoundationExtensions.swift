@@ -141,6 +141,12 @@ public extension Bundle {
         return URL(string: str)
     }
 
+    /// The raw ID of a route the map should open on, from `OBAKitConfig.LaunchRouteID`.
+    /// See: https://github.com/OneBusAway/onebusaway-ios/issues/617
+    var launchRouteID: String? {
+        OBAKitConfig?["LaunchRouteID"] as? String
+    }
+
     /// The brand's default arrival/departure filter, from
     /// `OBAKitConfig.DefaultArrivalDepartureFilter` (`all`, `estimatedOnly`, or
     /// `scheduledOnly`). Absent or unrecognized values degrade to `.all`, which
@@ -314,6 +320,19 @@ public extension String {
         return trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// The receiver reduced to what a dialer accepts — digits and `+` — or
+    /// nil when nothing dialable is left. Feeds publish phone numbers however
+    /// they like ("(703) 746-5222", "703.746.5222").
+    var dialableDigits: String? {
+        let cleaned = replacingOccurrences(of: "[^0-9+]", with: "", options: .regularExpression)
+        return cleaned.isEmpty ? nil : cleaned
+    }
+
+    /// A `tel://` URL dialing `dialableDigits`, or nil when there are none.
+    var telephoneURL: URL? {
+        dialableDigits.flatMap { URL(string: "tel://\($0)") }
+    }
+
     /// Converts empty string fields into `nil`s.
     ///
     /// There are some parts of the OneBusAway REST API that return empty strings
@@ -329,6 +348,24 @@ public extension String {
         }
 
         return string.count > 0 ? string : nil
+    }
+
+    /// Normalizes a search field's raw text into a query suitable for `matchesQuery(_:)`.
+    ///
+    /// Lowercases, trims, and collapses "nothing to filter by" to nil. `.searchable`
+    /// hands a view the empty string the moment its field is focused, and a
+    /// whitespace-only query is the same non-intent, so both must mean "match
+    /// everything" rather than "match nothing".
+    ///
+    /// Shared rather than reimplemented per screen: callers use the nil-ness of the
+    /// result to decide between a "nothing here yet" empty state and a "no search
+    /// results" one, so the definition of an *active* query has to be the same
+    /// everywhere it's asked.
+    ///
+    /// - Parameter query: Raw text straight from the search field.
+    /// - Returns: The normalized query, or nil when there is nothing to filter by.
+    static func normalizedSearchQuery(_ query: String?) -> String? {
+        nilifyBlankValue(query?.localizedLowercase.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 }
 

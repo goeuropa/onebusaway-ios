@@ -35,7 +35,7 @@ public class MoreViewController: UIViewController,
         self.application = application
         super.init(nibName: nil, bundle: nil)
 
-        title = OBALoc("more_controller.title", value: "More", comment: "Title of the More tab")
+        title = OBALoc("more_controller.title", value: "More", comment: "Title of the More tab / accessibility label for the map-panel more button.")
         tabBarItem.image = Icons.moreTabIcon
         tabBarItem.selectedImage = Icons.moreSelectedTabIcon
 
@@ -44,6 +44,14 @@ public class MoreViewController: UIViewController,
         navigationItem.rightBarButtonItem = UIBarButtonItem(title: Strings.settings, style: .plain, target: self, action: #selector(showSettings))
 
         application.regionsService.addDelegate(self)
+        application.notificationCenter.addObserver(self, selector: #selector(donationsEligibilityDidChange), name: .donationsEligibilityDidChange, object: nil)
+    }
+
+    /// The storefront answer can arrive after this screen is built (first launch)
+    /// or change while it is up; show or hide the donate section to match.
+    @objc private func donationsEligibilityDidChange() {
+        guard isViewLoaded else { return }
+        listView.applyData()
     }
 
     required init?(coder: NSCoder) {
@@ -120,13 +128,16 @@ public class MoreViewController: UIViewController,
                 onSelectAction: { [weak self] _ in
                     guard
                         let self,
+                        self.application.donationsManager.donationsEnabled,
                         let donationManagementPortal = self.application.applicationBundle.donationManagementPortal
                     else {
                         return
                     }
 
-                    let safari = SFSafariViewController(url: donationManagementPortal)
-                    self.application.viewRouter.present(safari, from: self)
+                    // The default browser, never an in-app Safari sheet: App Review treats a
+                    // payment page shown inside the app as an in-app purchase mechanism
+                    // (guideline 3.1.1). Only links out to the browser are allowed.
+                    self.application.open(donationManagementPortal, options: [:], completionHandler: nil)
                 }
             )
         ])
@@ -332,8 +343,8 @@ public class MoreViewController: UIViewController,
             contents.append(OBAListRowView.DefaultViewModel(
                 title: OBALoc(
                     "more_controller.text_agency",
-                    value: "Text Agency",
-                    comment: "Opens an sms: (or web) link for the agency's text information service."),
+                    value: "Message Agency",
+                    comment: "Opens the agency's text information service, which may be an sms: link or a web page — so the label names neither."),
                 onSelectAction: { [weak self] _ in
                     self?.application.open(textURL, options: [:], completionHandler: nil)
                 }
@@ -427,7 +438,7 @@ public class MoreViewController: UIViewController,
         application.viewRouter.present(
             sheet,
             from: self,
-            isPopover: traitCollection.userInterfaceIdiom == .pad,
+            isPopover: traitCollection.horizontalSizeClass == .regular,
             popoverBarButtonItem: sender
         )
     }

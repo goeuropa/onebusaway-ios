@@ -19,6 +19,11 @@ public protocol RegionsServiceDelegate {
     @objc optional func regionsService(_ service: RegionsService, updatedRegion region: Region)
     @objc optional func regionsService(_ service: RegionsService, changedAutomaticRegionSelection value: Bool)
 
+    /// A custom region was added, replaced, or deleted. `updatedRegion` does not
+    /// cover this: editing the *current* custom region keeps its identifier, so
+    /// the `currentRegion` setter never fires.
+    @objc optional func regionsService(_ service: RegionsService, updatedCustomRegions regions: [Region])
+
     /// This delegate method is called when the region list update is cancelled before retrieving data.
     ///
     /// The update will be cancelled when the regions list has been updated within the past day, and an update is not forced.
@@ -173,6 +178,13 @@ public class RegionsService: NSObject, LocationServiceDelegate {
         }
     }
 
+    private func notifyDelegatesCustomRegionsUpdated() {
+        let customRegions = self.customRegions
+        for delegate in delegates.allObjects {
+            delegate.regionsService?(self, updatedCustomRegions: customRegions)
+        }
+    }
+
     // MARK: - Regions Data
 
     public private(set) var regions: [Region] {
@@ -245,12 +257,25 @@ public class RegionsService: NSObject, LocationServiceDelegate {
 
     // MARK: - Custom Regions
 
+    /// Synchronously saves and registers a custom region if it is not already known.
+    /// - throws: Persistence storage errors.
+    public func registerCustomRegionIfNeeded(_ region: Region) throws {
+        guard region.isCustom == true else { return }
+        try fileStorage.saveCustomRegion(region)
+        customRegionsCacheLock.withLock { customRegionsCache = nil }
+        notifyDelegatesCustomRegionsUpdated()
+
+        let storedIdentifier = userDefaults.object(forKey: RegionsService.currentRegionIdentifierUserDefaultsKey) as? Int
+        if storedIdentifier == region.regionIdentifier {
+            notifyDelegatesRegionChanged(region)
+        }
+    }
+
     /// Adds the provided custom region to the RegionsService.
     /// If an existing custom region with the same `regionIdentifier` exists, the new region replaces the existing region.
     /// - throws: Persistence storage errors.
     public func add(customRegion newRegion: Region) async throws {
-        try fileStorage.saveCustomRegion(newRegion)
-        customRegionsCacheLock.withLock { customRegionsCache = nil }
+        try registerCustomRegionIfNeeded(newRegion)
     }
 
     /// Deletes the custom region. If the region could not be found, this method exits normally.
@@ -272,6 +297,7 @@ public class RegionsService: NSObject, LocationServiceDelegate {
 
         try fileStorage.deleteCustomRegion(identifier: identifier)
         customRegionsCacheLock.withLock { customRegionsCache = nil }
+        notifyDelegatesCustomRegionsUpdated()
     }
 
     public var customRegions: [Region] {
@@ -319,7 +345,9 @@ public class RegionsService: NSObject, LocationServiceDelegate {
 
     public static let alwaysRefreshRegionsOnLaunchUserDefaultsKey = "OBAAlwaysRefreshRegionsOnLaunchUserDefaultsKey"
     static let automaticallySelectRegionUserDefaultsKey = "OBAAutomaticallySelectRegionUserDefaultsKey"
-    static let currentRegionIdentifierUserDefaultsKey = "OBACurrentRegionIdentifierUserDefaultsKey"
+    /// Readable off the main actor: App Intent entity queries are `nonisolated`
+    /// and must look up the same key the service writes.
+    public nonisolated static let currentRegionIdentifierUserDefaultsKey = "OBACurrentRegionIdentifierUserDefaultsKey"
     static let regionsUpdatedAtUserDefaultsKey = "OBARegionsUpdatedAtUserDefaultsKey"
 
     // Legacy keys — kept only for the one-time migration read; not written after migration.
