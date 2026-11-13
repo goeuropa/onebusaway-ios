@@ -230,14 +230,14 @@ final class UserDefaultsStoreTests: OBATestCase {
         #expect(self.userDefaultsStore.userDefaults.bool(forKey: UserDefaultsStore.stopTripCompactModeKey))
     }
 
-    // MARK: - Transfer Arrival Banner
+    // MARK: - Transfer Trip Highlight
 
-    @Test func `Transfer arrival banner defaults on`() {
-        #expect(self.userDefaultsStore.showTransferArrivalBanner)
-        #expect(UserDefaultsStore.showTransferArrivalBannerKey == "showTransferArrivalBanner")
+    @Test func `Transfer trip highlight defaults on`() {
+        #expect(self.userDefaultsStore.highlightTransferTrip)
+        #expect(UserDefaultsStore.highlightTransferTripKey == "showTransferArrivalBanner")
     }
 
-    @Test func `Transfer arrival banner off persists and drops displayed context`() {
+    @Test func `Transfer trip highlight off persists and drops displayed context`() {
         let context = TransferContext(
             arrivalTime: Date(timeIntervalSince1970: 1_700_000_000),
             fromRouteShortName: "10",
@@ -245,14 +245,14 @@ final class UserDefaultsStoreTests: OBATestCase {
         )
         #expect(self.userDefaultsStore.displayedTransferContext(context) == context)
 
-        userDefaultsStore.showTransferArrivalBanner = false
-        #expect(!self.userDefaultsStore.showTransferArrivalBanner)
+        userDefaultsStore.highlightTransferTrip = false
+        #expect(!self.userDefaultsStore.highlightTransferTrip)
         #expect(self.userDefaultsStore.displayedTransferContext(context) == nil)
 
         let reloaded = UserDefaultsStore(userDefaults: userDefaults)
-        #expect(!reloaded.showTransferArrivalBanner)
+        #expect(!reloaded.highlightTransferTrip)
         #expect(reloaded.displayedTransferContext(context) == nil)
-        #expect(self.userDefaultsStore.userDefaults.bool(forKey: UserDefaultsStore.showTransferArrivalBannerKey) == false)
+        #expect(self.userDefaultsStore.userDefaults.bool(forKey: UserDefaultsStore.highlightTransferTripKey) == false)
     }
 
     // MARK: - Region Time Zone Display
@@ -360,8 +360,8 @@ final class UserDefaultsStoreTests: OBATestCase {
     }
 
     @Test func `Walking speed source round trip`() {
-        userDefaultsStore.walkingSpeedSource = .healthKit
-        #expect(self.userDefaultsStore.walkingSpeedSource == .healthKit)
+        userDefaultsStore.walkingSpeedSource = .synced
+        #expect(self.userDefaultsStore.walkingSpeedSource == .synced)
 
         userDefaultsStore.walkingSpeedSource = .manual
         #expect(self.userDefaultsStore.walkingSpeedSource == .manual)
@@ -408,8 +408,8 @@ final class UserDefaultsStoreTests: OBATestCase {
     }
 
     @Test func `Bike speed source round trip`() {
-        userDefaultsStore.bikeSpeedSource = .healthKit
-        #expect(UserDefaultsStore(userDefaults: userDefaults).bikeSpeedSource == .healthKit)
+        userDefaultsStore.bikeSpeedSource = .synced
+        #expect(UserDefaultsStore(userDefaults: userDefaults).bikeSpeedSource == .synced)
 
         userDefaultsStore.bikeSpeedSource = .manual
         #expect(UserDefaultsStore(userDefaults: userDefaults).bikeSpeedSource == .manual)
@@ -456,4 +456,81 @@ final class UserDefaultsStoreTests: OBATestCase {
         #expect(self.userDefaults.object(forKey: "UserDataStore.defaultAlarmLeadTimeMinutes") == nil)
     }
 
+
+    // MARK: - Stop Preferences Store
+
+    @Test func `Stop preferences defaults to initial preferences when unconfigured`() {
+        let stopID = "1_10020"
+        let prefs = userDefaultsStore.preferences(stopID: stopID, region: region)
+
+        #expect(prefs.sortType == .time)
+        #expect(prefs.hiddenRoutes.isEmpty)
+        #expect(prefs.hasHiddenRoutes == false)
+    }
+
+    @Test func `Stop preferences persistence and retrieval`() throws {
+        let stop = try #require(Fixtures.loadSomeStops().first)
+        var customPrefs = StopPreferences(sortType: .route, hiddenRoutes: ["1_100", "1_44"])
+
+        userDefaultsStore.set(stopPreferences: customPrefs, stop: stop, region: region)
+
+        let retrieved = userDefaultsStore.preferences(stopID: stop.id, region: region)
+        #expect(retrieved.sortType == .route)
+        #expect(retrieved.hiddenRoutes == ["1_100", "1_44"])
+        #expect(retrieved.hasHiddenRoutes == true)
+
+        // Modify and re-save
+        customPrefs.toggleRouteIDHidden("1_44")
+        userDefaultsStore.set(stopPreferences: customPrefs, stop: stop, region: region)
+
+        let updated = userDefaultsStore.preferences(stopID: stop.id, region: region)
+        #expect(updated.hiddenRoutes == ["1_100"])
+    }
+
+    @Test func `Stop preferences isolation between different regions`() throws {
+        let stop = try #require(Fixtures.loadSomeStops().first)
+        let otherRegion = try #require(Fixtures.loadSomeRegions().first)
+
+        let customPrefs = StopPreferences(sortType: .route, hiddenRoutes: ["1_100"])
+        userDefaultsStore.set(stopPreferences: customPrefs, stop: stop, region: region)
+
+        let prefsForOtherRegion = userDefaultsStore.preferences(stopID: stop.id, region: otherRegion)
+        #expect(prefsForOtherRegion.hiddenRoutes.isEmpty, "Preferences must be scoped to region")
+    }
+
+    /// `preferences(stopID:region:)` hands back defaults for a stop the rider
+    /// never configured, so the stop page asks `hasPreferences` to tell "never
+    /// set" apart from "set to the defaults".
+    @Test func `Has preferences is true only for the stop and region that were saved`() throws {
+        let stops = try Fixtures.loadSomeStops()
+        let stop = stops[0]
+        let otherStop = stops[1]
+        let otherRegion = try #require(Fixtures.loadSomeRegions().first)
+        #expect(otherRegion.regionIdentifier != region.regionIdentifier)
+
+        #expect(userDefaultsStore.hasPreferences(stopID: stop.id, region: region) == false)
+
+        userDefaultsStore.set(stopPreferences: StopPreferences(), stop: stop, region: region)
+
+        #expect(userDefaultsStore.hasPreferences(stopID: stop.id, region: region))
+        #expect(userDefaultsStore.hasPreferences(stopID: otherStop.id, region: region) == false)
+        #expect(userDefaultsStore.hasPreferences(stopID: stop.id, region: otherRegion) == false)
+    }
+
+    // MARK: - Vehicle Feed Agency Filters
+
+    /// The vehicles map hides each agency on its own. Turning one back on must
+    /// leave the others hidden, and the choice has to survive a relaunch.
+    @Test func `Re-enabling one vehicle feed agency keeps the others disabled after a relaunch`() {
+        userDefaultsStore.setAgencyEnabledForVehicleFeed(false, agencyID: "1")
+        userDefaultsStore.setAgencyEnabledForVehicleFeed(false, agencyID: "40")
+        userDefaultsStore.setAgencyEnabledForVehicleFeed(true, agencyID: "1")
+
+        let relaunched = UserDefaultsStore(userDefaults: userDefaults)
+
+        #expect(relaunched.isAgencyEnabledForVehicleFeed(agencyID: "1"))
+        #expect(relaunched.isAgencyEnabledForVehicleFeed(agencyID: "40") == false)
+        #expect(relaunched.isAgencyEnabledForVehicleFeed(agencyID: "96"))
+        #expect(relaunched.disabledVehicleFeedAgencyIDs == ["40"])
+    }
 }

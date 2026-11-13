@@ -417,6 +417,9 @@
 /* VoiceOver hint for a home sheet section header, which opens that section's full list. */
 "home_sheet.section_header.a11y_hint" = "Ipinapakita ang lahat ng item sa seksyong ito.";
 
+/* Title of the map panel's Home tab, which holds search and the nearby stops. It replaces the Map tab: the map is always behind the sheet. */
+"home_sheet.tab.home" = "Home";
+
 /* Alert message for Live Activity error. \"Settings\" is the iOS Settings app. */
 "live_activity.error.message" = "Pakisuri ang iyong mga setting ng Live Activities sa Mga Setting.";
 
@@ -582,6 +585,9 @@
 /* Accessibility label for website button */
 "map_item_controller.website_accessibility" = "Buksan ang website";
 
+/* VoiceOver hint on a vehicle marker drawn for an open stop on the map panel. Tapping it opens the vehicle's trip. */
+"map_panel.stop_vehicle.hint" = "Ipinapakita ang biyaheng ito.";
+
 /* Displayed in the map status view at the top of the map when the user has declined to give the app access to their location */
 "map_status_view.location_services_unavailable" = "Hindi available ang mga serbisyo ng lokasyon";
 
@@ -705,6 +711,9 @@
 /* Body shown on the Nearby Stops index sheet when no map viewport, device location, or region is available to search around. */
 "nearby_stops_sheet.no_location.body" = "Igalaw ang mapa o i-on ang location services para makita ang mga hintuan malapit sa iyo.";
 
+/* Siri asks which stop to report departures for when the user didn't name one. */
+"next_departures_at_stop_intent.choose_stop" = "Aling hintuan?";
+
 /* Siri response when the requested bookmark was deleted or belongs to a different region. */
 "next_departures_intent.bookmark_unavailable" = "Hindi available ang bookmark na iyan sa kasalukuyan mong rehiyon.";
 
@@ -720,7 +729,7 @@
 /* Siri response listing the departures after the next one. {List of 'in X minutes'} */
 "next_departures_intent.later_departures_fmt" = "Pagkatapos, %@.";
 
-/* Siri response when departures could not be fetched. {Bookmark name} */
+/* Siri response when departures could not be fetched. {Bookmark or stop name} */
 "next_departures_intent.load_failed_fmt" = "Hindi ma-load ang mga pag-alis para sa %@. Tingnan ang iyong koneksyon at subukang muli.";
 
 /* Siri response when the user asks for their next departures but has no trip bookmarks in the current region. */
@@ -737,6 +746,21 @@
 
 /* Joins two complete Siri sentences: {first departure sentence} {later departures sentence}. Use the language's separator between sentences; Chinese uses none. */
 "next_departures_intent.sentences_join_fmt" = "%1$@ %2$@";
+
+/* Siri response: one departure from a stop. {Route short name} to {Headsign} {'now' or 'in X minutes'}, for example '8 to Downtown in 4 minutes'. */
+"next_departures_intent.stop_departure_fmt" = "%1$@ papuntang %2$@ %3$@";
+
+/* Siri response: one departure from a stop whose trip has no destination name. {Route short name} {'now' or 'in X minutes'}, for example '8 in 4 minutes'. */
+"next_departures_intent.stop_departure_no_headsign_fmt" = "%1$@ %2$@";
+
+/* Siri response listing the next departures from a stop. {Stop name}: {list of departures, such as '8 to Downtown in 4 minutes and 49 to Capitol Hill in 12 minutes'}. */
+"next_departures_intent.stop_departures_fmt" = "Susunod sa %1$@: %2$@.";
+
+/* Siri response when nothing leaves a stop in the next hour. {Stop name} */
+"next_departures_intent.stop_no_departures_fmt" = "Walang aalis mula sa %@ sa susunod na oras.";
+
+/* Siri response when the requested stop belongs to a different region than the one the app is using. */
+"next_departures_intent.stop_unavailable" = "Wala sa kasalukuyan mong rehiyon ang hintuang iyan.";
 
 /* Vehicle occupancy is very high */
 "occupancy_status.crushed_standing_room_only" = "Sobrang siksikan, tayuan na lang";
@@ -918,6 +942,12 @@
 /* Title for the empty set indicator on the Recent Stops controller. */
 "recent_stops.empty_set.title" = "Walang Kamakailang Hintuan";
 
+/* Alert message directing the user to the Bookmarks tab when a stop has multiple bookmarks. */
+"recent_stops.multiple_bookmarks.body" = "May maraming bookmark ang hintuang ito. Gamitin ang tab na Mga Bookmark para pamahalaan ang mga ito.";
+
+/* Alert title shown when quick-unbookmarking a stop that has more than one stop bookmark. */
+"recent_stops.multiple_bookmarks.title" = "Maraming Bookmark";
+
 /* Title of the Alarms section of the Recents controller */
 "recent_stops_controller.alarms_section.title" = "Mga Paalala";
 
@@ -1089,6 +1119,15 @@
 /* Error shown when a tapped search result cannot be turned into something to display. */
 "search_results_sheet.unresolvable_result" = "Hindi mabuksan ang resultang ito ng paghahanap.";
 
+/* Search scope tag showing all search result types. */
+"search_scope.all" = "All";
+
+/* Search scope tag filtering results to places and addresses. */
+"search_scope.places" = "Places";
+
+/* Search scope tag filtering results to transit routes. */
+"search_scope.routes" = "Routes";
+
 /* Accessibility label for the button that clears the search query. */
 "search_sheet.clear_query" = "I-clear";
 
@@ -1134,11 +1173,11 @@
 /* Settings section title for controlling which arrivals/departures are shown */
 "settings_controller.arrival_display_section.title" = "Display ng Pagdating at Pag-alis";
 
-/* Settings > Arrival Display > Toggle that shows the Arriving at XX:XX via route banner when opening a stop from a trip */
-"settings_controller.arrival_display_section.transfer_banner" = "Ipakita ang banner ng pagdating sa transfer";
+/* Settings > Arrival & Departure Display > Toggle that highlights the rider's trip in a stop's departures when they open that stop from the trip */
+"settings_controller.arrival_display_section.highlight_trip" = "I-highlight ang biyahe mo sa mga page ng hintuan";
 
-/* Settings > Arrival & Departure Display > Footer describing the transfer banner and region time zone toggles */
-"settings_controller.arrival_display_section.footer" = "Banner ng transfer: kapag magbubukas ng hintuan mula sa biyahe, ang oras ay relative sa pagdating mo. Time zone ng rehiyon: gumagamit ang orasan ng time zone ng rehiyon ng transit, na may maikling badge kapag naiiba ang telepono mo. Parehong independyente.";
+/* Settings > Arrival & Departure Display > Footer describing the trip highlight and region time zone toggles */
+"settings_controller.arrival_display_section.footer" = "Highlight ng biyahe: kapag binuksan mo ang hintuan mula sa biyahe, naka-highlight ang pag-alis ng biyaheng iyon sa page ng hintuan. Time zone ng rehiyon: gumagamit ang orasan ng time zone ng rehiyon ng transit, na may maikling badge kapag naiiba ang telepono mo. Parehong independyente.";
 
 /* Settings > Arrival & Departure Display > Opt-in toggle for displaying arrival clocks in the transit region's time zone */
 "settings_controller.arrival_display_section.region_time_zone" = "Ipakita ang oras sa time zone ng rehiyon";
@@ -1155,17 +1194,8 @@
 /* Settings > Bike Mode section footer */
 "settings_controller.bike_mode_section.footer" = "Gumagamit ng mas mabilis na bilis ng paglalakbay para sa mga tantiya ng oras papunta sa hintuan, mga oras ng pagdating, at sa pahina ng Hintuan.";
 
-/* Settings > Bike Mode section footer identifying the Apple Health integration; the argument is the app name */
-"settings_controller.bike_mode_section.healthkit_footer_fmt" = "Puwedeng basahin ng %@ ang bilis ng pagbibisikleta mo mula sa Apple Health. Hindi ito kailanman nagsusulat sa Health.";
-
 /* Settings > Bike Mode > on/off toggle */
 "settings_controller.bike_mode.title" = "Mode ng Bisikleta";
-
-/* Settings > Bike Mode section > HealthKit toggle */
-"settings_controller.bike_mode.use_healthkit" = "Gamitin ang data ng Health app";
-
-/* Settings > Bike Mode > HealthKit denial or no-data toast */
-"settings_controller.bike_mode.healthkit_unavailable" = "Hindi ma-sync ang bilis ng pagbibisikleta mula sa Health. Gagamit na lang ng karaniwang bilis ng bisikleta.";
 
 /* Settings > Debug section > Refresh regions on every launch */
 "settings_controller.debug_section.always_refresh_regions" = "I-refresh ang mga rehiyon sa bawat paglunsad";
@@ -1181,12 +1211,6 @@
 
 /* Settings > Experimental section > Map panel toggle */
 "settings_controller.experimental_section.map_panel" = "Gamitin ang map panel";
-
-/* Settings > Experimental section > Footer indicating changes apply on relaunch */
-"settings_controller.experimental_section.map_panel.footer" = "I-restart ang app para maipatupad.";
-
-/* Settings > Experimental section > New stop page toggle */
-"settings_controller.experimental_section.new_stop_page" = "Gamitin ang bagong pahina ng hintuan";
 
 /* Settings > Experimental section title */
 "settings_controller.experimental_section.title" = "Eksperimental";
@@ -1227,14 +1251,23 @@
 /* Settings > Surveys section title */
 "settings_controller.survey_section.title" = "Mga Survey";
 
+/* Apple Maps walking directions provider option */
+"settings_controller.walking_directions.apple" = "Apple Maps";
+
+/* Walking directions provider option that keeps the maps app chooser */
+"settings_controller.walking_directions.ask" = "Magtanong sa bawat pagkakataon";
+
+/* Google Maps walking directions provider option */
+"settings_controller.walking_directions.google" = "Google Maps";
+
+/* Settings picker for the default external walking directions provider */
+"settings_controller.walking_directions.title" = "Direksyon sa paglalakad";
+
 /* Settings > Walking Speed > Average preset label */
 "settings_controller.walking_speed.avg" = "Katamtaman (~5 km/h)";
 
 /* Settings > Walking Speed > Fast preset label */
 "settings_controller.walking_speed.fast" = "Mabilis (~6.5 km/h)";
-
-/* Settings > Walking Speed > HealthKit denial or no-data toast */
-"settings_controller.walking_speed.healthkit_unavailable" = "Hindi ma-sync ang bilis ng paglalakad mula sa Health. Tingnan ang Settings > Privacy & Security > Health para payagan ang access.";
 
 /* Settings > Walking Speed > Slow preset label */
 "settings_controller.walking_speed.slow" = "Mabagal (~3 km/h)";
@@ -1242,32 +1275,17 @@
 /* Settings > Walking Speed section > Speed picker */
 "settings_controller.walking_speed.title" = "Bilis ng paglalakad";
 
-/* Settings > Walking Speed section > HealthKit toggle */
-"settings_controller.walking_speed.use_healthkit" = "Gamitin ang data ng Health app";
-
-/* Settings > Walking Speed section footer identifying the Apple Health integration; the argument is the app name */
-"settings_controller.walking_speed_section.healthkit_footer_fmt" = "Puwedeng basahin ng %@ ang bilis ng paglalakad mo mula sa Apple Health para tantiyahin kung gaano katagal bago ka makarating sa hintuan. Hindi ito kailanman nagsusulat sa Health.";
-
 /* Settings > Walking Speed section title */
 "settings_controller.walking_speed_section.title" = "Bilis ng Paglalakad";
 
 /* A message that appears when a user's alarm is created. */
 "stop_controller.alarm_created_message" = "Nagawa ang paalala";
 
-/* A header for the arrivals and departures section of the stop controller. */
-"stop_controller.arrival_departure_header" = "Mga Pagdating at Pag-alis";
-
 /* Title for the menu that filters departures by data type */
 "stop_controller.arrival_filter.menu_title" = "Uri ng Pag-alis";
 
-/* Message shown when the Departure Type filter hides every departure at a stop */
-"stop_controller.arrival_filter.no_results" = "Walang pag-alis na tumutugma sa kasalukuyang filter. Baguhin ang Uri ng Pag-alis sa ⋯ na menu.";
-
 /* An error message displayed when a stop is shown by tapping on a bookmark—and the bookmark doesn't seem to point to a valid stop any longer. This problem will occur when a transit agency changes its stop IDs, perhaps as part of an annual transit system realignment. */
 "stop_controller.bad_bookmark_error_message" = "Maaaring hindi na gumagana ang bookmark na ito. May binago ba ang iyong ahensya ng transit? Paki-delete at gawin muli ang bookmark.";
-
-/* Title of the error shown when a stop is opened from a bookmark that no longer points to a valid stop. */
-"stop_controller.bad_bookmark_error_title" = "Sirang Bookmark";
 
 /* A string listing the data providers (agencies) for this stop's data. It contains one or more providers separated by commas. e.g. Data provided by King County Metro, Sound Transit */
 "stop_controller.data_attribution_format" = "Data mula sa %@";
@@ -1277,24 +1295,6 @@
 
 /* Title shown when an external survey link cannot be opened */
 "stop_controller.external_survey_error.title" = "Hindi Mabuksan ang Survey";
-
-/* Load More button */
-"stop_controller.load_more_button" = "Mag-load Pa";
-
-/* A header for the past arrivals and departures section of the stop controller. */
-"stop_controller.past_departures_header" = "Mga Nakaraang Pag-alis";
-
-/* Header for past departures of a specific route */
-"stop_controller.past_departures_route_header" = "Mga Nakaraang Pag-alis - %@";
-
-/* This is an instruction given to the user the first time they look at a stop view instructing them on how to access more options, including the ability to add alarms. */
-"stop_controller.swipe_spotlight_text.with_alarm" = "Mag-swipe sa isang row para makita ang higit pang opsyon, kasama ang pagdaragdag ng mga paalala.";
-
-/* This is an instruction given to the user the first time they look at a stop view instructing them on how to access more options, EXCLUDING the ability to add alarms. */
-"stop_controller.swipe_spotlight_text.without_alarm" = "Mag-swipe sa isang row para makita ang higit pang opsyon.";
-
-/* Button to reveal departures that leave before the rider's transfer arrival. Parameter is the count of hidden departures. Plural forms live in Localizable.stringsdict; the value above is only the not-found fallback. */
-"stop_controller.transfer_show_earlier_departures_fmt" = "Ipakita ang %d mas maagang pag-alis";
 
 /* Title of a transit stop in Shortcuts and Siri when the app has no name for it. The parameter is the stop's ID, such as 1_75403. */
 "stop_entity.fallback_title_fmt" = "Hintuan %@";
@@ -1524,15 +1524,6 @@
 /* Divider between departures you'd miss on foot and ones you can still catch. %d is the walk time in minutes. */
 "stop_page.walk_divider_fmt" = "%d MIN LAKAD — ABUTAN SA IBABA";
 
-/* Title of the Sorting section */
-"stop_preferences_controller.sorting_section.header_title" = "I-sort Ayon Sa";
-
-/* Sort by route option */
-"stop_preferences_controller.sorting_section.sort_by_route" = "I-sort ayon sa ruta";
-
-/* Sort by time option */
-"stop_preferences_controller.sorting_section.sort_by_time" = "I-sort ayon sa oras";
-
 /* Title of the Edit Stop preferences controller */
 "stop_preferences_controller.title" = "I-filter ang Mga Ruta";
 
@@ -1653,9 +1644,6 @@
 /* Primary button on the survey launcher card; opens the survey. */
 "survey_launcher.take_survey_button" = "Sagutan ang survey";
 
-/* Title of the survey launcher card on the stop screen. */
-"survey_launcher.title" = "Tumulong na mapahusay ang transit";
-
 /* Message shown when an external survey link cannot be opened */
 "survey_vc.external_survey_error.message" = "Hindi mabuksan ang link ng survey na ito. Pakisubukang muli mamaya.";
 
@@ -1695,21 +1683,6 @@
 /* A notice when a transit alert doesn't have body text. */
 "transit_alert.no_additional_details.body" = "Walang karagdagang detalyeng available.";
 
-/* Describes the next trip of this vehicle. e.g. Continues as 10 - Downtown Seattle */
-"trip_details_controller.continues_as_fmt" = "Magpapatuloy bilang %@";
-
-/* Last report: <TIME> */
-"trip_details_controller.last_report_fmt" = "Huling ulat: %@";
-
-/* Service alerts header in the trip details controller. */
-"trip_details_controller.service_alerts_footer" = "Mga Detalye ng Biyahe";
-
-/* Button that moves the map to focus on the selected stop */
-"trip_details_controller.show_on_map" = "Ipakita sa Mapa";
-
-/* Describes the previous trip of this vehicle. e.g. Starts as 10 - Downtown Seattle */
-"trip_details_controller.starts_as_fmt" = "Magsisimula bilang %@";
-
 /* Shown beside a Retry button when loading the trip's stop list failed. */
 "trip_page.stops_failed" = "Hindi ma-load ang mga hintuan ng biyaheng ito.";
 
@@ -1730,12 +1703,6 @@
 
 /* Voiceover text explaining that this stop is not part of the shared ride */
 "trip_stop.outside_ride.accessibility_label" = "Hindi bahagi ng ibinahaging biyahe";
-
-/* Voiceover text explaining that this stop is the user's destination */
-"trip_stop.user_destination.accessibility_label" = "Ang iyong destinasyon";
-
-/* Voiceover text explaining that the vehicle is currently at this stop */
-"trip_stop.vehicle_location.accessibility_label" = "Nandito ang sasakyan";
 
 /* Suggested invocation phrase for Siri Shortcut */
 "user_activity_builder.show_me_my_bus" = "Ipakita ang bus ko";
@@ -1814,24 +1781,6 @@
 
 /* Voiceover text describing no departures in the near-future. */
 "voiceover.bookmarkarrivaldata.value.noupcomingdepartures_fmt" = "Walang paparating na pag-alis";
-
-/* A label for blind or low-vision users on the UI element that describes how long it takes to walk to the stop. */
-"walk_time_view.accessibility_label" = "Oras ng paglalakad papunta sa hintuan";
-
-/* A label for blind or low-vision users on the UI element that describes how long it takes to bike to the stop. */
-"walk_time_view.accessibility_label_bike" = "Oras ng pagbibisikleta papunta sa hintuan";
-
-/* Accessibility string with placeholders for distance from stop, walking time to stop, and predicted arrival time. e.g. 1.2 miles. Takes 17 minutes to walk, arriving at 9:41 am */
-"walk_time_view.accessibility_value" = "%1$@. Aabutin ng %2$@ ang paglalakad, darating sa %3$@";
-
-/* Accessibility string with placeholders for distance from stop, biking time to stop, and predicted arrival time. e.g. 1.2 miles. Takes 6 minutes to bike, arriving at 9:41 am */
-"walk_time_view.accessibility_value_bike" = "%1$@. Aabutin ng %2$@ ang pagbibisikleta, darating sa %3$@";
-
-/* Format string with placeholders for distance from stop, travel time to stop, and predicted arrival time. e.g. 1.2 miles, 17m: arriving at 09:41 A.M. */
-"walk_time_view.distance_time_fmt" = "%1$@, %2$@: darating sa %3$@";
-
-/* Accessibility label for the transfer arrival banner shown when navigating to a connecting stop. */
-"walk_time_view.transfer_accessibility_label" = "Oras ng pagdating ng transfer";
 
 /* Spoken value for the map weather control. First %@ is the temperature, second is the weather condition. */
 "weather.button_accessibility_value_format" = "%1$@, %2$@";
@@ -2004,8 +1953,6 @@
 "settings_controller.debug_section.test_device_description.placeholder" = "hal. iPhone ni Aaron";
 /* Settings > Map section > Show Apple MapKit Points of Interest */
 "settings_controller.map_section.shows_points_of_interest" = "Mga Points of Interest";
-/* Title of the message shown when the server has no stop at the requested ID. */
-"stop_controller.stop_not_found_title" = "Hindi Nahanap ang Hintuan";
 /* VoiceOver announcement posted when the Departure Type filter changes which departures are visible. */
 "stop_page.a11y.filter_changed" = "Nabago ang filter ng pag-alis";
 /* VoiceOver announcement when the Past disclosure is closed. */
@@ -2046,6 +1993,8 @@
 "trip_page.card.distance_stops_a11y_fmt" = "%1$@ ang layo, %2$d na hintuan ang layo";
 /* Trip card line: how far the vehicle is from the rider's stop. %1$@ is a distance like '1.2 mi', %2$d the number of stops in between. Plural forms live in Localizable.stringsdict; this value is only the not-found fallback. */
 "trip_page.card.distance_stops_fmt" = "%1$@ ang layo · %2$d na hintuan";
+/* Row on the trip page naming the trip the same vehicle runs next, which a rider who stays on board rides into. %@ is that trip's route and headsign, e.g. 'Continues as 10 - Downtown Seattle'. */
+"trip_page.continues_as_fmt" = "Magpapatuloy bilang %@";
 /* Confirmation shown after a ghost bus report (a scheduled bus that never came) is submitted. */
 "trip_page.ghost_bus_report_sent" = "Salamat! Naipadala na ang iyong ulat.";
 /* Error shown when a ghost bus report can't be submitted because the region's Obaco service is unreachable. */
@@ -2062,6 +2011,8 @@
 "trip_page.report_ghost_bus" = "Mag-ulat ng Ghost Bus";
 /* Short caption on the trip page button opening the route's schedule. Keep it to one short word: it shares a row with three other buttons. */
 "trip_page.schedule" = "Iskedyul";
+/* Row on the trip page naming the trip the same vehicle runs just before this one. %@ is that trip's route and headsign, e.g. 'Starts as 10 - Downtown Seattle'. */
+"trip_page.starts_as_fmt" = "Magsisimula bilang %@";
 /* VoiceOver clause on a stop the vehicle has already served. */
 "trip_page.stop_list.a11y_passed" = "nadaanan na";
 /* VoiceOver label for a collapsed run of stops between the vehicle and the rider's stop, e.g. '5 stops before your stop'. Plural forms live in Localizable.stringsdict; this value is only the not-found fallback. */
@@ -2100,8 +2051,6 @@
 "trip_progress.passed_your_stop" = "Nadaanan na ang hintuan mo";
 /* Shows the current stop position. e.g. Stop 5 of 18 */
 "trip_progress.stop_count_fmt" = "Hintuan %1$d sa %2$d";
-/* Voiceover text explaining that the vehicle has already passed this stop */
-"trip_stop.passed_stop.accessibility_label" = "Nadaanang hintuan";
 
 /* Accessibility label for the mic button that starts voice search. */
 "search_sheet.voice_search.start" = "Voice search";
@@ -2421,3 +2370,9 @@
 
 /* Title of the page that explains an error in detail. */
 "problem_details.title" = "Mga Detalye ng Problema";
+
+/* VoiceOver hint for an actionable search result row. */
+"search_controller.accessibility.open_result" = "Binubuksan ang resultang ito.";
+
+/* VoiceOver hint for a quick search row, which runs a search and keeps the search field open. */
+"search_controller.accessibility.quick_search" = "Hinahanap ito.";

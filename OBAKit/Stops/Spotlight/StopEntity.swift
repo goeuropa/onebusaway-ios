@@ -42,12 +42,16 @@ nonisolated public struct StopEntity: IndexedEntity {
         AppLinksRouter.StopDestination(stopID: stopID, regionID: regionID)
     }
 
-    public var displayRepresentation: DisplayRepresentation {
-        let title = name ?? String(
+    /// The stop's name, or "Stop 1_75403" when the app has none.
+    var title: String {
+        name ?? String(
             format: OBALoc("stop_entity.fallback_title_fmt", value: "Stop %@", comment: "Title of a transit stop in Shortcuts and Siri when the app has no name for it. The parameter is the stop's ID, such as 1_75403."),
             stopID
         )
-        return DisplayRepresentation(title: "\(title)", subtitle: subtitle.map { "\($0)" })
+    }
+
+    public var displayRepresentation: DisplayRepresentation {
+        DisplayRepresentation(title: "\(title)", subtitle: subtitle.map { "\($0)" })
     }
 
     /// Lets Spotlight find the stop by its code and place it on a map. These
@@ -101,6 +105,22 @@ nonisolated public struct StopEntityQuery: EntityStringQuery {
             return nil
         }
         return defaults
+    }
+}
+
+/// Lets Spotlight ask for stops again from iOS 27, for instance after it loses
+/// its index. Each method returns once the app's `StopSpotlightIndexer` has
+/// indexed the stops, because the system keeps the process alive only until
+/// then, and throws if that failed. `indexDescription` names only a protection
+/// class, and the app keeps its stops in one index, so it isn't read.
+@available(iOS 27.0, *)
+nonisolated extension StopEntityQuery: IndexedEntityQuery {
+    public func reindexEntities(for identifiers: [StopEntity.ID], indexDescription: CSSearchableIndexDescription) async throws {
+        try await StopSpotlightIndexer.reindexCurrent(.stops(identifiers))
+    }
+
+    public func reindexAllEntities(indexDescription: CSSearchableIndexDescription) async throws {
+        try await StopSpotlightIndexer.reindexCurrent(.all)
     }
 }
 
@@ -187,18 +207,18 @@ nonisolated enum StopEntityMapping {
     /// stop id. An id that doesn't parse is dropped.
     static func entities(forIdentifiers identifiers: [String], bookmarks: [Bookmark], recentStops: [Stop]) -> [StopEntity] {
         identifiers.compactMap { identifier in
-            guard let destination = destination(fromIdentifier: identifier) else {
+            guard let destination = destination(fromIdentifier: identifier), let regionID = destination.regionID else {
                 Logger.warn("Stop entity id \(identifier) doesn't name a region and stop; dropping it.")
                 return nil
             }
 
-            let stored = bookmarks.first { $0.regionIdentifier == destination.regionID && $0.stopID == destination.stopID }?.stop
-                ?? recentStops.first { $0.regionIdentifier == destination.regionID && $0.id == destination.stopID }
+            let stored = bookmarks.first { $0.regionIdentifier == regionID && $0.stopID == destination.stopID }?.stop
+                ?? recentStops.first { $0.regionIdentifier == regionID && $0.id == destination.stopID }
 
             if let stored {
-                return entity(for: stored, regionID: destination.regionID)
+                return entity(for: stored, regionID: regionID)
             }
-            return StopEntity(regionID: destination.regionID, stopID: destination.stopID, name: nil, code: nil, subtitle: nil, latitude: nil, longitude: nil)
+            return StopEntity(regionID: regionID, stopID: destination.stopID, name: nil, code: nil, subtitle: nil, latitude: nil, longitude: nil)
         }
     }
 

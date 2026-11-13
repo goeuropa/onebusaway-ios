@@ -21,11 +21,9 @@ import OBAKitCore
 /// shares the app-group suite with Settings — without it, compact mode and
 /// reduced colors on the trip page read `UserDefaults.standard` and stay off.
 ///
-/// Deliberately map-free. `TripViewController`, which this replaces, owned a
-/// full-screen `MKMapView` and added its own floating panel as a child; pushed
-/// into the stop sheet that nests a panel inside a panel. Keeping the map out of
-/// here is what lets the same page be pushed into a sheet over the map tab's map
-/// and, later, into a standalone host that supplies its own.
+/// Deliberately map-free. Keeping the map out of here is what lets the same page
+/// be pushed into a sheet over the map tab's map and embedded in
+/// `TripMapHostViewController`, which supplies a map of its own.
 final class TripPageViewController: UIHostingController<TripPageRootView>,
     AppContext,
     AlarmBuilderDelegate,
@@ -36,6 +34,10 @@ final class TripPageViewController: UIHostingController<TripPageRootView>,
 
     public let application: Application
     let viewModel: TripViewModel
+
+    /// The stop a shared trip link named as the sharer's exit, or `nil` for every
+    /// other way into this screen.
+    var destinationStopID: StopID? { viewModel.destinationStopID }
 
     /// The name of the screen this was pushed from, shown beside the back button.
     private let originTitle: String?
@@ -56,10 +58,26 @@ final class TripPageViewController: UIHostingController<TripPageRootView>,
     /// strip behind its grabber to match or it reads as a white bar across the top.
     let sheetSurfaceColor: UIColor? = .systemGroupedBackground
 
-    init(application: Application, tripConvertible: TripConvertible, originTitle: String? = nil) {
+    /// Initializes a trip page controller with a trip convertible model.
+    ///
+    /// - Parameters:
+    ///   - application: The application context.
+    ///   - tripConvertible: The trip model representation.
+    ///   - originTitle: The title of the presenting screen.
+    ///   - destinationStopID: The optional shared-trip destination stop ID.
+    init(
+        application: Application,
+        tripConvertible: TripConvertible,
+        originTitle: String? = nil,
+        destinationStopID: StopID? = nil
+    ) {
         self.application = application
         self.originTitle = originTitle
-        self.viewModel = TripViewModel(application: application, tripConvertible: tripConvertible)
+        self.viewModel = TripViewModel(
+            application: application,
+            tripConvertible: tripConvertible,
+            destinationStopID: destinationStopID
+        )
 
         // The page's actions capture `self`, which doesn't exist until after
         // `super.init`. Seed with the inert default set and replace immediately.
@@ -71,14 +89,29 @@ final class TripPageViewController: UIHostingController<TripPageRootView>,
             actions: TripPageActions()
         ))
 
+        viewModel.shouldSkipProgrammaticRefresh = { UIAccessibility.isVoiceOverRunning }
+
         render()
     }
 
-    convenience init(application: Application, arrivalDeparture: ArrivalDeparture, originTitle: String? = nil) {
+    /// Initializes a trip page controller with an arrival/departure.
+    ///
+    /// - Parameters:
+    ///   - application: The application context.
+    ///   - arrivalDeparture: The arrival/departure to display.
+    ///   - originTitle: The title of the presenting screen.
+    ///   - destinationStopID: The optional shared-trip destination stop ID.
+    convenience init(
+        application: Application,
+        arrivalDeparture: ArrivalDeparture,
+        originTitle: String? = nil,
+        destinationStopID: StopID? = nil
+    ) {
         self.init(
             application: application,
             tripConvertible: TripConvertible(arrivalDeparture: arrivalDeparture),
-            originTitle: originTitle
+            originTitle: originTitle,
+            destinationStopID: destinationStopID
         )
     }
 
@@ -101,7 +134,7 @@ final class TripPageViewController: UIHostingController<TripPageRootView>,
             // match `showsSystemNavigationBar` on the way back, and a stale back
             // row would leave the page with two back controls, or none.
             render()
-            guard navigationController?.topViewController === self else { return }
+            guard navigationController?.topViewController === stackEntry else { return }
             hideNavigationBar(animated: true)
         }
 
@@ -140,10 +173,31 @@ final class TripPageViewController: UIHostingController<TripPageRootView>,
         // pushed on top gave that page the bar back. Animated with the pop, so
         // the bar doesn't vanish from the page above at the start of a back swipe.
         hideNavigationBar(animated: animated)
+        // Embedded in `TripMapHostViewController`, the page can load and render
+        // before the host is on a stack, from a back row with nothing to ask.
+        // By now it is, so the row's glyph and the host's title can be right.
+        if stackEntry !== self {
+            render()
+        }
         disableIdleTimer()
         beginUserActivity()
         viewModel.start()
         onMapFocusChanged?(mapFocus)
+    }
+
+    /// Whether a sheet in the map panel's pile covers this page's sheet.
+    private(set) var isCoveredBySheet = false
+
+    /// Stops the refresh while a sheet covers this page, which UIKit doesn't
+    /// report as disappearing, and refreshes once it's uncovered.
+    func setCoveredBySheet(_ isCovered: Bool) {
+        guard isCovered != isCoveredBySheet else { return }
+        isCoveredBySheet = isCovered
+        if isCovered {
+            viewModel.deactivate()
+        } else if viewIfLoaded?.window != nil {
+            viewModel.start()
+        }
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -167,10 +221,9 @@ final class TripPageViewController: UIHostingController<TripPageRootView>,
     /// `updateUserActivityState(_:)` puts back.
     private var activityUserInfo: [AnyHashable: Any]?
 
-    /// Publishes this trip's `NSUserActivity` for Handoff, as `TripViewController`
-    /// does. The builder leaves it out of Siri predictions, because a trip ID is
-    /// single-use, and builds none for a trip with no `ArrivalDeparture`, such as
-    /// one opened from a vehicle.
+    /// Publishes this trip's `NSUserActivity` for Handoff. The builder leaves it
+    /// out of Siri predictions, because a trip ID is single-use, and builds none
+    /// for a trip with no `ArrivalDeparture`, such as one opened from a vehicle.
     ///
     /// Internal for tests, which can't let the page appear: that starts the trip's loads.
     func beginUserActivity() {
@@ -256,12 +309,27 @@ final class TripPageViewController: UIHostingController<TripPageRootView>,
     /// page covered by a push can report too.
     private func restoreNavigationBar(animated: Bool) {
         guard let wasHidden = navigationBarWasHidden, let navigationController else { return }
-        if !navigationController.viewControllers.contains(self) {
+        if !navigationController.viewControllers.contains(stackEntry) {
             navigationBarWasHidden = nil
             navigationController.setNavigationBarHidden(wasHidden, animated: animated)
-        } else if navigationController.topViewController !== self {
+        } else if navigationController.topViewController !== stackEntry {
             navigationController.setNavigationBarHidden(false, animated: animated)
         }
+    }
+
+    /// The controller that sits on the stack for this page: the
+    /// `TripMapHostViewController` it is embedded in, or the page itself.
+    ///
+    /// Embedded, the page shares the host's `navigationController` but is not one
+    /// of its `viewControllers`. Asked about itself, it would read every push on
+    /// top of the host as the host being popped.
+    private var stackEntry: UIViewController {
+        var ancestor = parent
+        while let candidate = ancestor {
+            if candidate is TripMapHostViewController { return candidate }
+            ancestor = candidate.parent
+        }
+        return self
     }
 
     // MARK: - Map focus
@@ -277,7 +345,52 @@ final class TripPageViewController: UIHostingController<TripPageRootView>,
     /// Set by a host that opens stops itself: the map panel, which shows a stop as a
     /// sheet of its own. `nil` pushes the stop through `ViewRouter`, which needs this
     /// page to be on a navigation stack.
-    var onSelectStop: ((StopID) -> Void)?
+    ///
+    /// Called with the same transfer context the pushed stop gets, not yet checked
+    /// against the trip highlight setting: whoever builds the stop page does that.
+    var onSelectStop: ((StopID, TransferContext?) -> Void)?
+
+    /// Opens a stop the rider tapped: a row in the list, or a stop's dot on
+    /// `TripMapHostViewController`'s map, which hands over the row the dot was
+    /// drawn from.
+    func openStop(_ row: TripStopListModel.Row) {
+        // The row's own time, not a lookup by stop ID: a loop route calls at
+        // the same stop twice, and the rider tapped one visit in particular.
+        let transferContext = TransferContext.toStop(row.stopID, arrivalDate: row.date, from: departure)
+        if let onSelectStop {
+            onSelectStop(row.stopID, transferContext)
+            return
+        }
+        application.viewRouter.navigateTo(stopID: row.stopID, from: self, transferContext: transferContext)
+    }
+
+    /// Set by a host that opens trips itself: the map panel, which shows a trip as
+    /// a sheet of its own, and `TripMapHostViewController`, which pushes another
+    /// host. `nil` pushes a bare page onto this page's stack, as the map tab's stop
+    /// sheet hosts this one.
+    var onSelectTrip: ((TripConvertible) -> Void)?
+
+    /// Opens a trip the rider reached from this one: what it starts as, or what
+    /// it continues as. See `onSelectTrip`.
+    func openTrip(_ convertible: TripConvertible) {
+        if let onSelectTrip {
+            onSelectTrip(convertible)
+            return
+        }
+        // Can't happen: every host that shows this page without a stack sets the hook.
+        guard navigationController != nil else {
+            Logger.error("Can't open trip \(convertible.tripID): the trip page isn't on a navigation stack.")
+            assertionFailure("A trip page with no stack has no onSelectTrip to open trip \(convertible.tripID).")
+            return
+        }
+        let page = TripPageViewController(application: application, tripConvertible: convertible, originTitle: pageTitle)
+        // The map behind this page, if there is one, draws that trip instead.
+        // Each page gives the map up in `viewWillDisappear` as it leaves the
+        // stack and takes it again in `viewWillAppear`, so Back returns the map
+        // to this trip.
+        page.onMapFocusChanged = onMapFocusChanged
+        application.viewRouter.navigate(to: page, from: self)
+    }
 
     private func publishMapFocus(
         convertible: TripConvertible,
@@ -285,13 +398,13 @@ final class TripPageViewController: UIHostingController<TripPageRootView>,
         shape: [CLLocationCoordinate2D]?
     ) {
         let status = convertible.tripStatus
-        let departure = convertible.arrivalDeparture
 
+        // The list's own rows, shared destination included, so a shared trip's
+        // map marks the same stop as the rider's that the list does.
         let stops = TripStopListModel.make(
-            stopTimes: details?.stopTimes ?? [],
-            userStopID: departure?.stopID,
-            userStopSequence: departure?.stopSequence,
-            closestStopID: status?.closestStopID
+            convertible: convertible,
+            details: details,
+            sharedDestinationStopID: viewModel.destinationStopID
         ).rows
 
         mapFocus.apply(
@@ -323,8 +436,10 @@ final class TripPageViewController: UIHostingController<TripPageRootView>,
     /// action gates and the two pieces of state this controller owns.
     private func render() {
         existingAlarm = lookUpAlarm()
-        title = pageTitle
-        navigationItem.rightBarButtonItem = showsSystemNavigationBar ? refreshBarButton : nil
+        // On the controller the stack shows: embedded, the host's bar reads the
+        // host's item, and a page pushed over it takes its back title from there.
+        stackEntry.title = pageTitle
+        stackEntry.navigationItem.rightBarButtonItem = showsSystemNavigationBar ? refreshBarButton : nil
         rootView = TripPageRootView(
             viewModel: viewModel,
             userDefaults: application.userDefaults,
@@ -417,13 +532,11 @@ final class TripPageViewController: UIHostingController<TripPageRootView>,
         actions.canReportGhostBus = application.features.obaco == .running
 
         actions.onBack = { [weak self] in self?.goBack() }
-        actions.onSelectStop = { [weak self] stopID in
-            guard let self else { return }
-            if let onSelectStop {
-                onSelectStop(stopID)
-                return
+        actions.onSelectStop = { [weak self] row in self?.openStop(row) }
+        actions.onSelectAdjacentTrip = { [weak self] order in
+            self?.viewModel.openAdjacentTrip(order) { [weak self] convertible in
+                self?.openTrip(convertible)
             }
-            application.viewRouter.navigateTo(stopID: stopID, from: self)
         }
         actions.onBookmark = { [weak self] in self?.showBookmarkEditor() }
         actions.onSchedule = { [weak self] in self?.showSchedule() }
@@ -437,6 +550,11 @@ final class TripPageViewController: UIHostingController<TripPageRootView>,
         }
         actions.onLiveActivity = { [weak self] in self?.startLiveActivity() }
         actions.onReportGhostBus = { [weak self] in self?.showGhostBusReport() }
+        // Modal from wherever the page is, as the classic trip panel opens one.
+        actions.onSelectAlert = { [weak self] alert in
+            guard let self else { return }
+            application.viewRouter.navigateTo(alert: alert, from: self)
+        }
 
         return actions
     }
@@ -647,8 +765,8 @@ final class TripPageViewController: UIHostingController<TripPageRootView>,
         return AlarmVisitIdentity.alarm(for: departure, regionID: regionID, in: store.alarms)
     }
 
-    /// Mirrors `StopViewModel.cancelAlarm(for:)`: the server copy goes first, so
-    /// a failure leaves the rider an alarm they can still see and cancel.
+    /// Goes through `AlarmRemover`, as the stop page does, which also tells the
+    /// stop page underneath to drop its bell.
     private func removeAlarm(_ alarm: Alarm) {
         // A second activation while the delete is in flight would delete and
         // announce twice.
@@ -657,17 +775,11 @@ final class TripPageViewController: UIHostingController<TripPageRootView>,
         Task { @MainActor in
             defer { isRemovingAlarm = false }
             do {
-                guard let obacoService = application.obacoService else {
-                    throw StopViewModel.AlarmCancellationError.serviceUnavailable
-                }
-                try await obacoService.deleteAlarm(url: alarm.url)
-            } catch APIError.requestNotFound {
-                // It already fired, and the server deleted it.
+                try await AlarmRemover(application: application).remove(alarm)
             } catch {
                 await AlertPresenter.show(error: error, presentingController: self)
                 return
             }
-            application.userDataStore.delete(alarm: alarm)
             render()
             AccessibilityNotification.Announcement(AlarmVisitIdentity.removedAnnouncement).post()
         }

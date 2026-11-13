@@ -42,16 +42,46 @@ nonisolated struct SpotlightStopIndex: StopEntityIndexing {
 /// writes the index. Runs happen one at a time, off the main actor.
 @MainActor
 final class StopSpotlightIndexer {
+    /// What Spotlight asks to have indexed again.
+    nonisolated enum ReindexScope: Equatable, Sendable {
+        case all
+        case stops([StopEntity.ID])
+    }
+
+    /// Thrown to Spotlight when it asks before the app has created its indexer.
+    nonisolated struct NotStarted: Error {}
+
+    /// The indexer `Application` runs, which `StopEntityQuery` can't otherwise
+    /// reach. Weak, so `Application` still owns it.
+    static weak var current: StopSpotlightIndexer?
+
     private let index: any StopEntityIndexing
     private let userDataStore: UserDataStore
     private let stopCache: StopCacheRepository?
+    private let userDefaults: UserDefaults
     private let currentRegion: () -> Region?
     private let isIndexingAvailable: () -> Bool
+    private let now: () -> Date
     private let batchSize: Int
 
-    /// The run in flight, if any. Each run waits for the one before it.
-    /// Internal so tests can await it instead of polling.
-    private(set) var currentRun: Task<Void, Never>?
+    /// How long a finished replace lets a launch or a region sync skip the clear.
+    /// Only a replace removes the stops the 30-day cache purge or a sync drops,
+    /// and otherwise only a region change would trigger one. A week
+    /// matches the sync's own full interval (`RegionStopSyncPolicy.fullSyncInterval`).
+    private static let replaceInterval: TimeInterval = 7 * 86_400
+
+    private static let lastReplaceRegionKey = "StopSpotlightIndexer.lastReplaceRegionID"
+    private static let lastReplaceDateKey = "StopSpotlightIndexer.lastReplaceDate"
+
+    /// The run in flight, if any. Each run waits for the one before it, and
+    /// throws if it failed or was cancelled. Internal so tests can await it
+    /// instead of polling.
+    private(set) var currentRun: Task<Void, any Error>?
+
+    /// The newest replace. Only a replace cancels a run, and it refills the
+    /// index for the current region, so `reindex(_:)` waits for this one
+    /// instead of the run it cancelled.
+    private var latestReplace: Task<Void, any Error>?
 
     /// The stops the latest requested run indexes at priority 3, so a bookmark
     /// change can tell which ones lost their bookmark. Set on request, not on
@@ -60,21 +90,28 @@ final class StopSpotlightIndexer {
     private var indexedBookmarks: [StopEntity] = []
 
     /// Observes `NotificationCenter.default` because that is where
-    /// `UserDefaultsStore` posts `.bookmarksDidChange`. Selector-based observation
-    /// is removed on dealloc.
+    /// `UserDefaultsStore` posts `.bookmarksDidChange`. Selector-based
+    /// observation is removed on dealloc.
+    ///
+    /// `userDefaults` remembers the last finished replace across launches. It has
+    /// no default, so a test can't write `UserDefaults.standard` by leaving it out.
     init(
         index: any StopEntityIndexing = SpotlightStopIndex(),
         userDataStore: UserDataStore,
         stopCache: StopCacheRepository?,
+        userDefaults: UserDefaults,
         currentRegion: @escaping () -> Region?,
         isIndexingAvailable: @escaping () -> Bool = { CSSearchableIndex.isIndexingAvailable() },
+        now: @escaping () -> Date = { Date() },
         batchSize: Int = 1_000
     ) {
         self.index = index
         self.userDataStore = userDataStore
         self.stopCache = stopCache
+        self.userDefaults = userDefaults
         self.currentRegion = currentRegion
         self.isIndexingAvailable = isIndexingAvailable
+        self.now = now
         self.batchSize = batchSize
 
         NotificationCenter.default.addObserver(
@@ -89,31 +126,47 @@ final class StopSpotlightIndexer {
         currentRun?.cancel()
     }
 
-    /// Clears the index, then fills it from the current region. Runs at launch
-    /// and on region change, which is how the previous region's stops leave
-    /// Spotlight, and after a region sync writes stops, which is how synced
-    /// stops arrive and the ones the server dropped leave.
+    /// Indexes the current region's stops at launch and after a region sync
+    /// writes them. If a replace of this region finished within
+    /// `replaceInterval`, it indexes on top of what Spotlight already holds, so
+    /// the stops stay searchable while it runs. Otherwise it replaces: on the
+    /// first launch, after a replace that failed or was cut short, or when the
+    /// last replace was of another region.
     ///
-    /// The 30-day cache purge (`CoreApplication.purgeStaleStopCache()`) runs at
-    /// launch and on region change too, so this can index a stop the purge
-    /// removes a moment later. That stop opens normally and is gone after the
-    /// next launch.
-    func replaceAll() {
+    /// Indexing an entity whose ID is already in the index replaces it, so this
+    /// updates every stop it covers. Spotlight can't list what it holds, though,
+    /// so a stop that left the cache stays until the next replace.
+    func indexOrReplace() {
         guard let snapshot = makeSnapshot() else { return }
+        guard hasRecentReplace(of: snapshot.regionID) else {
+            Logger.info("No recent Spotlight stop index for region \(snapshot.regionID); rebuilding it.")
+            replace(with: snapshot)
+            return
+        }
+
         let index = index
         let stopCache = stopCache
         let batchSize = batchSize
         indexedBookmarks = snapshot.bookmarked
 
-        enqueue(cancellingPrevious: true) {
-            // If this fails, indexing on top of the old entries would mix regions.
-            try await index.deleteAll()
-            try await Self.submit(snapshot.bookmarked, priority: 3, to: index)
-            try await Self.submit(snapshot.recent, priority: 2, to: index)
-            if let stopCache {
-                try await Self.indexCachedStops(of: snapshot, from: stopCache, into: index, batchSize: batchSize)
-            }
+        enqueue(cancellingPrevious: false) {
+            try await Self.fill(index, from: snapshot, stopCache: stopCache, batchSize: batchSize)
         }
+    }
+
+    /// Clears the index, then fills it from the current region. Runs on region
+    /// change, which is how the previous region's stops leave Spotlight, and
+    /// when `indexOrReplace()` finds no recent replace, which is how the stops a
+    /// region sync dropped leave.
+    ///
+    /// The 30-day cache purge (`CoreApplication.purgeStaleStopCache()`) runs at
+    /// launch and on region change too, so this can index a stop the purge
+    /// removes a moment later. That stop opens normally and is gone after the
+    /// next replace, at most `replaceInterval` later.
+    @discardableResult
+    func replaceAll() -> Task<Void, any Error>? {
+        guard let snapshot = makeSnapshot() else { return nil }
+        return replace(with: snapshot)
     }
 
     /// Re-indexes the bookmarked stops at priority 3 without clearing anything,
@@ -124,8 +177,11 @@ final class StopSpotlightIndexer {
     /// upsert.
     ///
     /// A stop that lost its bookmark drops to the tier a replace would give it:
-    /// 2 if it's recent, otherwise 1. One that isn't cached either is indexed at
-    /// 1 and stays there until the next replace drops it.
+    /// 2 if it's recent, otherwise 1. A recent one is indexed from its recent
+    /// copy: a visit refreshes the stop's recent copy and its bookmark's without
+    /// posting `.bookmarksDidChange`, so `indexedBookmarks` can hold an older
+    /// one. Any other is indexed from `indexedBookmarks`, and one that isn't
+    /// cached either stays at 1 until the next replace drops it.
     func indexBookmarks() {
         guard let snapshot = makeSnapshot() else { return }
         let index = index
@@ -133,7 +189,8 @@ final class StopSpotlightIndexer {
         let bookmarkedIDs = Set(snapshot.bookmarked.map(\.stopID))
         let recentIDs = Set(snapshot.recent.map(\.stopID))
         let unbookmarked = indexedBookmarks.filter { !bookmarkedIDs.contains($0.stopID) }
-        let nowRecent = unbookmarked.filter { recentIDs.contains($0.stopID) }
+        let unbookmarkedIDs = Set(unbookmarked.map(\.stopID))
+        let nowRecent = snapshot.recent.filter { unbookmarkedIDs.contains($0.stopID) }
         let nowCached = unbookmarked.filter { !recentIDs.contains($0.stopID) }
         indexedBookmarks = snapshot.bookmarked
 
@@ -144,7 +201,81 @@ final class StopSpotlightIndexer {
         }
     }
 
+    /// Answers Spotlight asking for stops again, which `StopEntityQuery` passes
+    /// on from iOS 27. Returns once they are indexed, or at once if there is
+    /// nothing to index, and throws the error of a run that failed.
+    ///
+    /// `.all` replaces: Spotlight has likely lost its copy, and a replace also
+    /// restarts `replaceInterval`.
+    ///
+    /// `.stops` indexes only those stops, each at the tier a replace would give
+    /// it, without clearing. A stop from another region, or one the app no
+    /// longer has, is skipped, which leaves it out of Spotlight as a replace
+    /// would. The cache has no lookup by id, so this pages through the region's
+    /// cached stops as a replace does.
+    ///
+    /// A replace that starts meanwhile, after a region sync or a region change,
+    /// cancels the run and refills the index for the current region, so this
+    /// waits for that replace instead, and for the next one if it is cancelled
+    /// too.
+    func reindex(_ scope: ReindexScope) async throws {
+        var run: Task<Void, any Error>? = switch scope {
+        case .all:
+            replaceAll()
+        case .stops(let identifiers):
+            reindexStops(identifiers)
+        }
+
+        while let awaited = run {
+            do {
+                try await awaited.value
+                return
+            } catch is CancellationError {
+                // `replace(with:)` records a replace in the same main-actor
+                // call that cancels the run before it. This method holds the
+                // indexer, so `deinit` can't have cancelled it.
+                guard let replacement = latestReplace, replacement != awaited else { throw CancellationError() }
+                run = replacement
+            }
+        }
+    }
+
+    /// Runs `scope` on `current` and returns once it is indexed, so the
+    /// process stays alive for the run when Spotlight launches the app to ask.
+    /// Throws `NotStarted` if the app hasn't created its indexer yet, and the
+    /// run's error if it failed.
+    static func reindexCurrent(_ scope: ReindexScope) async throws {
+        guard let indexer = current else {
+            Logger.warn("Spotlight asked to re-index stops before the app started indexing them.")
+            throw NotStarted()
+        }
+        try await indexer.reindex(scope)
+    }
+
     // MARK: - Private
+
+    private func reindexStops(_ identifiers: [StopEntity.ID]) -> Task<Void, any Error>? {
+        guard let snapshot = makeSnapshot() else { return nil }
+        let destinations = identifiers.compactMap(StopEntityMapping.destination(fromIdentifier:))
+        let inRegion = destinations.filter { $0.regionID == snapshot.regionID }
+        if inRegion.count < identifiers.count {
+            Logger.info("Spotlight asked to re-index \(identifiers.count) stops; \(identifiers.count - destinations.count) ids don't name a stop and \(destinations.count - inRegion.count) are outside region \(snapshot.regionID). Skipping those.")
+        }
+        guard !inRegion.isEmpty else { return nil }
+        let wanted = Set(inRegion.map(\.stopID))
+
+        let index = index
+        let stopCache = stopCache
+        let batchSize = batchSize
+
+        return enqueue(cancellingPrevious: false) {
+            try await Self.submit(snapshot.bookmarked.filter { wanted.contains($0.stopID) }, priority: 3, to: index)
+            try await Self.submit(snapshot.recent.filter { wanted.contains($0.stopID) }, priority: 2, to: index)
+            if let stopCache {
+                try await Self.indexCachedStops(of: snapshot, from: stopCache, into: index, batchSize: batchSize, only: wanted)
+            }
+        }
+    }
 
     /// The main-actor reads a run needs, taken when it is requested.
     nonisolated private struct Snapshot: Sendable {
@@ -170,19 +301,69 @@ final class StopSpotlightIndexer {
         return Snapshot(regionID: region.regionIdentifier, bookmarked: tiers.bookmarked, recent: tiers.recent)
     }
 
-    /// Runs `work` after the run in flight finishes. `replaceAll()` cancels that
-    /// run first, so a region switch stops the old region's indexing, and still
-    /// waits for it, so none of its batches lands after the new region's delete.
-    private func enqueue(cancellingPrevious: Bool, _ work: @escaping @Sendable () async throws -> Void) {
+    /// Forgets the last replace before clearing, and remembers this one only
+    /// once it finishes, so a launch after one that failed, was cancelled or was
+    /// killed with the app replaces again instead of indexing on top.
+    @discardableResult
+    private func replace(with snapshot: Snapshot) -> Task<Void, any Error> {
+        let index = index
+        let stopCache = stopCache
+        let batchSize = batchSize
+        indexedBookmarks = snapshot.bookmarked
+        forgetLastReplace()
+
+        let run = enqueue(cancellingPrevious: true) { [weak self] in
+            // If this fails, indexing on top of the old entries would mix regions.
+            try await index.deleteAll()
+            try await Self.fill(index, from: snapshot, stopCache: stopCache, batchSize: batchSize)
+            await self?.rememberReplace(of: snapshot.regionID)
+        }
+        latestReplace = run
+        return run
+    }
+
+    private func hasRecentReplace(of regionID: Int) -> Bool {
+        guard userDefaults.object(forKey: Self.lastReplaceRegionKey) as? Int == regionID,
+              let replacedAt = userDefaults.object(forKey: Self.lastReplaceDateKey) as? Date else {
+            return false
+        }
+        return now().timeIntervalSince(replacedAt) < Self.replaceInterval
+    }
+
+    private func forgetLastReplace() {
+        userDefaults.removeObject(forKey: Self.lastReplaceRegionKey)
+        userDefaults.removeObject(forKey: Self.lastReplaceDateKey)
+    }
+
+    /// Called by the run itself once it has filled the index. The cancellation
+    /// check is on the main actor, where `replace(with:)` cancels, so a run that
+    /// a newer replace cancelled can't record itself after that replace forgot it.
+    private func rememberReplace(of regionID: Int) {
+        guard !Task.isCancelled else { return }
+        userDefaults.set(regionID, forKey: Self.lastReplaceRegionKey)
+        userDefaults.set(now(), forKey: Self.lastReplaceDateKey)
+    }
+
+    /// Runs `work` after the run in flight ends, however it ended. `replaceAll()`
+    /// cancels that run first, so a region switch stops the old region's
+    /// indexing, and still waits for it, so none of its batches lands after the
+    /// new region's delete.
+    ///
+    /// The run throws `CancellationError` if it was cancelled, even once its
+    /// work is done, because the replace queued behind it clears what it wrote.
+    /// It logs any other error before throwing it, for the callers that don't
+    /// wait for it.
+    @discardableResult
+    private func enqueue(cancellingPrevious: Bool, _ work: @escaping @Sendable () async throws -> Void) -> Task<Void, any Error> {
         let previous = currentRun
         if cancellingPrevious {
             previous?.cancel()
         }
 
-        currentRun = Task.detached(priority: .utility) {
+        let run = Task.detached(priority: .utility) {
             // Cancelling this run cancels the one it is waiting for, too.
             await withTaskCancellationHandler {
-                await previous?.value
+                _ = await previous?.result
             } onCancel: {
                 previous?.cancel()
             }
@@ -190,11 +371,27 @@ final class StopSpotlightIndexer {
             do {
                 try Task.checkCancellation()
                 try await work()
-            } catch is CancellationError {
-                return
-            } catch {
+                try Task.checkCancellation()
+            } catch let error where !(error is CancellationError) {
                 Logger.error("Failed to update the Spotlight stop index: \(error)")
+                throw error
             }
+        }
+        currentRun = run
+        return run
+    }
+
+    /// Indexes the snapshot's bookmarked and recent stops, then the cached ones.
+    nonisolated private static func fill(
+        _ index: any StopEntityIndexing,
+        from snapshot: Snapshot,
+        stopCache: StopCacheRepository?,
+        batchSize: Int
+    ) async throws {
+        try await submit(snapshot.bookmarked, priority: 3, to: index)
+        try await submit(snapshot.recent, priority: 2, to: index)
+        if let stopCache {
+            try await indexCachedStops(of: snapshot, from: stopCache, into: index, batchSize: batchSize)
         }
     }
 
@@ -205,12 +402,14 @@ final class StopSpotlightIndexer {
     }
 
     /// Pages through the region's cached stops, skipping any already indexed at
-    /// a higher priority, and checks for cancellation between pages.
+    /// a higher priority, and checks for cancellation between pages. With
+    /// `wanted`, it indexes only those stops.
     nonisolated private static func indexCachedStops(
         of snapshot: Snapshot,
         from stopCache: StopCacheRepository,
         into index: any StopEntityIndexing,
-        batchSize: Int
+        batchSize: Int,
+        only wanted: Set<StopID>? = nil
     ) async throws {
         let indexedIDs = Set((snapshot.bookmarked + snapshot.recent).map(\.stopID))
         var cursor: StopID?
@@ -218,7 +417,7 @@ final class StopSpotlightIndexer {
             try Task.checkCancellation()
             let page = stopCache.stops(regionId: snapshot.regionID, after: cursor, limit: batchSize)
             let entities = page.stops
-                .filter { !indexedIDs.contains($0.id) }
+                .filter { !indexedIDs.contains($0.id) && (wanted?.contains($0.id) ?? true) }
                 .map { StopEntityMapping.entity(for: $0, regionID: snapshot.regionID) }
             try await Self.submit(entities, priority: 1, to: index)
             cursor = page.cursor

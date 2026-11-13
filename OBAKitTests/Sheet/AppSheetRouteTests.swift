@@ -9,6 +9,7 @@
 
 import Testing
 import MapKit
+import SwiftUI
 @testable import OBAKit
 @testable import OBAKitCore
 
@@ -50,6 +51,25 @@ final class AppSheetRouteTests {
         let a = AppSheetRoute.stopDetails(stopID: "1_75403")
         let b = AppSheetRoute.stopDetails(stopID: "1_75404")
         #expect(a.id != b.id)
+    }
+
+    /// A stop opened from a trip carries the rider's transfer context, but it's
+    /// still the same sheet as the stop opened from anywhere else: that is how
+    /// `SheetCoordinator.open` finds a copy already open, and how a sheet's map
+    /// drawing finds its own route rebuilt from the stop ID.
+    @Test func `Stop details identity ignores the transfer context`() {
+        let context = TransferContext(
+            arrivalTime: Date(timeIntervalSince1970: 1_700_000_600),
+            fromRouteShortName: "10",
+            fromTripHeadsign: "Downtown Seattle",
+            fromTripID: "1_40989208"
+        )
+        let withContext = AppSheetRoute.stopDetails(stopID: "1_75403", transferContext: context)
+        let plain = AppSheetRoute.stopDetails(stopID: "1_75403")
+
+        #expect(withContext.id == "stopDetails-1_75403")
+        #expect(withContext == plain)
+        #expect(withContext.hashValue == plain.hashValue)
     }
 
     /// `CurrentTripView` hands over a freshly fetched arrival on every refresh, and
@@ -115,8 +135,8 @@ final class AppSheetRouteTests {
 
     @Test func `Home detent starts at small and offers all three`() {
         let config = AppSheetRoute.home.detentConfiguration
-        #expect(config.detents == [.height(AppSheetRoute.homeCollapsedHeight), .medium, AppSheetRoute.largeDetent])
-        #expect(config.initialDetent == .height(AppSheetRoute.homeCollapsedHeight))
+        #expect(config.detents == [.custom(HomeCollapsedDetent.self), .medium, AppSheetRoute.largeDetent])
+        #expect(config.initialDetent == .custom(HomeCollapsedDetent.self))
         #expect(config.showDragIndicator == true)
         #expect(config.isDismissDisabled == true)
     }
@@ -150,14 +170,21 @@ final class AppSheetRouteTests {
         }
     }
 
-    @Test func `Stop details detent is pinned full height and interactively dismissible`() {
-        // The stop detail sheet is pinned to full height (`.large`) and carries
-        // its own close button, but the OS drag-down gesture stays enabled.
+    /// Opens at `.medium`, not `.large`: the panel's map draws the stop's routes and
+    /// the vehicles arriving on them behind the sheet, which a full-height sheet would
+    /// cover. The map stays interactive up through `.medium`, as it does under a trip.
+    @Test func `Stop details opens at medium over the panel's map`() {
         let config = AppSheetRoute.stopDetails(stopID: "1").detentConfiguration
-        #expect(config.detents == [.large])
-        #expect(config.initialDetent == .large)
+        #expect(config.detents == [.medium, .large])
+        #expect(config.initialDetent == .medium)
         #expect(config.isDismissDisabled == false)
         #expect(config.fullScreenDetent == nil)
+        // Not `Equatable`; the descriptions differ for `.disabled`, which is what
+        // left the map untouchable behind this sheet before.
+        #expect(String(describing: config.backgroundInteraction)
+            == String(describing: PresentationBackgroundInteraction.enabled(upThrough: .medium)))
+        #expect(String(describing: config.backgroundInteraction)
+            != String(describing: PresentationBackgroundInteraction.disabled))
     }
 
     /// Opens at `.medium`, not `.large`: the planner draws its route on the map behind
@@ -221,10 +248,10 @@ final class AppSheetRouteTests {
         #expect(AppSheetRoute.largeDetent == .fraction(0.99))
     }
 
-    @Test func `Home collapsed height matches map bottom inset`() {
-        // Shared with `MapPanelRootView` so the map's bottom safe-area padding
-        // matches the collapsed sheet — keep the constant pinned.
-        #expect(AppSheetRoute.homeCollapsedHeight == 75)
+    @Test func `Home collapsed height estimate is the search row and the tab bar`() {
+        // The first-frame estimate, before the search row is measured; see
+        // `HomeTabsTests`.
+        #expect(AppSheetRoute.homeCollapsedHeight == 136)
     }
 
     // MARK: - SheetDetentConfiguration defaults
@@ -254,7 +281,7 @@ final class AppSheetRouteTests {
     @Test func `Should disable background for full screen home below large detent is false`() {
         let config = AppSheetRoute.home.detentConfiguration
         #expect(config.shouldDisableBackgroundForFullScreen(at: .medium) == false)
-        #expect(config.shouldDisableBackgroundForFullScreen(at: .height(AppSheetRoute.homeCollapsedHeight)) == false)
+        #expect(config.shouldDisableBackgroundForFullScreen(at: AppSheetRoute.homeCollapsedDetent) == false)
     }
 
     @Test func `Should disable background for full screen is false when full screen detent not configured`() {

@@ -56,6 +56,84 @@ func paddedMapRect(
     return paddedRect
 }
 
+// MARK: - MapPanelBottomPadding
+
+/// Computes detent-aware bottom safe-area padding for `MapPanelRootView`'s Map,
+/// ensuring map annotations, user location, and camera viewports remain visible above
+/// the currently active sheet without slipping underneath.
+struct MapPanelBottomPadding {
+    /// Minimum height (in points) of visible map retained at the top of the screen
+    /// when the sheet is expanded to `.large` or `largeDetent`, avoiding viewport collapse.
+    static let minimumVisibleMapHeight: CGFloat = 120
+
+    /// Minimum bottom padding floor (in points) applied to the map at collapsed sheet detents
+    /// to ensure Apple's logo and Legal link remain completely visible and tappable above
+    /// floating controls (such as `MyTripButton`).
+    static let minimumPaddingFloor: CGFloat = 180
+
+    /// Calculates effective bottom safe area padding for the map given the
+    /// height of the tallest sheet and total map height.
+    static func effectivePadding(
+        sheetHeight: CGFloat,
+        totalMapHeight: CGFloat,
+        floor: CGFloat = minimumPaddingFloor
+    ) -> CGFloat {
+        guard totalMapHeight > 0 else {
+            return floor
+        }
+        let maxAllowed = max(floor, totalMapHeight - minimumVisibleMapHeight)
+        return min(max(sheetHeight, floor), maxAllowed)
+    }
+
+    /// Selects the largest sheet height among all currently visible sheets on screen.
+    ///
+    /// When sheets are stacked (e.g. `.tripPlanner` or `.stopDetails` opened over `.home` or `.mapItem`),
+    /// the base sheet remains visible peeking beneath. If the top sheet is at a small detent
+    /// (e.g. 80pt tip), the map's safe area padding must follow the tallest visible sheet so map
+    /// annotations and camera framing do not slip under the taller underlying sheet.
+    ///
+    /// Updates padding when the sheet detent settles rather than on every frame of a drag, preventing
+    /// viewport jitter, unnecessary body re-evaluations, and stop reload churn while the sheet is in motion.
+    static func tallestVisibleSheetHeight<Route: Hashable>(
+        visibleRoutes: [Route],
+        detentForRoute: (Route) -> PresentationDetent,
+        halfScreenHeight: CGFloat,
+        totalMapHeight: CGFloat,
+        defaultHeight: CGFloat = minimumPaddingFloor
+    ) -> CGFloat {
+        guard !visibleRoutes.isEmpty else {
+            return defaultHeight
+        }
+        let heights = visibleRoutes.map { route in
+            estimatedHeight(
+                for: detentForRoute(route),
+                halfScreenHeight: halfScreenHeight,
+                totalMapHeight: totalMapHeight
+            )
+        }
+        return heights.max() ?? defaultHeight
+    }
+
+    /// Resolves the height in points for a given `PresentationDetent`.
+    static func estimatedHeight(
+        for detent: PresentationDetent,
+        halfScreenHeight: CGFloat,
+        totalMapHeight: CGFloat
+    ) -> CGFloat {
+        if detent == AppSheetRoute.homeCollapsedDetent {
+            return HomeCollapsedDetent.drawnHeight
+        } else if detent == .height(AppSheetRoute.tripPlannerTipHeight) {
+            return AppSheetRoute.tripPlannerTipHeight
+        } else if detent == .medium {
+            return halfScreenHeight
+        } else if detent == AppSheetRoute.largeDetent || detent == .large {
+            return totalMapHeight > 0 ? totalMapHeight * 0.99 : halfScreenHeight * 2
+        } else {
+            return halfScreenHeight
+        }
+    }
+}
+
 // MARK: - MapPinSelection
 
 /// What the panel map's `selection` can hold. Stops, rentals, trip-planner
@@ -86,7 +164,9 @@ struct MapPanelRootView: View {
     @ObservedObject private var stopsObserver: MapStopsObserver
     @ObservedObject private var tripPlannerDisplay: TripPlannerMapDisplayModel
     @ObservedObject private var tripFocusDisplay: TripFocusMapDisplayModel
+    @ObservedObject private var stopFocusDisplay: StopFocusMapDisplayModel
     @ObservedObject private var probeController: OnDemandProbeController
+    private let tripPlanEmptyFallback: TripPlanEmptyFallback
 
     /// Presentation state only. The popup reads its data from
     /// `mapViewModel.weatherDisplay` so a refresh that finishes while the card
@@ -116,8 +196,11 @@ struct MapPanelRootView: View {
     /// move it off the vehicles the link asked to show.
     @State private var rentalsLinkHoldsCamera = false
     @State private var regionMismatchBulletin: RegionMismatchBulletin?
+    /// When the app last went to the background. See `ReturnRecenter`.
+    @State private var backgroundedAt: Date?
     @State private var didPromptRegionMismatch = false
     @StateObject private var mismatchCamera = RegionMismatchCameraActions()
+    @StateObject private var prompts: MapPanelPrompts
 
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.colorScheme) private var colorScheme
@@ -145,10 +228,47 @@ struct MapPanelRootView: View {
     // collapsed detent so overlays render at their resting position on the
     // first frame — before `.onGeometryChange` reports a value.
     @State private var sheetHeight: CGFloat = AppSheetRoute.homeCollapsedHeight
+    /// Sheet content ignores the safe area (see `buildSheetContent`), so it's
+    /// measured here and handed down; see `EnvironmentValues.screenBottom`.
+    @State private var screenBottom = ScreenBottom()
     @State private var toolbarsAnimationDuration: CGFloat = 0
     @State private var toolbarsOpacity: CGFloat = 1
 
     @State private var halfScreenHeight: CGFloat = 350
+
+    /// Dynamic un-clamped height of the tallest visible sheet on screen, computed from
+    /// the settled detents of all visible sheets. Updates when a sheet snaps or transitions
+    /// to a detent rather than on every drag frame, avoiding map viewport jitter.
+    private var rawSheetHeight: CGFloat {
+        let visible = [coordinator.currentRoute] + coordinator.stackedRoutes
+        return MapPanelBottomPadding.tallestVisibleSheetHeight(
+            visibleRoutes: visible,
+            detentForRoute: { route in
+                detent(for: route)
+            },
+            halfScreenHeight: halfScreenHeight,
+            totalMapHeight: mapSize.height
+        )
+    }
+
+    /// Dynamic bottom safe area padding for the Map, tracking the tallest visible sheet's height
+    /// so map annotations and camera centers remain visible in the top portion above the sheet.
+    private var mapBottomPadding: CGFloat {
+        MapPanelBottomPadding.effectivePadding(
+            sheetHeight: rawSheetHeight,
+            totalMapHeight: mapSize.height
+        )
+    }
+
+    private func detent(for route: AppSheetRoute) -> PresentationDetent {
+        if route == coordinator.currentRoute {
+            return coordinator.currentDetent
+        }
+        if let entry = coordinator.stackedEntries.first(where: { $0.route == route }) {
+            return entry.detent
+        }
+        return route.detentConfiguration.initialDetent
+    }
 
     /// The on-demand dock's measured height; zero while it shows nothing. The
     /// control stack rides above it (spec 2.4).
@@ -172,6 +292,7 @@ struct MapPanelRootView: View {
         stopsObserver: MapStopsObserver,
         tripPlannerMapDisplayModel: TripPlannerMapDisplayModel,
         tripFocusMapDisplayModel: TripFocusMapDisplayModel,
+        stopFocusMapDisplayModel: StopFocusMapDisplayModel,
         probeController: OnDemandProbeController
     ) {
         _coordinator = StateObject(wrappedValue: coordinator)
@@ -179,12 +300,23 @@ struct MapPanelRootView: View {
         _stopsObserver = ObservedObject(wrappedValue: stopsObserver)
         _tripPlannerDisplay = ObservedObject(wrappedValue: tripPlannerMapDisplayModel)
         _tripFocusDisplay = ObservedObject(wrappedValue: tripFocusMapDisplayModel)
+        _stopFocusDisplay = ObservedObject(wrappedValue: stopFocusMapDisplayModel)
         _probeController = ObservedObject(wrappedValue: probeController)
         _mapViewModel = StateObject(wrappedValue: mapViewModel)
         _layersModel = StateObject(wrappedValue: layersModel)
         self.application = application
         self.factory = factory
         self.viewportRecorder = MapViewportRecorder(application: application)
+        self.tripPlanEmptyFallback = MapPanelOnDemandPlanner.makeFallback(
+            probeController: probeController,
+            notificationCenter: application.notificationCenter,
+            coordinator: coordinator
+        )
+        _prompts = StateObject(wrappedValue: MapPanelPrompts(
+            application: application,
+            mapViewModel: mapViewModel,
+            presentingController: factory.presentingController
+        ))
 
         // Frame the selected region unless GPS is already inside it.
         // `.userLocation` follows the device, which is what opened Taipei
@@ -217,8 +349,9 @@ struct MapPanelRootView: View {
     }
 
     var body: some View {
+        MapReader { proxy in
         Map(position: $cameraPosition, selection: $mapSelection) {
-            UserAnnotation()
+            MapPanelUserLocation(userDefaults: application.userDefaults)
             onDemandZoneContent
             // Bookmark pins render at every zoom level, like the UIKit map.
             ForEach(stopsObserver.bookmarks) { bookmark in
@@ -261,7 +394,18 @@ struct MapPanelRootView: View {
                 )
             }
             tripPlannerMapContent(for: tripPlannerDisplay)
-            tripFocusMapContent(for: tripFocusDisplay.display)
+            if stopTakesMap {
+                stopFocusMapContent(for: stopFocusDisplay.display, onSelectVehicle: followStopVehicle)
+            } else {
+                tripFocusMapContent(for: tripFocusDisplay.display)
+            }
+        }
+        // Long-press drops a pin, as on the UIKit map: a place to plan a trip
+        // to, or find stops near. Simultaneous, so panning still works.
+        .simultaneousGesture(DroppedPin.gesture { point in
+            guard let coordinate = proxy.convert(point, from: .local) else { return }
+            dropPin(at: coordinate)
+        })
         }
         .onMapCameraChange(frequency: .onEnd) { context in
             viewportRecorder.record(context.rect)
@@ -272,6 +416,9 @@ struct MapPanelRootView: View {
             tripPlannerDisplay.updateVisibleRegion(context.region)
             layersModel.viewportDidChange(context.rect)
             layersModel.updateViewport(mapRect: context.rect, mapSize: mapSize)
+            if context.rect.width > 0 {
+                stopFocusDisplay.updateScreenScale(mapSize.width / context.rect.width)
+            }
             probeController.mapDidSettle(
                 center: context.region.center,
                 zoomLevel: OnDemandZoomLevel.level(forVisibleHeight: context.rect.height)
@@ -326,6 +473,7 @@ struct MapPanelRootView: View {
             mismatchCamera.applyLaunch = false
             applyLaunchCamera()
         }
+        .onReceive(stopsObserver.regionChanged, perform: showChangedRegion)
         .onChange(of: mismatchCamera.showSelectedServiceRect) { _, flag in
             guard flag else { return }
             mismatchCamera.showSelectedServiceRect = false
@@ -389,6 +537,7 @@ struct MapPanelRootView: View {
                 tripPlannerDisplay.clear()
             }
             tripFocusDisplay.clearIfOwnerAbsent(from: coordinator.allRoutes)
+            stopFocusDisplay.clearIfOwnerAbsent(from: coordinator.allRoutes)
         }
         .onChange(of: searchDisplay.cameraTarget) { _, target in
             guard let target else { return }
@@ -419,19 +568,19 @@ struct MapPanelRootView: View {
             applyTripFocusCameraTarget(target)
             tripFocusDisplay.consumeCameraTarget()
         }
-        .mapStyle(mapViewModel.mapType.styleDescriptor(
-            showingPointsOfInterest: layersModel.showsPointsOfInterest
-        ).mapStyle)
-        .safeAreaPadding(.bottom, 180)
+        .modifier(MapPanelMapSettings(
+            style: mapViewModel.mapType.styleDescriptor(showingPointsOfInterest: layersModel.showsPointsOfInterest),
+            userDefaults: application.userDefaults
+        ))
+        // Not animated: animating a safe-area change resizes MapKit's view every
+        // frame, which drew blank grid tiles and a white band under the map as
+        // the sheet settled. The camera still recentres in the new safe area.
+        .safeAreaPadding(.bottom, mapBottomPadding)
         .onGeometryChange(for: CGFloat.self) { proxy in
             proxy.size.height / 2
         } action: { _, newValue in
             halfScreenHeight = newValue
         }
-        // TODO: Detent-aware bottom padding. Pinned to the collapsed sheet
-        // height today, so dragging the sheet up to `.medium` or
-        // `largeDetent` lets the user-location annotation and any future map
-        // overlays slip under the sheet.
         .overlay(alignment: .topLeading) {
             weatherButton
         }
@@ -472,7 +621,10 @@ struct MapPanelRootView: View {
             mapControlsCluster
         }
         .overlay(alignment: .topTrailing) {
-            moreButton
+            // On iPhone, More is a tab of the home sheet instead.
+            if !HomeTabs.showsTabs(horizontalSizeClass: horizontalSizeClass) {
+                moreButton
+            }
         }
         .overlay(alignment: .bottomLeading) {
             myTripButton
@@ -496,6 +648,13 @@ struct MapPanelRootView: View {
         .onChange(of: isOnDemandPickerShown) { wasShown, _ in
             Self.onDemandPickerStackDidChange(wasShown: wasShown, routes: sheetRoutes, probeController: probeController)
         }
+        .onChange(of: plannerEntry?.request, initial: true) { _, request in
+            MapPanelOnDemandPlanner.plannerDidChange(
+                to: request,
+                fallback: tripPlanEmptyFallback,
+                currentLocation: application.locationService.currentLocation
+            )
+        }
         .onChange(of: sheetHeight) { _, newValue in
             probeController.setMapMostlyCovered(newValue >= halfScreenHeight)
         }
@@ -505,19 +664,50 @@ struct MapPanelRootView: View {
         .onChange(of: probeController.highlightedServiceID) { _, id in
             layersModel.setHighlightedService(id)
         }
+        .modifier(MapPanelVoiceOverModifier(
+            application: application,
+            coordinator: coordinator,
+            presentingController: factory.presentingController
+        ))
+        .modifier(promptsModifier)
+        // Measured on a view that ignores the keyboard, so a keyboard raised from
+        // a sheet's search field doesn't read as a home indicator 300 pt tall.
+        .background {
+            Color.clear
+                .ignoresSafeArea(.keyboard)
+                .onGeometryChange(for: ScreenBottom.self) { proxy in
+                    let inset = proxy.safeAreaInsets.bottom
+                    return ScreenBottom(edge: proxy.frame(in: .global).maxY + inset, inset: inset)
+                } action: { old, new in
+                    screenBottom = new
+                    // A new screen, not the first measurement of this one.
+                    if old.edge != nil, old != new {
+                        HomeCollapsedDetent.forgetSheetExtra()
+                    }
+                }
+        }
         .floatingSheet(coordinator: coordinator) { route in
             buildSheetContent(for: route)
         }
         .onAppear {
             mapViewModel.start()
             applyPendingRentalsFocus()
+            #if DEBUG
+            coordinator.showScreenshotStopIfNeeded(application: application)
+            #endif
         }
         .onReceive(application.notificationCenter.publisher(for: .rentalsDeepLinkPending)) { _ in
             applyPendingRentalsFocus()
         }
         .onChange(of: scenePhase) { _, newPhase in
-            if newPhase == .active {
+            switch newPhase {
+            case .active:
                 mapViewModel.onAppBecameActive()
+                recenterAfterAbsenceIfNeeded()
+            case .background:
+                backgroundedAt = Date()
+            default:
+                break
             }
         }
         .onChange(of: mapViewModel.didReceiveInitialLocation) { _, received in
@@ -642,6 +832,8 @@ struct MapPanelRootView: View {
             // to the app's defaults suite; without this, sheet content reading
             // them through `@AppStorage` saw `.standard` and ignored them.
             .defaultAppStorage(application.userDefaults)
+            .environment(\.screenBottom, screenBottom)
+            .environment(\.showsHomeTabs, HomeTabs.showsTabs(horizontalSizeClass: horizontalSizeClass))
             .fullScreenCover(isPresented: $isWeatherPopupPresented) {
                 WeatherDetailPopup(
                     display: mapViewModel.weatherDisplay,
@@ -668,6 +860,13 @@ struct MapPanelRootView: View {
                 guard !route.prefersStacking else { return }
 
                 sheetHeight = newValue
+
+                // Settled at the collapsed detent, the home sheet's height is the
+                // system's doing; see `HomeCollapsedDetent`. Measured here, on the
+                // whole sheet: the home view's own frame falls a few points short.
+                if route == .home, coordinator.currentDetent == AppSheetRoute.homeCollapsedDetent {
+                    HomeCollapsedDetent.learn(sheetHeight: newValue)
+                }
 
                 /// Opacity calculation — fade band sits immediately
                 /// below `halfScreenHeight`.
@@ -768,6 +967,23 @@ extension MapPanelRootView {
         }
     }
 
+    /// Whether the open stop's routes draw rather than the open trip; see
+    /// `StopFocusMapDisplayModel.stopTakesMap(stopOwner:tripOwner:routes:)`.
+    private var stopTakesMap: Bool {
+        StopFocusMapDisplayModel.stopTakesMap(
+            stopOwner: stopFocusDisplay.owner,
+            tripOwner: tripFocusDisplay.isShowingTrip ? tripFocusDisplay.owner : nil,
+            routes: coordinator.allRoutes
+        )
+    }
+
+    /// A tapped vehicle opens its trip over the stop, as tapping its departure in
+    /// the sheet does, and the trip then takes the map.
+    private func followStopVehicle(_ vehicle: StopFocusMapDisplayModel.Vehicle) {
+        guard let owner = stopFocusDisplay.owner else { return }
+        coordinator.open(.tripDetails(TripConvertible(arrivalDeparture: vehicle.departure)), from: owner)
+    }
+
     /// Frames an open trip in the part of the map its sheet leaves visible.
     ///
     /// The trip sheet opens at `.medium`, which covers about half the map, so the
@@ -838,6 +1054,81 @@ extension MapPanelRootView {
         bulletin.show(in: uiApp)
     }
 
+    private func recenterAfterAbsenceIfNeeded() {
+        defer { backgroundedAt = nil }
+        guard let backgroundedAt, ReturnRecenter.shouldRecenter(
+            absence: Date().timeIntervalSince(backgroundedAt),
+            region: application.regionsService.currentRegion,
+            location: application.locationService.currentLocation,
+            isShowingSheet: coordinator.canPop
+        ) else { return }
+        centerOnUser()
+    }
+
+    /// Opens the place sheet for a dropped pin, over home, and marks it on the map.
+    private func dropPin(at coordinate: CLLocationCoordinate2D) {
+        let mapItem = DroppedPin.mapItem(at: coordinate)
+        let route = AppSheetRoute.mapItem(mapItem)
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        coordinator.popToRoot()
+        searchDisplay.show(mapItem: mapItem, animated: true, owner: route)
+        coordinator.push(route)
+    }
+
+    /// The rider changed region. Stops, trips and searches belong to a region's
+    /// server, so the sheets showing the old one close, and the map moves to the
+    /// new one, as the UIKit map does in `MapRegionManager`.
+    private func showChangedRegion(_ region: Region) {
+        closeSheetsOverHome()
+        stopFocusDisplay.invalidateShapeCache()
+        application.mapRegionManager.cancelScheduledStopsRequest()
+        stopsObserver.reset()
+        if let rect = LaunchMapCamera.regionChangeTarget(
+            region: region,
+            userLocation: application.locationService.currentLocation
+        ) {
+            viewportRecorder.record(rect)
+            withAnimation { cameraPosition = .rect(rect) }
+        } else {
+            centerOnUser()
+        }
+        Task { await mapViewModel.loadWeather() }
+        // A first launch has no region when the map appears.
+        #if DEBUG
+        coordinator.showScreenshotStopIfNeeded(application: application)
+        #endif
+    }
+
+    private var promptsModifier: MapPanelPromptsModifier {
+        let stackedRoutes = coordinator.stackedRoutes
+        let placement = MapPanelPromptsModifier.cardPlacement(
+            sheetHeight: sheetHeight,
+            toolbarsOpacity: toolbarsOpacity,
+            showsCard: prompts.surveyTitle != nil && stackedRoutes.isEmpty
+        )
+        return MapPanelPromptsModifier(
+            prompts: prompts,
+            coordinator: coordinator,
+            stackedRoutes: stackedRoutes,
+            sheetHeight: placement.sheetHeight,
+            toolbarsOpacity: placement.toolbarsOpacity,
+            toolbarsAnimationDuration: toolbarsAnimationDuration
+        )
+    }
+
+    /// Back to home, closing any UIKit modal over the sheets first (the region
+    /// picker More presents, Settings): popping the stack under a modal, or
+    /// mid-dismissal, leaves the sheets out of step with it.
+    private func closeSheetsOverHome() {
+        // Looked up from this panel's own controllers, so another window's
+        // panel is left alone.
+        if let mapPanel = application.viewRouter.mapPanelRootController(from: factory.presentingController()) {
+            mapPanel.navigate(to: .home)
+        } else {
+            coordinator.popToRoot()
+        }
+    }
+
     private func centerOnUser() {
         guard let location = application.locationService.currentLocation else { return }
         // `mapSize` is `.zero` until `.onGeometryChange` reports the first
@@ -892,6 +1183,8 @@ extension MapPanelRootView {
     /// does on the UIKit map. `Application` has already switched the rental layers on.
     private func applyPendingRentalsFocus() {
         guard let coordinate = application.claimPendingRentalsFocus() else { return }
+        // A sheet left open would cover the vehicles the link asked to show.
+        closeSheetsOverHome()
         rentalsLinkHoldsCamera = true
         needsInitialRecenter = false
         let region = RentalMapLayer.focusRegion(around: coordinate)
@@ -949,12 +1242,29 @@ extension MapPanelRootView {
     }
 
     private var controlsDockOffset: CGFloat {
-        dockHeight > 0 ? dockHeight + OnDemandDockPlacement.gap : 0
+        // A planner card rides on the planner sheet, not on the base sheet the
+        // controls float over, so it leaves them where they were.
+        guard dockPlacement.opacity == nil else { return 0 }
+        return dockHeight > 0 ? dockHeight + OnDemandDockPlacement.gap : 0
     }
 
     // MARK: - On-demand dock
 
     private var sheetRoutes: [AppSheetRoute] { coordinator.routeStack + coordinator.stackedRoutes }
+
+    private var plannerEntry: (request: TripPlannerRequest, detent: PresentationDetent)? {
+        MapPanelOnDemandPlanner.plannerEntry(in: coordinator.stackedEntries)
+    }
+
+    private var dockPlacement: (height: CGFloat, opacity: CGFloat?) {
+        MapPanelOnDemandPlanner.dockPlacement(
+            dockState: probeController.dockState,
+            plannerDetent: plannerEntry?.detent,
+            sheetHeight: sheetHeight,
+            halfScreenHeight: halfScreenHeight,
+            totalMapHeight: mapSize.height
+        )
+    }
 
     /// Whether a zone detail page is on the sheet stack (spec 2.3 highlight).
     private var isOnDemandDetailShown: Bool { Self.isOnDemandDetailShown(in: sheetRoutes) }
@@ -990,6 +1300,7 @@ extension MapPanelRootView {
     /// 360 pt bottom-leading in regular width; its height lifts the controls.
     private var onDemandDock: some View {
         let isRegular = horizontalSizeClass == .regular
+        let placement = dockPlacement
         return OnDemandDockView(
             controller: probeController,
             actions: onDemandDockActions,
@@ -1003,7 +1314,8 @@ extension MapPanelRootView {
         } action: { _, newValue in
             dockHeight = newValue
         }
-        .floatingOverSheet(height: sheetHeight, opacity: toolbarsOpacity, duration: toolbarsAnimationDuration)
+        .floatingOverSheet(height: placement.height, opacity: placement.opacity ?? toolbarsOpacity, duration: toolbarsAnimationDuration)
+        .allowsHitTesting(placement.opacity != 0)
     }
 
     private var onDemandDockActions: OnDemandDockActions {

@@ -417,6 +417,9 @@
 /* VoiceOver hint for a home sheet section header, which opens that section's full list. */
 "home_sheet.section_header.a11y_hint" = "Affiche tous les éléments de cette section.";
 
+/* Title of the map panel's Home tab, which holds search and the nearby stops. It replaces the Map tab: the map is always behind the sheet. */
+"home_sheet.tab.home" = "Accueil";
+
 /* Alert message for Live Activity error. \"Settings\" is the iOS Settings app. */
 "live_activity.error.message" = "Vérifiez vos réglages des activités en direct dans les Réglages.";
 
@@ -582,6 +585,9 @@
 /* Accessibility label for website button */
 "map_item_controller.website_accessibility" = "Ouvrir le site web";
 
+/* VoiceOver hint on a vehicle marker drawn for an open stop on the map panel. Tapping it opens the vehicle's trip. */
+"map_panel.stop_vehicle.hint" = "Affiche ce trajet.";
+
 /* Displayed in the map status view at the top of the map when the user has declined to give the app access to their location */
 "map_status_view.location_services_unavailable" = "Services de localisation indisponibles";
 
@@ -705,6 +711,9 @@
 /* Body shown on the Nearby Stops index sheet when no map viewport, device location, or region is available to search around. */
 "nearby_stops_sheet.no_location.body" = "Déplacez la carte ou activez les services de localisation pour voir les arrêts à proximité.";
 
+/* Siri asks which stop to report departures for when the user didn't name one. */
+"next_departures_at_stop_intent.choose_stop" = "Quel arrêt ?";
+
 /* Siri response when the requested bookmark was deleted or belongs to a different region. */
 "next_departures_intent.bookmark_unavailable" = "Ce favori n'est pas disponible dans votre région actuelle.";
 
@@ -720,7 +729,7 @@
 /* Siri response listing the departures after the next one. {List of 'in X minutes'} */
 "next_departures_intent.later_departures_fmt" = "Puis %@.";
 
-/* Siri response when departures could not be fetched. {Bookmark name} */
+/* Siri response when departures could not be fetched. {Bookmark or stop name} */
 "next_departures_intent.load_failed_fmt" = "Impossible de charger les départs pour %@. Vérifiez votre connexion et réessayez.";
 
 /* Siri response when the user asks for their next departures but has no trip bookmarks in the current region. */
@@ -737,6 +746,21 @@
 
 /* Joins two complete Siri sentences: {first departure sentence} {later departures sentence}. Use the language's separator between sentences; Chinese uses none. */
 "next_departures_intent.sentences_join_fmt" = "%1$@ %2$@";
+
+/* Siri response: one departure from a stop. {Route short name} to {Headsign} {'now' or 'in X minutes'}, for example '8 to Downtown in 4 minutes'. */
+"next_departures_intent.stop_departure_fmt" = "%1$@ vers %2$@ %3$@";
+
+/* Siri response: one departure from a stop whose trip has no destination name. {Route short name} {'now' or 'in X minutes'}, for example '8 in 4 minutes'. */
+"next_departures_intent.stop_departure_no_headsign_fmt" = "%1$@ %2$@";
+
+/* Siri response listing the next departures from a stop. {Stop name}: {list of departures, such as '8 to Downtown in 4 minutes and 49 to Capitol Hill in 12 minutes'}. */
+"next_departures_intent.stop_departures_fmt" = "Prochains départs à %1$@ : %2$@.";
+
+/* Siri response when nothing leaves a stop in the next hour. {Stop name} */
+"next_departures_intent.stop_no_departures_fmt" = "Aucun départ de %@ dans l'heure qui vient.";
+
+/* Siri response when the requested stop belongs to a different region than the one the app is using. */
+"next_departures_intent.stop_unavailable" = "Cet arrêt n'est pas dans votre région actuelle.";
 
 /* Vehicle occupancy is very high */
 "occupancy_status.crushed_standing_room_only" = "Bondé, places debout uniquement";
@@ -918,6 +942,12 @@
 /* Title for the empty set indicator on the Recent Stops controller. */
 "recent_stops.empty_set.title" = "Aucun arrêt récent";
 
+/* Alert message directing the user to the Bookmarks tab when a stop has multiple bookmarks. */
+"recent_stops.multiple_bookmarks.body" = "Cet arrêt possède plusieurs favoris. Utilisez l'onglet Favoris pour les gérer.";
+
+/* Alert title shown when quick-unbookmarking a stop that has more than one stop bookmark. */
+"recent_stops.multiple_bookmarks.title" = "Plusieurs favoris";
+
 /* Title of the Alarms section of the Recents controller */
 "recent_stops_controller.alarms_section.title" = "Rappels";
 
@@ -1089,6 +1119,15 @@
 /* Error shown when a tapped search result cannot be turned into something to display. */
 "search_results_sheet.unresolvable_result" = "Impossible d'ouvrir ce résultat de recherche.";
 
+/* Search scope tag showing all search result types. */
+"search_scope.all" = "All";
+
+/* Search scope tag filtering results to places and addresses. */
+"search_scope.places" = "Places";
+
+/* Search scope tag filtering results to transit routes. */
+"search_scope.routes" = "Routes";
+
 /* Accessibility label for the button that clears the search query. */
 "search_sheet.clear_query" = "Effacer";
 
@@ -1134,11 +1173,11 @@
 /* Settings section title for controlling which arrivals/departures are shown */
 "settings_controller.arrival_display_section.title" = "Affichage des arrivées et départs";
 
-/* Settings > Arrival Display > Toggle that shows the Arriving at XX:XX via route banner when opening a stop from a trip */
-"settings_controller.arrival_display_section.transfer_banner" = "Afficher la bannière d’arrivée de correspondance";
+/* Settings > Arrival & Departure Display > Toggle that highlights the rider's trip in a stop's departures when they open that stop from the trip */
+"settings_controller.arrival_display_section.highlight_trip" = "Mettre en évidence votre trajet sur les pages d’arrêt";
 
-/* Settings > Arrival & Departure Display > Footer describing the transfer banner and region time zone toggles */
-"settings_controller.arrival_display_section.footer" = "Bannière de correspondance : l'ouverture d'un arrêt depuis un trajet affiche les horaires relatifs à votre arrivée. Fuseau horaire de la région : les horaires utilisent le fuseau de la région de transport, avec un badge court lorsque votre téléphone diffère. Les deux sont indépendants.";
+/* Settings > Arrival & Departure Display > Footer describing the trip highlight and region time zone toggles */
+"settings_controller.arrival_display_section.footer" = "Mise en évidence du trajet : quand vous ouvrez un arrêt depuis un trajet, le départ de ce trajet est mis en évidence sur la page de l'arrêt. Fuseau horaire de la région : les horaires utilisent le fuseau de la région de transport, avec un badge court lorsque votre téléphone diffère. Les deux sont indépendants.";
 
 /* Settings > Arrival & Departure Display > Opt-in toggle for displaying arrival clocks in the transit region's time zone */
 "settings_controller.arrival_display_section.region_time_zone" = "Afficher les horaires dans le fuseau horaire de la région";
@@ -1155,17 +1194,8 @@
 /* Settings > Bike Mode section footer */
 "settings_controller.bike_mode_section.footer" = "Utilise une vitesse de déplacement plus rapide pour les estimations de temps jusqu'à l'arrêt, les heures d'arrivée et la page de l'arrêt.";
 
-/* Settings > Bike Mode section footer identifying the Apple Health integration; the argument is the app name */
-"settings_controller.bike_mode_section.healthkit_footer_fmt" = "%@ peut lire votre vitesse à vélo dans l'app Santé. L'app n'écrit jamais de données dans Santé.";
-
 /* Settings > Bike Mode > on/off toggle */
 "settings_controller.bike_mode.title" = "Mode vélo";
-
-/* Settings > Bike Mode section > HealthKit toggle */
-"settings_controller.bike_mode.use_healthkit" = "Utiliser les données de l'app Santé";
-
-/* Settings > Bike Mode > HealthKit denial or no-data toast */
-"settings_controller.bike_mode.healthkit_unavailable" = "Impossible de synchroniser la vitesse à vélo depuis Santé. Une vitesse à vélo standard sera utilisée.";
 
 /* Settings > Debug section > Refresh regions on every launch */
 "settings_controller.debug_section.always_refresh_regions" = "Actualiser les régions à chaque lancement";
@@ -1181,12 +1211,6 @@
 
 /* Settings > Experimental section > Map panel toggle */
 "settings_controller.experimental_section.map_panel" = "Utiliser le panneau de carte";
-
-/* Settings > Experimental section > Footer indicating changes apply on relaunch */
-"settings_controller.experimental_section.map_panel.footer" = "Redémarrez l'app pour appliquer.";
-
-/* Settings > Experimental section > New stop page toggle */
-"settings_controller.experimental_section.new_stop_page" = "Utiliser la nouvelle page d'arrêt";
 
 /* Settings > Experimental section title */
 "settings_controller.experimental_section.title" = "Expérimental";
@@ -1227,14 +1251,23 @@
 /* Settings > Surveys section title */
 "settings_controller.survey_section.title" = "Enquêtes";
 
+/* Apple Maps walking directions provider option */
+"settings_controller.walking_directions.apple" = "Apple Plans";
+
+/* Walking directions provider option that keeps the maps app chooser */
+"settings_controller.walking_directions.ask" = "Toujours demander";
+
+/* Google Maps walking directions provider option */
+"settings_controller.walking_directions.google" = "Google Maps";
+
+/* Settings picker for the default external walking directions provider */
+"settings_controller.walking_directions.title" = "Itinéraire à pied";
+
 /* Settings > Walking Speed > Average preset label */
 "settings_controller.walking_speed.avg" = "Moyenne (~5 km/h)";
 
 /* Settings > Walking Speed > Fast preset label */
 "settings_controller.walking_speed.fast" = "Rapide (~6,5 km/h)";
-
-/* Settings > Walking Speed > HealthKit denial or no-data toast */
-"settings_controller.walking_speed.healthkit_unavailable" = "Impossible de synchroniser la vitesse de marche depuis Santé. Vérifiez Réglages > Confidentialité et sécurité > Santé pour autoriser l'accès.";
 
 /* Settings > Walking Speed > Slow preset label */
 "settings_controller.walking_speed.slow" = "Lente (~3 km/h)";
@@ -1242,32 +1275,17 @@
 /* Settings > Walking Speed section > Speed picker */
 "settings_controller.walking_speed.title" = "Vitesse de marche";
 
-/* Settings > Walking Speed section > HealthKit toggle */
-"settings_controller.walking_speed.use_healthkit" = "Utiliser les données de l'app Santé";
-
-/* Settings > Walking Speed section footer identifying the Apple Health integration; the argument is the app name */
-"settings_controller.walking_speed_section.healthkit_footer_fmt" = "%@ peut lire votre vitesse de marche dans l'app Santé pour estimer le temps qu'il vous faut pour rejoindre un arrêt. L'app n'écrit jamais de données dans Santé.";
-
 /* Settings > Walking Speed section title */
 "settings_controller.walking_speed_section.title" = "Vitesse de marche";
 
 /* A message that appears when a user's alarm is created. */
 "stop_controller.alarm_created_message" = "Rappel créé";
 
-/* A header for the arrivals and departures section of the stop controller. */
-"stop_controller.arrival_departure_header" = "Arrivées et départs";
-
 /* Title for the menu that filters departures by data type */
 "stop_controller.arrival_filter.menu_title" = "Type de départ";
 
-/* Message shown when the Departure Type filter hides every departure at a stop */
-"stop_controller.arrival_filter.no_results" = "Aucun départ ne correspond au filtre actuel. Modifiez le type de départ dans le menu ⋯.";
-
 /* An error message displayed when a stop is shown by tapping on a bookmark—and the bookmark doesn't seem to point to a valid stop any longer. This problem will occur when a transit agency changes its stop IDs, perhaps as part of an annual transit system realignment. */
 "stop_controller.bad_bookmark_error_message" = "Ce favori ne fonctionne peut-être plus. Votre agence de transport a-t-elle modifié quelque chose ? Veuillez supprimer puis recréer le favori.";
-
-/* Title of the error shown when a stop is opened from a bookmark that no longer points to a valid stop. */
-"stop_controller.bad_bookmark_error_title" = "Favori défectueux";
 
 /* A string listing the data providers (agencies) for this stop's data. It contains one or more providers separated by commas. e.g. Data provided by King County Metro, Sound Transit */
 "stop_controller.data_attribution_format" = "Données fournies par %@";
@@ -1277,24 +1295,6 @@
 
 /* Title shown when an external survey link cannot be opened */
 "stop_controller.external_survey_error.title" = "Impossible d'ouvrir l'enquête";
-
-/* Load More button */
-"stop_controller.load_more_button" = "Charger plus";
-
-/* A header for the past arrivals and departures section of the stop controller. */
-"stop_controller.past_departures_header" = "Départs passés";
-
-/* Header for past departures of a specific route */
-"stop_controller.past_departures_route_header" = "Départs passés - %@";
-
-/* This is an instruction given to the user the first time they look at a stop view instructing them on how to access more options, including the ability to add alarms. */
-"stop_controller.swipe_spotlight_text.with_alarm" = "Balayez une rangée pour afficher plus d'options, dont l'ajout de rappels.";
-
-/* This is an instruction given to the user the first time they look at a stop view instructing them on how to access more options, EXCLUDING the ability to add alarms. */
-"stop_controller.swipe_spotlight_text.without_alarm" = "Balayez une rangée pour afficher plus d'options.";
-
-/* Button to reveal departures that leave before the rider's transfer arrival. Parameter is the count of hidden departures. Plural forms live in Localizable.stringsdict; the value above is only the not-found fallback. */
-"stop_controller.transfer_show_earlier_departures_fmt" = "Afficher %d départs antérieurs";
 
 /* Title of a transit stop in Shortcuts and Siri when the app has no name for it. The parameter is the stop's ID, such as 1_75403. */
 "stop_entity.fallback_title_fmt" = "Arrêt %@";
@@ -1524,15 +1524,6 @@
 /* Divider between departures you'd miss on foot and ones you can still catch. %d is the walk time in minutes. */
 "stop_page.walk_divider_fmt" = "%d MIN À PIED — À PRENDRE CI-DESSOUS";
 
-/* Title of the Sorting section */
-"stop_preferences_controller.sorting_section.header_title" = "Trier par";
-
-/* Sort by route option */
-"stop_preferences_controller.sorting_section.sort_by_route" = "Trier par ligne";
-
-/* Sort by time option */
-"stop_preferences_controller.sorting_section.sort_by_time" = "Trier par heure";
-
 /* Title of the Edit Stop preferences controller */
 "stop_preferences_controller.title" = "Filtrer les lignes";
 
@@ -1653,9 +1644,6 @@
 /* Primary button on the survey launcher card; opens the survey. */
 "survey_launcher.take_survey_button" = "Répondre à l'enquête";
 
-/* Title of the survey launcher card on the stop screen. */
-"survey_launcher.title" = "Améliorez les transports";
-
 /* Message shown when an external survey link cannot be opened */
 "survey_vc.external_survey_error.message" = "Impossible d'ouvrir le lien de cette enquête. Veuillez réessayer plus tard.";
 
@@ -1695,21 +1683,6 @@
 /* A notice when a transit alert doesn't have body text. */
 "transit_alert.no_additional_details.body" = "Aucun détail supplémentaire disponible.";
 
-/* Describes the next trip of this vehicle. e.g. Continues as 10 - Downtown Seattle */
-"trip_details_controller.continues_as_fmt" = "Continue en tant que %@";
-
-/* Last report: <TIME> */
-"trip_details_controller.last_report_fmt" = "Dernier relevé : %@";
-
-/* Service alerts header in the trip details controller. */
-"trip_details_controller.service_alerts_footer" = "Détails du trajet";
-
-/* Button that moves the map to focus on the selected stop */
-"trip_details_controller.show_on_map" = "Afficher sur la carte";
-
-/* Describes the previous trip of this vehicle. e.g. Starts as 10 - Downtown Seattle */
-"trip_details_controller.starts_as_fmt" = "Commence en tant que %@";
-
 /* Shown beside a Retry button when loading the trip's stop list failed. */
 "trip_page.stops_failed" = "Impossible de charger les arrêts de ce trajet.";
 
@@ -1730,12 +1703,6 @@
 
 /* Voiceover text explaining that this stop is not part of the shared ride */
 "trip_stop.outside_ride.accessibility_label" = "Ne fait pas partie du trajet partagé";
-
-/* Voiceover text explaining that this stop is the user's destination */
-"trip_stop.user_destination.accessibility_label" = "Votre destination";
-
-/* Voiceover text explaining that the vehicle is currently at this stop */
-"trip_stop.vehicle_location.accessibility_label" = "Le véhicule est ici";
 
 /* Suggested invocation phrase for Siri Shortcut */
 "user_activity_builder.show_me_my_bus" = "Montre-moi mon bus";
@@ -1814,24 +1781,6 @@
 
 /* Voiceover text describing no departures in the near-future. */
 "voiceover.bookmarkarrivaldata.value.noupcomingdepartures_fmt" = "Aucun départ à venir";
-
-/* A label for blind or low-vision users on the UI element that describes how long it takes to walk to the stop. */
-"walk_time_view.accessibility_label" = "Temps de marche jusqu'à l'arrêt";
-
-/* A label for blind or low-vision users on the UI element that describes how long it takes to bike to the stop. */
-"walk_time_view.accessibility_label_bike" = "Temps de trajet à vélo jusqu'à l'arrêt";
-
-/* Accessibility string with placeholders for distance from stop, walking time to stop, and predicted arrival time. e.g. 1.2 miles. Takes 17 minutes to walk, arriving at 9:41 am */
-"walk_time_view.accessibility_value" = "%1$@. %2$@ de marche, arrivée à %3$@";
-
-/* Accessibility string with placeholders for distance from stop, biking time to stop, and predicted arrival time. e.g. 1.2 miles. Takes 6 minutes to bike, arriving at 9:41 am */
-"walk_time_view.accessibility_value_bike" = "%1$@. %2$@ à vélo, arrivée à %3$@";
-
-/* Format string with placeholders for distance from stop, travel time to stop, and predicted arrival time. e.g. 1.2 miles, 17m: arriving at 09:41 A.M. */
-"walk_time_view.distance_time_fmt" = "%1$@, %2$@ : arrivée à %3$@";
-
-/* Accessibility label for the transfer arrival banner shown when navigating to a connecting stop. */
-"walk_time_view.transfer_accessibility_label" = "Heure d'arrivée de la correspondance";
 
 /* Spoken value for the map weather control. First %@ is the temperature, second is the weather condition. */
 "weather.button_accessibility_value_format" = "%1$@, %2$@";
@@ -2004,8 +1953,6 @@
 "settings_controller.debug_section.test_device_description.placeholder" = "ex. : iPhone d'Aaron";
 /* Settings > Map section > Show Apple MapKit Points of Interest */
 "settings_controller.map_section.shows_points_of_interest" = "Points d'intérêt";
-/* Title of the message shown when the server has no stop at the requested ID. */
-"stop_controller.stop_not_found_title" = "Arrêt introuvable";
 /* VoiceOver announcement posted when the Departure Type filter changes which departures are visible. */
 "stop_page.a11y.filter_changed" = "Filtre de départ modifié";
 /* VoiceOver announcement when the Past disclosure is closed. */
@@ -2046,6 +1993,8 @@
 "trip_page.card.distance_stops_a11y_fmt" = "à %1$@, à %2$d arrêts";
 /* Trip card line: how far the vehicle is from the rider's stop. %1$@ is a distance like '1.2 mi', %2$d the number of stops in between. Plural forms live in Localizable.stringsdict; this value is only the not-found fallback. */
 "trip_page.card.distance_stops_fmt" = "à %1$@ · %2$d arrêts";
+/* Row on the trip page naming the trip the same vehicle runs next, which a rider who stays on board rides into. %@ is that trip's route and headsign, e.g. 'Continues as 10 - Downtown Seattle'. */
+"trip_page.continues_as_fmt" = "Continue en tant que %@";
 /* Confirmation shown after a ghost bus report (a scheduled bus that never came) is submitted. */
 "trip_page.ghost_bus_report_sent" = "Merci ! Votre signalement a été envoyé.";
 /* Error shown when a ghost bus report can't be submitted because the region's Obaco service is unreachable. */
@@ -2062,6 +2011,8 @@
 "trip_page.report_ghost_bus" = "Signaler un bus fantôme";
 /* Short caption on the trip page button opening the route's schedule. Keep it to one short word: it shares a row with three other buttons. */
 "trip_page.schedule" = "Horaires";
+/* Row on the trip page naming the trip the same vehicle runs just before this one. %@ is that trip's route and headsign, e.g. 'Starts as 10 - Downtown Seattle'. */
+"trip_page.starts_as_fmt" = "Commence en tant que %@";
 /* VoiceOver clause on a stop the vehicle has already served. */
 "trip_page.stop_list.a11y_passed" = "déjà passé";
 /* VoiceOver label for a collapsed run of stops between the vehicle and the rider's stop, e.g. '5 stops before your stop'. Plural forms live in Localizable.stringsdict; this value is only the not-found fallback. */
@@ -2100,8 +2051,6 @@
 "trip_progress.passed_your_stop" = "Votre arrêt est dépassé";
 /* Shows the current stop position. e.g. Stop 5 of 18 */
 "trip_progress.stop_count_fmt" = "Arrêt %1$d sur %2$d";
-/* Voiceover text explaining that the vehicle has already passed this stop */
-"trip_stop.passed_stop.accessibility_label" = "Arrêt déjà passé";
 
 /* Accessibility label for the mic button that starts voice search. */
 "search_sheet.voice_search.start" = "Recherche vocale";
@@ -2421,3 +2370,9 @@
 
 /* Title of the page that explains an error in detail. */
 "problem_details.title" = "Détails du problème";
+
+/* VoiceOver hint for an actionable search result row. */
+"search_controller.accessibility.open_result" = "Ouvre ce résultat.";
+
+/* VoiceOver hint for a quick search row, which runs a search and keeps the search field open. */
+"search_controller.accessibility.quick_search" = "Lance cette recherche.";

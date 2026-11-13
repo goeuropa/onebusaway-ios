@@ -16,18 +16,24 @@ import OBAKitCore
 ///
 /// Hosted bare, with no navigation controller around it: the page hides its
 /// stack's bar, so a stop pushed onto one inside this sheet would have no way
-/// back. The page's two navigation actions go to the panel instead. A tapped
-/// stop opens the panel's stop sheet, and Back closes this one.
+/// back. The page's navigation actions go to the panel instead. A tapped stop
+/// opens the panel's stop sheet, a trip it starts or continues as opens the
+/// panel's trip sheet, and Back closes this one.
 struct TripPageSheetHost: UIViewControllerRepresentable {
     let application: Application
     let tripConvertible: TripConvertible
+    let destinationStopID: StopID?
 
     /// Hands the page's map focus to the panel's map. See
     /// `TripPageViewController.onMapFocusChanged`.
     let onMapFocusChanged: (TripMapFocus?) -> Void
 
     /// Opens a tapped stop. See `TripPageViewController.onSelectStop`.
-    let onSelectStop: (StopID) -> Void
+    let onSelectStop: (StopID, TransferContext?) -> Void
+
+    /// Opens what the trip starts as or continues as. See
+    /// `TripPageViewController.onSelectTrip`.
+    let onSelectTrip: (TripConvertible) -> Void
 
     /// Ends the sheet when the page's Back row is tapped. See
     /// `TripPageViewController.onClose`.
@@ -37,15 +43,20 @@ struct TripPageSheetHost: UIViewControllerRepresentable {
         Self.makeTripPage(
             application: application,
             tripConvertible: tripConvertible,
+            destinationStopID: destinationStopID,
             onMapFocusChanged: onMapFocusChanged,
             onSelectStop: onSelectStop,
+            onSelectTrip: onSelectTrip,
             onClose: onClose
         )
     }
 
-    // The page's view model refreshes the trip itself, so nothing SwiftUI-side
-    // changes over the sheet's lifetime.
-    func updateUIViewController(_ uiViewController: TripPageViewController, context: Context) { }
+    // The page's view model refreshes the trip itself. The one thing SwiftUI
+    // tells it is whether a sheet covers it: UIKit doesn't, as a sheet over a
+    // sheet sends the page no `viewWillDisappear`.
+    func updateUIViewController(_ uiViewController: TripPageViewController, context: Context) {
+        uiViewController.setCoveredBySheet(context.environment.isCoveredBySheet)
+    }
 
     /// Internal factory seam, for the reason `MoreSheetHost.makeNavigationController`
     /// gives: tests can inspect the wiring without a `UIHostingController`.
@@ -53,13 +64,20 @@ struct TripPageSheetHost: UIViewControllerRepresentable {
     static func makeTripPage(
         application: Application,
         tripConvertible: TripConvertible,
+        destinationStopID: StopID? = nil,
         onMapFocusChanged: @escaping (TripMapFocus?) -> Void,
-        onSelectStop: @escaping (StopID) -> Void,
+        onSelectStop: @escaping (StopID, TransferContext?) -> Void,
+        onSelectTrip: @escaping (TripConvertible) -> Void,
         onClose: @escaping () -> Void
     ) -> TripPageViewController {
-        let page = TripPageViewController(application: application, tripConvertible: tripConvertible)
+        let page = TripPageViewController(
+            application: application,
+            tripConvertible: tripConvertible,
+            destinationStopID: destinationStopID
+        )
         page.onMapFocusChanged = onMapFocusChanged
         page.onSelectStop = onSelectStop
+        page.onSelectTrip = onSelectTrip
         page.onClose = onClose
         return page
     }

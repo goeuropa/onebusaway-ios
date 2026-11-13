@@ -78,6 +78,10 @@ struct StopPageActionRow: View {
     let onDirectionsToHere: (() -> Void)?
     let onDirectionsFromHere: (() -> Void)?
     let onReportProblem: () -> Void
+    /// Whether a nearby alert is set for this stop, which decides the title.
+    var isProximityAlertActive = false
+    /// Sets or cancels the stop's nearby alert. Nil hides the item.
+    var onToggleProximityAlert: (() -> Void)?
 
     /// No horizontal scrolling accommodation, unlike `StopPageToolbar`: that
     /// exists because captions grow with Dynamic Type until four of them stop
@@ -98,7 +102,7 @@ struct StopPageActionRow: View {
     private static let verticalPadding: CGFloat = 8
 
     /// Gap between the capsule and the bottom of the sheet. Rides on top of the
-    /// device's own bottom safe area, which the enclosing `safeAreaInset`
+    /// device's own bottom safe area, which the enclosing safe-area bar
     /// already accounts for — this is breathing room above the home indicator,
     /// not clearance of it.
     private static let bottomInset: CGFloat = 20
@@ -108,7 +112,7 @@ struct StopPageActionRow: View {
     ///
     /// Published because the scroll-to-top button has to clear it and cannot
     /// discover it: that button is an `.overlay(alignment: .bottomTrailing)`
-    /// applied *after* the `safeAreaInset` this view is mounted in, so it aligns
+    /// applied *after* the safe-area bar this view is mounted in, so it aligns
     /// to the sheet's full frame and would otherwise land directly on top of the
     /// capsule. A constant rather than a measured height on purpose — nothing
     /// here depends on scroll position, and measuring it back into a position is
@@ -278,6 +282,17 @@ struct StopPageActionRow: View {
                     Label(StopTripPlannerAction.directionsFromHereTitle, systemImage: "arrow.triangle.turn.up.right.diamond.fill")
                 }
                 .disabled(!state.canActOnStop)
+            }
+
+            // Never disabled, as on the pushed page's toolbar: a rider who can't
+            // use it yet needs the tap to say why.
+            if let onToggleProximityAlert {
+                Button(action: onToggleProximityAlert) {
+                    Label(
+                        ProximityAlertMenuItem.title(isActive: isProximityAlertActive),
+                        systemImage: Icons.proximityAlertSymbolName(isActive: isProximityAlertActive)
+                    )
+                }
             }
         }
 

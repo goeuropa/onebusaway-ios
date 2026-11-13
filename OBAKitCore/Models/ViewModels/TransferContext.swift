@@ -26,15 +26,6 @@ public struct TransferContext: Equatable, Hashable {
     /// without a known trip (tests, legacy call sites).
     public let fromTripID: TripIdentifier?
 
-    /// Combined route and headsign for display (e.g., "10 - Capitol Hill").
-    /// Derived from `fromRouteShortName` and `fromTripHeadsign` so it can
-    /// never contradict the component fields.
-    public var fromRouteDisplay: String {
-        [fromRouteShortName, fromTripHeadsign]
-            .filter { !$0.isEmpty }
-            .joined(separator: " - ")
-    }
-
     public init(
         arrivalTime: Date,
         fromRouteShortName: String,
@@ -57,21 +48,19 @@ public struct TransferContext: Equatable, Hashable {
         )
     }
 
-    /// Computes minutes from the transfer arrival time to the given departure date.
-    /// Positive values mean the departure is after arrival; negative means before.
-    public func minutesUntilDeparture(from departureDate: Date) -> Int {
-        return Int(departureDate.timeIntervalSince(arrivalTime) / 60.0)
-    }
-
-    /// Returns the temporal state of a departure relative to this transfer's arrival time.
-    public func temporalState(for departureDate: Date) -> TemporalState {
-        let minutes = minutesUntilDeparture(from: departureDate)
-        if minutes < 0 {
-            return .past
-        } else if minutes == 0 {
-            return .present
-        } else {
-            return .future
-        }
+    /// The context for stepping off the rider's trip at one of its stops, which
+    /// the trip screens hand to the stop they open when a stop is tapped.
+    ///
+    /// - Parameters:
+    ///   - stopID: The stop being opened.
+    ///   - arrivalDate: When the trip reaches that stop. On a loop route that
+    ///     calls at the stop twice, the time of the visit that was tapped.
+    ///   - arrivalDeparture: The departure the rider is on.
+    /// - Returns: `nil` without a departure (a trip opened from a vehicle has
+    ///   no boarding stop), without a time, or for the stop the rider boards
+    ///   at: transferring to the same stop is not meaningful.
+    public static func toStop(_ stopID: StopID, arrivalDate: Date?, from arrivalDeparture: ArrivalDeparture?) -> TransferContext? {
+        guard let arrivalDeparture, let arrivalDate, stopID != arrivalDeparture.stopID else { return nil }
+        return .from(arrivalDeparture: arrivalDeparture, arrivalDate: arrivalDate)
     }
 }

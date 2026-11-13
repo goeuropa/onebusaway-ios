@@ -43,6 +43,7 @@ final class AppSheetViewFactory {
     let stopsObserver: MapStopsObserver
     let tripPlannerMapDisplayModel: TripPlannerMapDisplayModel
     let tripFocusMapDisplayModel: TripFocusMapDisplayModel
+    let stopFocusMapDisplayModel: StopFocusMapDisplayModel
     /// The dock's probe controller: the picker writes its highlight, which the
     /// panel mirrors onto the zone layer, so bar pages and picker rows share
     /// one source of truth.
@@ -56,9 +57,9 @@ final class AppSheetViewFactory {
     /// renders correctly and then silently ignores every button on it.
     ///
     /// `coordinator`, `searchDisplayModel`, `stopsObserver`,
-    /// `tripPlannerMapDisplayModel`, `tripFocusMapDisplayModel`, and
-    /// `onDemandProbeController`: they must be the same instances the hosting
-    /// `MapPanelRootView` observes. A factory built with its own private copies
+    /// `tripPlannerMapDisplayModel`, `tripFocusMapDisplayModel`,
+    /// `stopFocusMapDisplayModel`, and `onDemandProbeController`: they must be the
+    /// same instances the hosting `MapPanelRootView` observes. A factory built with its own private copies
     /// would push routes onto a coordinator nobody is watching, draw into a
     /// display model nobody renders, observe a different stop set than the map
     /// is showing, push trip state into a model nobody renders, or highlight a
@@ -76,6 +77,7 @@ final class AppSheetViewFactory {
         stopsObserver: MapStopsObserver,
         tripPlannerMapDisplayModel: TripPlannerMapDisplayModel,
         tripFocusMapDisplayModel: TripFocusMapDisplayModel,
+        stopFocusMapDisplayModel: StopFocusMapDisplayModel,
         onDemandProbeController: OnDemandProbeController
     ) {
         self.application = application
@@ -89,6 +91,7 @@ final class AppSheetViewFactory {
         self.stopsObserver = stopsObserver
         self.tripPlannerMapDisplayModel = tripPlannerMapDisplayModel
         self.tripFocusMapDisplayModel = tripFocusMapDisplayModel
+        self.stopFocusMapDisplayModel = stopFocusMapDisplayModel
         self.onDemandProbeController = onDemandProbeController
     }
 
@@ -110,7 +113,10 @@ final class AppSheetViewFactory {
             homeView()
 
         case .more:
+            // MoreViewController clears its backgrounds for the sheet's, which
+            // only HomeSheetView sets when More is its tab.
             moreView()
+                .searchSheetBackground()
 
         case .search:
             searchView()
@@ -130,8 +136,8 @@ final class AppSheetViewFactory {
         case .tripPlanner(let request):
             tripPlannerView(request: request)
 
-        case .tripDetails(let tripConvertible):
-            tripDetailsView(tripConvertible: tripConvertible)
+        case .tripDetails(let tripConvertible, let destinationStopID):
+            tripDetailsView(tripConvertible: tripConvertible, destinationStopID: destinationStopID)
 
         case .transitAlert, .settings:
             unimplementedView(for: route)
@@ -148,8 +154,8 @@ final class AppSheetViewFactory {
         case .nearbyStops(let coordinate):
             nearbyStopsView(coordinate: coordinate)
 
-        case .stopDetails(let stopID):
-            stopDetailView(stopID: stopID)
+        case .stopDetails(let stopID, let transferContext):
+            stopDetailView(stopID: stopID, transferContext: transferContext)
 
         case .routePicker:
             routePickerView()
@@ -182,7 +188,16 @@ final class AppSheetViewFactory {
             viewModel: HomeSheetViewModel(
                 application: self.application,
                 stopsObserver: self.stopsObserver
-            )
+            ),
+            // Modally, as the UIKit map's nearby list opens one: the detail
+            // closes itself from UIKit, which a sheet in the stack can't take.
+            onSelectAlert: { [application, presentingController] alert in
+                guard let host = presentingController() else {
+                    Logger.error("AppSheetViewFactory: dropping an alert's detail — no presenting controller resolved.")
+                    return
+                }
+                application.viewRouter.navigateTo(alert: alert, from: host)
+            }
         )
     }
 
@@ -190,7 +205,9 @@ final class AppSheetViewFactory {
     /// via `MoreSheetHost`. Swap this branch's return type once the SwiftUI
     /// `MoreView` lands.
     func moreView() -> MoreSheetHost {
-        MoreSheetHost(application: application)
+        MoreSheetHost(application: application) { [coordinator] in
+            coordinator.truncateStacked(toDepth: coordinator.stackedRoutes.lastIndex(of: .more) ?? coordinator.stackedRoutes.count)
+        }
     }
 
     /// The Stop page as a native SwiftUI sheet over the map panel.
@@ -199,10 +216,14 @@ final class AppSheetViewFactory {
     /// `StopDeparturesSections` — but replaces the navigation bar with a pinned
     /// Refresh/Close strip and a row of circular actions, and collapses the map
     /// header away as the list scrolls so the actions stay reachable.
-    func stopDetailView(stopID: Stop.ID) -> StopDetailsSheetRootView {
-        StopDetailsSheetRootView(
+    ///
+    /// The transfer context highlights the rider's trip, unless they've turned the
+    /// trip highlight off: the same check `ViewRouter.makeStopController` makes.
+    func stopDetailView(stopID: Stop.ID, transferContext: TransferContext? = nil) -> StopDetailsSheetRootView {
+        let transferContext = application.userDataStore.displayedTransferContext(transferContext)
+        return StopDetailsSheetRootView(
             stopID: stopID,
-            makeViewModel: { StopViewModel(environment: self.application, stopID: stopID) },
+            makeViewModel: { StopViewModel(environment: self.application, stopID: stopID, transferContext: transferContext) },
             makePresenter: {
                 let presenter = StopPageActionPresenter(
                     application: self.application,
@@ -218,11 +239,52 @@ final class AppSheetViewFactory {
                         from: .stopDetails(stopID: stopID)
                     )
                 }
+                presenter.onShowNearbyStopsInSheet = { [coordinator = self.coordinator] coordinate in
+                    coordinator.open(.nearbyStops(coordinate: coordinate), from: .stopDetails(stopID: stopID))
+                }
+                presenter.onShowOnDemandServiceInSheet = { [coordinator = self.coordinator] service in
+                    coordinator.open(.onDemandService(service), from: .stopDetails(stopID: stopID))
+                }
+                presenter.onShowTripPlannerInSheet = { [coordinator = self.coordinator] action, stop, mode in
+                    coordinator.open(.tripPlanner(action.request(stop: stop, mode: mode)), from: .stopDetails(stopID: stopID))
+                }
                 return presenter
             },
             feedback: DataLoadFeedbackGenerator(application: self.application),
             formatters: self.application.formatters,
-            userDefaults: self.application.userDefaults
+            userDefaults: self.application.userDefaults,
+            mapLink: stopMapLink(stopID: stopID)
+        )
+    }
+
+    /// Draws the stop's routes and vehicles on the panel's map while its sheet is
+    /// on the stack. The drawing ends when the route leaves the stack
+    /// (`StopFocusMapDisplayModel.clearIfOwnerAbsent(from:)`).
+    private func stopMapLink(stopID: StopID) -> StopSheetMapLink {
+        let owner = AppSheetRoute.stopDetails(stopID: stopID)
+        return StopSheetMapLink(
+            show: { [stopFocusMapDisplayModel, coordinator] focus in
+                // Same wait, and the same check after it, as the trip page's focus
+                // in `tripDetailsView`: publishing the map's state from inside a
+                // view update is undefined behaviour, and the sheet can close
+                // during the wait.
+                Task { @MainActor in
+                    guard coordinator.allRoutes.contains(owner) else { return }
+                    stopFocusMapDisplayModel.show(focus: focus, owner: owner)
+                }
+            },
+            apply: { [stopFocusMapDisplayModel] arrivals, isListFiltered, preferences in
+                // Behind `show`'s wait, so the first emission isn't dropped for
+                // arriving before its sheet is known.
+                Task { @MainActor in
+                    stopFocusMapDisplayModel.apply(
+                        arrivals: arrivals,
+                        isListFiltered: isListFiltered,
+                        preferences: preferences,
+                        owner: owner
+                    )
+                }
+            }
         )
     }
 
@@ -237,19 +299,21 @@ final class AppSheetViewFactory {
     /// (`TripFocusMapDisplayModel.clearIfOwnerAbsent(from:)`), so the page's own
     /// `nil` is ignored.
     ///
-    /// Both of the page's ways onward go through the coordinator. A tapped stop
-    /// opens the panel's stop sheet above the trip, as a stop does everywhere else
-    /// in the panel. Back pops the route rather than letting the page dismiss
+    /// The page's ways onward go through the coordinator. A tapped stop opens the
+    /// panel's stop sheet above the trip, as a stop does everywhere else in the
+    /// panel, and the trip before or after this one opens a trip sheet the same
+    /// way. Back pops the route rather than letting the page dismiss
     /// itself from UIKit: the coordinator's stack is what holds the sheet on
     /// screen, so it is closed there, as `StopDetailsSheetView`'s Close is.
-    func tripDetailsView(tripConvertible: TripConvertible) -> TripPageSheetHost {
+    func tripDetailsView(tripConvertible: TripConvertible, destinationStopID: StopID? = nil) -> TripPageSheetHost {
         TripPageSheetHost(
             application: application,
             tripConvertible: tripConvertible,
+            destinationStopID: destinationStopID,
             onMapFocusChanged: { [tripFocusMapDisplayModel, coordinator] focus in
                 // Ending the drawing is the route stack's job, not the page's.
                 guard let focus else { return }
-                let owner = AppSheetRoute.tripDetails(tripConvertible)
+                let owner = AppSheetRoute.tripDetails(tripConvertible, destinationStopID: destinationStopID)
                 // The page reports from `viewWillAppear`, which runs while SwiftUI is
                 // still building this sheet. Publishing the map's state from inside
                 // that update is undefined behaviour, and SwiftUI says so at runtime
@@ -265,9 +329,29 @@ final class AppSheetViewFactory {
             },
             // The stop can already be open further down, when the rider came to
             // this trip from that stop's sheet. `open` goes back to it rather than
-            // stacking a second copy.
-            onSelectStop: { [coordinator] stopID in
-                coordinator.open(.stopDetails(stopID: stopID), from: .tripDetails(tripConvertible))
+            // stacking a second copy, and it stays as the rider left it, with the
+            // context it was first opened with.
+            onSelectStop: { [coordinator] stopID, transferContext in
+                coordinator.open(
+                    .stopDetails(stopID: stopID, transferContext: transferContext),
+                    from: .tripDetails(tripConvertible, destinationStopID: destinationStopID)
+                )
+            },
+            // What the trip starts as or continues as opens above it, so Back
+            // returns here. A rider who went from a trip to the one after it and
+            // taps "Starts as" there goes back down to the first. That sheet is
+            // looked for by its trip alone: one opened from a shared link also
+            // carries the sharer's destination stop, so `open` wouldn't recognize
+            // it, and it keeps that stop when the rider goes back to it.
+            onSelectTrip: { [coordinator] adjacent in
+                let alreadyOpen = coordinator.stackedRoutes.last(where: { route in
+                    guard case .tripDetails(let openTrip, _) = route else { return false }
+                    return openTrip.tripID == adjacent.tripID
+                })
+                coordinator.open(
+                    alreadyOpen ?? .tripDetails(adjacent),
+                    from: .tripDetails(tripConvertible, destinationStopID: destinationStopID)
+                )
             },
             onClose: { [coordinator] in coordinator.pop() }
         )

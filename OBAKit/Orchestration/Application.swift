@@ -64,7 +64,7 @@ public class Application: CoreApplication, PushServiceDelegate {
 
     /// App configuration parameters: API keys, region server, user UUID, and other
     /// configuration values.
-    private let config: AppConfig
+    let config: AppConfig
 
     // MARK: - Public Properties
 
@@ -100,10 +100,8 @@ public class Application: CoreApplication, PushServiceDelegate {
 
     lazy var searchManager = SearchManager(application: self)
 
-    lazy var toastManager = ToastManager()
-
     @MainActor
-    lazy var walkingSpeedManager = WalkingSpeedManager(userDataStore: userDataStore)
+    lazy var walkingSpeedManager = WalkingSpeedManager(userDataStore: userDataStore, provider: config.speedSync?.walkingProvider)
 
     /// Owns the rider's destination proximity alerts.
     ///
@@ -118,7 +116,7 @@ public class Application: CoreApplication, PushServiceDelegate {
     )
 
     @MainActor
-    lazy var bikeModeManager = BikeModeManager(userDataStore: userDataStore)
+    lazy var bikeModeManager = BikeModeManager(userDataStore: userDataStore, provider: config.speedSync?.bikeProvider)
 
     @objc lazy var userActivityBuilder = UserActivityBuilder(application: self)
 
@@ -147,20 +145,19 @@ public class Application: CoreApplication, PushServiceDelegate {
             ProgressHUD.show()
 
             do {
-                let arrDep = try await apiService.getTripArrivalDepartureAtStop(stopID: deepLink.stopID, tripID: deepLink.tripID, serviceDate: deepLink.serviceDate, vehicleID: deepLink.vehicleID, stopSequence: deepLink.stopSequence).entry
+                let arrDep = try await apiService.getTripArrivalDepartureAtStop(deepLink: deepLink).entry
 
-                self.withPushableTopViewController { from in
-                    // The rider may have switched regions while this loaded.
-                    guard self.currentRegion?.regionIdentifier == deepLink.regionID else {
-                        Logger.warn("Dropping trip \(deepLink.tripID) because the selected region changed before it loaded.")
-                        return
-                    }
-                    self.viewRouter.navigateTo(
-                        arrivalDeparture: arrDep,
-                        from: from,
-                        destinationStopID: deepLink.destinationStopID
-                    )
+                // The rider may have switched regions while this loaded.
+                guard self.currentRegion?.regionIdentifier == deepLink.regionID else {
+                    Logger.warn("Dropping trip \(deepLink.tripID) because the selected region changed before it loaded.")
+                    ProgressHUD.dismiss()
+                    return
                 }
+
+                self.viewRouter.navigate(
+                    to: .tripDetails(TripConvertible(arrivalDeparture: arrDep), destinationStopID: deepLink.destinationStopID),
+                    popToRootFirst: false
+                )
             } catch {
                 await self.displayError(error)
             }
@@ -330,7 +327,7 @@ public class Application: CoreApplication, PushServiceDelegate {
     // MARK: - Push Notifications
 
     /// An optional property that contains this app's configured push notifications service.
-    public private(set) var pushService: PushService?
+    public internal(set) var pushService: PushService?
 
     /// Keeps this device's APNs token registered with the current region's OBACloud server so
     /// agencies can send service-alert push notifications to it. See #1204.
@@ -494,16 +491,34 @@ public class Application: CoreApplication, PushServiceDelegate {
 
         startStopSpotlightIndexing()
 
-        if userDataStore.walkingSpeedSource == .healthKit {
-            Task { await walkingSpeedManager.refreshFromHealthKitIfPossible() }
+        retireSyncedSpeedsIfUnsupported()
+
+        if userDataStore.walkingSpeedSource == .synced {
+            Task { await walkingSpeedManager.refreshIfPossible() }
         }
 
         // Matches the walking-speed refresh above: gated on the sync source alone, not
         // on whether Bike Mode is currently toggled on. The header's bike chip is always
         // shown regardless of mode, so a rider who synced once and later turned Bike Mode
         // off would otherwise keep a frozen cycling-speed ETA on every stop header forever.
-        if userDataStore.bikeSpeedSource == .healthKit {
-            Task { await bikeModeManager.refreshFromHealthKitIfPossible() }
+        if userDataStore.bikeSpeedSource == .synced {
+            Task { await bikeModeManager.refreshIfPossible() }
+        }
+    }
+
+    /// A rider who synced a speed on a build with a provider keeps that speed on a build
+    /// without one, or on a device where it is unavailable, as a manual value: nothing can
+    /// refresh it, and Settings has no switch to turn it off. Walking snaps to the preset
+    /// the picker shows, as an opt-out does.
+    func retireSyncedSpeedsIfUnsupported() {
+        guard config.speedSync?.isAvailable != true else { return }
+
+        if userDataStore.walkingSpeedSource == .synced {
+            walkingSpeedManager.stopSyncing()
+        }
+
+        if userDataStore.bikeSpeedSource == .synced {
+            bikeModeManager.stopSyncing()
         }
     }
 
@@ -734,12 +749,12 @@ public class Application: CoreApplication, PushServiceDelegate {
     /// Opens `destination` now, or stashes it until the root UI and matching
     /// region exist. Does not fetch this stop against a different region's API.
     func queueOrOpenStop(_ destination: AppLinksRouter.StopDestination) {
-        if let current = currentRegion?.regionIdentifier, current != destination.regionID {
+        if let current = currentRegion?.regionIdentifier, let destRegion = destination.regionID, current != destRegion {
             // Dropped on purpose — fetching this stop against another region's API
             // would return the wrong stop or nothing — but say so. This is the end
             // of the line for something the rider actually tapped, and the
             // no-region branch that defers instead already logs its reasoning.
-            Logger.warn("Stop \(destination.stopID) belongs to region \(destination.regionID) but region \(current) is selected; dropping the tap.")
+            Logger.warn("Stop \(destination.stopID) belongs to region \(destRegion) but region \(current) is selected; dropping the tap.")
             Task { @MainActor in
                 await self.displayError(UnstructuredError(OBALoc(
                     "application.stop_in_other_region",
@@ -755,7 +770,8 @@ public class Application: CoreApplication, PushServiceDelegate {
         // Not while onboarding is the root: there is no API service to load the
         // stop with yet, and the page would be pushed over the region picker. The
         // drain picks the stash up once onboarding finishes.
-        if topViewController != nil, !isOnboardingRoot, currentRegion?.regionIdentifier == destination.regionID {
+        let isMatchingRegion = destination.regionID == nil || currentRegion?.regionIdentifier == destination.regionID
+        if topViewController != nil, !isOnboardingRoot, isMatchingRegion, currentRegion != nil {
             pushStopFromOutside(destination.stopID)
             return
         }
@@ -883,11 +899,14 @@ public class Application: CoreApplication, PushServiceDelegate {
     }
 
     /// The launch and region-change rebuilds read the cache before the region's
-    /// sync writes to it, so the index is rebuilt again once it has. A sync that
-    /// finishes as the rider switches regions is ignored: the switch rebuilt it.
+    /// sync writes to it, so the synced stops are indexed once it has. A partial
+    /// sync is retried hourly, so this indexes on top rather than emptying
+    /// Spotlight each time; the weekly replace removes the stops a sync dropped.
+    /// A sync that finishes as the rider switches regions is ignored: the switch
+    /// rebuilt the index.
     public override func regionStopSyncWroteStops(regionID: Int) {
         guard regionID == currentRegion?.regionIdentifier else { return }
-        stopSpotlightIndexer?.replaceAll()
+        stopSpotlightIndexer?.indexOrReplace()
     }
 
     public func regionsService(_ service: RegionsService, displayError error: Error) {
@@ -914,10 +933,17 @@ public class Application: CoreApplication, PushServiceDelegate {
     /// `ErrorPresenter.shouldPresent(_:current:isShowingDetails:)`.
     @MainActor
     public override func displayError(_ error: Error) async {
+        await displayError(error, subject: nil)
+    }
+
+    /// - Parameter subject: What failed, when the caller knows it better than
+    ///   the failed request's URL does. Nil works it out from the URL.
+    public func displayError(_ error: Error, subject: ErrorReport.Subject?) async {
         let report = ErrorReport(
             error: error,
             regionName: currentRegionName,
             isCellularDataRestricted: isCellularDataRestricted,
+            subject: subject,
             systemVersion: Self.systemVersion,
             deviceModel: Self.deviceModel
         )
@@ -932,6 +958,16 @@ public class Application: CoreApplication, PushServiceDelegate {
             return
         }
         errorPresenter.present(report, in: scene)
+    }
+
+    /// A one-line toast with no Problem Details behind it, through the same
+    /// presenter as `displayError(_:)`.
+    func showNotice(_ message: String) {
+        guard let scene = delegate?.uiApplication?.errorToastTargetScene else {
+            Logger.error("Notice not shown: no foreground window scene.")
+            return
+        }
+        errorPresenter.present(notice: message, in: scene)
     }
 
     private let errorPresenter = ErrorPresenter()

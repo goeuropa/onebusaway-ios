@@ -12,8 +12,7 @@ import UIKit
 import OBAKitCore
 @testable import OBAKit
 
-/// `TripViewController` has always published a Handoff activity for its trip.
-/// The trip page that replaced it published none.
+/// The trip page publishes a Handoff activity for its trip.
 /// See: https://github.com/OneBusAway/onebusaway-ios/issues/1556
 @MainActor
 @Suite(.serialized)
@@ -88,5 +87,18 @@ final class TripPageUserActivityTests: OBATestCase {
     private func clearAndUpdate(_ activity: NSUserActivity, from responder: UIResponder) {
         activity.userInfo = [:]
         responder.updateUserActivityState(activity)
+    }
+
+    // MARK: - VoiceOver
+
+    /// The trip page disables programmatic refresh while VoiceOver is running.
+    @Test func `The trip page configures shouldSkipProgrammaticRefresh for VoiceOver`() throws {
+        let application = buildApplication(queue: queue, dataLoader: MockDataLoader(testName: name))
+        let arrivalDeparture = try Fixtures.arrivalDeparture(tripID: "1_12345")
+        let controller = TripPageViewController(
+            application: application,
+            arrivalDeparture: arrivalDeparture
+        )
+        #expect(controller.viewModel.shouldSkipProgrammaticRefresh != nil)
     }
 }

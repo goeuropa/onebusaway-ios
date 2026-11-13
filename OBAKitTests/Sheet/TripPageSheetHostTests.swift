@@ -39,7 +39,8 @@ final class TripPageSheetHostTests: OBATestCase {
             application: application,
             tripConvertible: convertible,
             onMapFocusChanged: { _ in },
-            onSelectStop: { _ in },
+            onSelectStop: { _, _ in },
+            onSelectTrip: { _ in },
             onClose: {}
         )
 
@@ -56,7 +57,8 @@ final class TripPageSheetHostTests: OBATestCase {
             application: application,
             tripConvertible: try Fixtures.tripConvertible(),
             onMapFocusChanged: { reported.append($0) },
-            onSelectStop: { _ in },
+            onSelectStop: { _, _ in },
+            onSelectTrip: { _ in },
             onClose: {}
         )
         page.onMapFocusChanged?(page.mapFocus)
@@ -74,7 +76,8 @@ final class TripPageSheetHostTests: OBATestCase {
             application: application,
             tripConvertible: try Fixtures.tripConvertible(),
             onMapFocusChanged: { _ in },
-            onSelectStop: { _ in },
+            onSelectStop: { _, _ in },
+            onSelectTrip: { _ in },
             onClose: { closeCount += 1 }
         )
         page.onClose?()
@@ -96,11 +99,131 @@ final class TripPageSheetHostTests: OBATestCase {
             application: application,
             tripConvertible: try Fixtures.tripConvertible(),
             onMapFocusChanged: { _ in },
-            onSelectStop: { selectedStopIDs.append($0) },
+            onSelectStop: { stopID, _ in selectedStopIDs.append(stopID) },
+            onSelectTrip: { _ in },
             onClose: {}
         )
-        page.rootView.actions.onSelectStop("1_75403")
+        page.rootView.actions.onSelectStop(TripStopListModel.Row(
+            id: "4-1_75403",
+            stopID: "1_75403",
+            name: "Stop 4",
+            coordinate: nil,
+            date: nil,
+            isPassed: false,
+            isVehicleHere: false,
+            isUserStop: false,
+            isTerminal: false
+        ))
 
         #expect(selectedStopIDs == ["1_75403"])
+    }
+
+    /// What the trip starts or continues as. Driven through the page's
+    /// `openTrip`, so it also covers the page consulting the hook. Without it the
+    /// page would look for a navigation stack this sheet doesn't have and assert,
+    /// which, like the stop test above, crashes the run rather than failing a test.
+    @Test @MainActor
+    func `A trip the page opens goes to the host`() throws {
+        let application = buildApplication(queue: queue, dataLoader: MockDataLoader(testName: name))
+        var opened: [TripConvertible] = []
+
+        let page = TripPageSheetHost.makeTripPage(
+            application: application,
+            tripConvertible: try Fixtures.tripConvertible(tripID: "trip_42"),
+            onMapFocusChanged: { _ in },
+            onSelectStop: { _, _ in },
+            onSelectTrip: { opened.append($0) },
+            onClose: {}
+        )
+        page.openTrip(try Fixtures.tripConvertible(tripID: "trip_43"))
+
+        // By ID: a failing expectation describes its operands, and describing this
+        // fixture's departure, which has no references loaded, traps.
+        #expect(opened.map(\.tripID) == ["trip_43"])
+    }
+
+    /// The host gets the transfer context the pushed stop would, built from the
+    /// row the rider tapped. The rows make the trip a loop that calls at 1_75403
+    /// twice, so each visit has to carry its own arrival time rather than the
+    /// stop's first. The departure is loaded with its references because the
+    /// context reads its route's short name.
+    @Test @MainActor
+    func `A tapped stop hands the host the transfer context for that visit`() throws {
+        let application = buildApplication(queue: queue, dataLoader: MockDataLoader(testName: name))
+        var contexts: [TransferContext?] = []
+        let firstVisit = Date(timeIntervalSince1970: 1_700_000_600)
+        let secondVisit = Date(timeIntervalSince1970: 1_700_003_000)
+
+        let page = TripPageSheetHost.makeTripPage(
+            application: application,
+            tripConvertible: TripConvertible(arrivalDeparture: try Fixtures.loadRESTAPIPayload(
+                type: ArrivalDeparture.self,
+                fileName: "arrival-and-departure-for-stop-1_11420.json"
+            )),
+            onMapFocusChanged: { _ in },
+            onSelectStop: { _, context in contexts.append(context) },
+            onSelectTrip: { _ in },
+            onClose: {}
+        )
+        page.rootView.actions.onSelectStop(Self.row(sequence: 8, stopID: "1_75403", date: secondVisit))
+        page.rootView.actions.onSelectStop(Self.row(sequence: 4, stopID: "1_75403", date: firstVisit))
+
+        #expect(contexts.map { $0?.arrivalTime } == [secondVisit, firstVisit])
+        #expect(contexts.map { $0?.fromTripID } == ["1_40989208", "1_40989208"])
+    }
+
+    private static func row(sequence: Int, stopID: StopID, date: Date) -> TripStopListModel.Row {
+        TripStopListModel.Row(
+            id: "\(sequence)-\(stopID)",
+            stopID: stopID,
+            name: "Stop \(sequence)",
+            coordinate: nil,
+            date: date,
+            isPassed: false,
+            isVehicleHere: false,
+            isUserStop: false,
+            isTerminal: false
+        )
+    }
+
+    /// A shared trip link names where the sharer steps off (#449), and the sheet
+    /// has to hand it to the page as `TripViewController` gets it in classic.
+    @Test @MainActor
+    func `Make trip page hands the page a shared destination`() throws {
+        let application = buildApplication(queue: queue, dataLoader: MockDataLoader(testName: name))
+
+        let page = TripPageSheetHost.makeTripPage(
+            application: application,
+            tripConvertible: try Fixtures.tripConvertible(),
+            destinationStopID: "1_999",
+            onMapFocusChanged: { _ in },
+            onSelectStop: { _, _ in },
+            onSelectTrip: { _ in },
+            onClose: {}
+        )
+
+        #expect(page.viewModel.destinationStopID == "1_999")
+    }
+
+    /// A sheet over a sheet sends the page under it no `viewWillDisappear`, so
+    /// its refresh used to run on unseen, under every stop and trip above it.
+    @Test @MainActor
+    func `A covered trip page stops refreshing`() throws {
+        let application = buildApplication(queue: queue, dataLoader: MockDataLoader(testName: name))
+        let page = TripPageSheetHost.makeTripPage(
+            application: application,
+            tripConvertible: try Fixtures.tripConvertible(),
+            onMapFocusChanged: { _ in },
+            onSelectStop: { _, _ in },
+            onSelectTrip: { _ in },
+            onClose: {}
+        )
+
+        page.setCoveredBySheet(true)
+        #expect(page.isCoveredBySheet)
+        #expect(!page.viewModel.isLoading)
+
+        page.setCoveredBySheet(false)
+        #expect(!page.isCoveredBySheet)
     }
 }

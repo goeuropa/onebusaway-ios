@@ -59,22 +59,6 @@ nonisolated extension Stop: MKAnnotation {
     public var mapTitle: String? {
         Formatters.formattedMapRoutes(routes)
     }
-
-    /// Callout text for a stop pin. Same overflowing route list as `mapTitle`
-    /// (`"10, 12, 49…"`), plus the rider-visible stop code. Distinct from
-    /// `subtitle`, which Home/Recent/Nearby use and which lists every route.
-    public var mapCalloutText: String {
-        ["#\(code)", mapTitle].compactMap { $0 }.joined(separator: "\n")
-    }
-
-    /// Callout text for a **bookmark** pin. The pin title is `bookmark.name`, not
-    /// the route list, so truncating routes in the callout would hide information
-    /// with no pin/callout consistency benefit (#1342). Same compact style as
-    /// `mapCalloutText`, but every route (`limit: .max`).
-    public var bookmarkCalloutText: String {
-        let routes = Formatters.formattedMapRoutes(self.routes, limit: .max)
-        return ["#\(code)", routes].compactMap { $0 }.joined(separator: "\n")
-    }
 }
 
 // MARK: - TripStatus/MKAnnotation
@@ -93,25 +77,6 @@ nonisolated extension TripStatus: MKAnnotation {
 
         let fmt = OBALoc("trip_status_annotation.title_fmt", value: "Vehicle ID: %@", comment: "A formatted string for displaying a vehicle's ID on the trip status map. e.g. 'Vehicle ID: 12345'")
         return String(format: fmt, vehicleID)
-    }
-}
-
-// MARK: - TripStopTime/MKAnnotation
-
-/// Adds conformance to `MKAnnotation` to `TripStopTime`.
-///
-/// - Note: See `MinimalStopAnnotationView`for more details.
-nonisolated extension TripStopTime: MKAnnotation {
-    public var coordinate: CLLocationCoordinate2D {
-        stop.location.coordinate
-    }
-
-    public var title: String? {
-        Formatters.formattedTitle(stop: stop)
-    }
-
-    public var subtitle: String? {
-        nil
     }
 }
 

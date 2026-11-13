@@ -417,6 +417,9 @@
 /* VoiceOver hint for a home sheet section header, which opens that section's full list. */
 "home_sheet.section_header.a11y_hint" = "Показывает все элементы этого раздела.";
 
+/* Title of the map panel's Home tab, which holds search and the nearby stops. It replaces the Map tab: the map is always behind the sheet. */
+"home_sheet.tab.home" = "Главная";
+
 /* Alert message for Live Activity error. \"Settings\" is the iOS Settings app. */
 "live_activity.error.message" = "Проверьте настройки Live-активностей в приложении «Настройки».";
 
@@ -582,6 +585,9 @@
 /* Accessibility label for website button */
 "map_item_controller.website_accessibility" = "Открыть сайт";
 
+/* VoiceOver hint on a vehicle marker drawn for an open stop on the map panel. Tapping it opens the vehicle's trip. */
+"map_panel.stop_vehicle.hint" = "Показывает этот рейс.";
+
 /* Displayed in the map status view at the top of the map when the user has declined to give the app access to their location */
 "map_status_view.location_services_unavailable" = "Службы геолокации недоступны";
 
@@ -705,6 +711,9 @@
 /* Body shown on the Nearby Stops index sheet when no map viewport, device location, or region is available to search around. */
 "nearby_stops_sheet.no_location.body" = "Переместите карту или включите службы геолокации, чтобы увидеть остановки поблизости.";
 
+/* Siri asks which stop to report departures for when the user didn't name one. */
+"next_departures_at_stop_intent.choose_stop" = "Какая остановка?";
+
 /* Siri response when the requested bookmark was deleted or belongs to a different region. */
 "next_departures_intent.bookmark_unavailable" = "Эта закладка недоступна в вашем текущем регионе.";
 
@@ -720,7 +729,7 @@
 /* Siri response listing the departures after the next one. {List of 'in X minutes'} */
 "next_departures_intent.later_departures_fmt" = "Затем %@.";
 
-/* Siri response when departures could not be fetched. {Bookmark name} */
+/* Siri response when departures could not be fetched. {Bookmark or stop name} */
 "next_departures_intent.load_failed_fmt" = "Не удалось загрузить отправления для «%@». Проверьте подключение и повторите попытку.";
 
 /* Siri response when the user asks for their next departures but has no trip bookmarks in the current region. */
@@ -737,6 +746,21 @@
 
 /* Joins two complete Siri sentences: {first departure sentence} {later departures sentence}. Use the language's separator between sentences; Chinese uses none. */
 "next_departures_intent.sentences_join_fmt" = "%1$@ %2$@";
+
+/* Siri response: one departure from a stop. {Route short name} to {Headsign} {'now' or 'in X minutes'}, for example '8 to Downtown in 4 minutes'. */
+"next_departures_intent.stop_departure_fmt" = "маршрут %1$@ (%2$@) %3$@";
+
+/* Siri response: one departure from a stop whose trip has no destination name. {Route short name} {'now' or 'in X minutes'}, for example '8 in 4 minutes'. */
+"next_departures_intent.stop_departure_no_headsign_fmt" = "маршрут %1$@ %2$@";
+
+/* Siri response listing the next departures from a stop. {Stop name}: {list of departures, such as '8 to Downtown in 4 minutes and 49 to Capitol Hill in 12 minutes'}. */
+"next_departures_intent.stop_departures_fmt" = "Ближайшие на остановке «%1$@»: %2$@.";
+
+/* Siri response when nothing leaves a stop in the next hour. {Stop name} */
+"next_departures_intent.stop_no_departures_fmt" = "Нет отправлений с остановки «%@» в ближайший час.";
+
+/* Siri response when the requested stop belongs to a different region than the one the app is using. */
+"next_departures_intent.stop_unavailable" = "Эта остановка не находится в вашем текущем регионе.";
 
 /* Vehicle occupancy is very high */
 "occupancy_status.crushed_standing_room_only" = "Переполнен, только стоячие места";
@@ -918,6 +942,12 @@
 /* Title for the empty set indicator on the Recent Stops controller. */
 "recent_stops.empty_set.title" = "Нет недавних остановок";
 
+/* Alert message directing the user to the Bookmarks tab when a stop has multiple bookmarks. */
+"recent_stops.multiple_bookmarks.body" = "У этой остановки несколько закладок. Используйте вкладку «Закладки» для управления ими.";
+
+/* Alert title shown when quick-unbookmarking a stop that has more than one stop bookmark. */
+"recent_stops.multiple_bookmarks.title" = "Несколько закладок";
+
 /* Title of the Alarms section of the Recents controller */
 "recent_stops_controller.alarms_section.title" = "Напоминания";
 
@@ -1089,6 +1119,15 @@
 /* Error shown when a tapped search result cannot be turned into something to display. */
 "search_results_sheet.unresolvable_result" = "Не удалось открыть этот результат поиска.";
 
+/* Search scope tag showing all search result types. */
+"search_scope.all" = "All";
+
+/* Search scope tag filtering results to places and addresses. */
+"search_scope.places" = "Places";
+
+/* Search scope tag filtering results to transit routes. */
+"search_scope.routes" = "Routes";
+
 /* Accessibility label for the button that clears the search query. */
 "search_sheet.clear_query" = "Очистить";
 
@@ -1134,11 +1173,11 @@
 /* Settings section title for controlling which arrivals/departures are shown */
 "settings_controller.arrival_display_section.title" = "Отображение прибытий и отправлений";
 
-/* Settings > Arrival Display > Toggle that shows the Arriving at XX:XX via route banner when opening a stop from a trip */
-"settings_controller.arrival_display_section.transfer_banner" = "Показывать баннер прибытия при пересадке";
+/* Settings > Arrival & Departure Display > Toggle that highlights the rider's trip in a stop's departures when they open that stop from the trip */
+"settings_controller.arrival_display_section.highlight_trip" = "Выделять ваш рейс на страницах остановок";
 
-/* Settings > Arrival & Departure Display > Footer describing the transfer banner and region time zone toggles */
-"settings_controller.arrival_display_section.footer" = "Баннер пересадки: при открытии остановки с рейса время относительно вашего прибытия. Часовой пояс региона: часы используют пояс транспортного региона, с короткой меткой, когда телефон в другом поясе. Оба переключателя независимы.";
+/* Settings > Arrival & Departure Display > Footer describing the trip highlight and region time zone toggles */
+"settings_controller.arrival_display_section.footer" = "Выделение рейса: при открытии остановки с рейса отправление этого рейса выделяется на странице остановки. Часовой пояс региона: часы используют пояс транспортного региона, с короткой меткой, когда телефон в другом поясе. Оба переключателя независимы.";
 
 /* Settings > Arrival & Departure Display > Opt-in toggle for displaying arrival clocks in the transit region's time zone */
 "settings_controller.arrival_display_section.region_time_zone" = "Показывать время в часовом поясе региона";
@@ -1155,17 +1194,8 @@
 /* Settings > Bike Mode section footer */
 "settings_controller.bike_mode_section.footer" = "Использует более высокую скорость передвижения для оценки времени до остановки, времени прибытия и на странице остановки.";
 
-/* Settings > Bike Mode section footer identifying the Apple Health integration; the argument is the app name */
-"settings_controller.bike_mode_section.healthkit_footer_fmt" = "%@ может считывать вашу скорость езды на велосипеде из приложения «Здоровье». Приложение никогда не записывает данные в «Здоровье».";
-
 /* Settings > Bike Mode > on/off toggle */
 "settings_controller.bike_mode.title" = "Режим велосипеда";
-
-/* Settings > Bike Mode section > HealthKit toggle */
-"settings_controller.bike_mode.use_healthkit" = "Использовать данные приложения «Здоровье»";
-
-/* Settings > Bike Mode > HealthKit denial or no-data toast */
-"settings_controller.bike_mode.healthkit_unavailable" = "Не удалось синхронизировать скорость езды на велосипеде из приложения «Здоровье». Будет использована стандартная скорость велосипеда.";
 
 /* Settings > Debug section > Refresh regions on every launch */
 "settings_controller.debug_section.always_refresh_regions" = "Обновлять регионы при каждом запуске";
@@ -1181,12 +1211,6 @@
 
 /* Settings > Experimental section > Map panel toggle */
 "settings_controller.experimental_section.map_panel" = "Использовать панель карты";
-
-/* Settings > Experimental section > Footer indicating changes apply on relaunch */
-"settings_controller.experimental_section.map_panel.footer" = "Перезапустите приложение, чтобы применить.";
-
-/* Settings > Experimental section > New stop page toggle */
-"settings_controller.experimental_section.new_stop_page" = "Использовать новую страницу остановки";
 
 /* Settings > Experimental section title */
 "settings_controller.experimental_section.title" = "Экспериментальные функции";
@@ -1227,14 +1251,23 @@
 /* Settings > Surveys section title */
 "settings_controller.survey_section.title" = "Опросы";
 
+/* Apple Maps walking directions provider option */
+"settings_controller.walking_directions.apple" = "Apple Maps";
+
+/* Walking directions provider option that keeps the maps app chooser */
+"settings_controller.walking_directions.ask" = "Спрашивать каждый раз";
+
+/* Google Maps walking directions provider option */
+"settings_controller.walking_directions.google" = "Google Maps";
+
+/* Settings picker for the default external walking directions provider */
+"settings_controller.walking_directions.title" = "Пешеходный маршрут";
+
 /* Settings > Walking Speed > Average preset label */
 "settings_controller.walking_speed.avg" = "Средняя (~5 км/ч)";
 
 /* Settings > Walking Speed > Fast preset label */
 "settings_controller.walking_speed.fast" = "Быстрая (~6,5 км/ч)";
-
-/* Settings > Walking Speed > HealthKit denial or no-data toast */
-"settings_controller.walking_speed.healthkit_unavailable" = "Не удалось синхронизировать скорость ходьбы из приложения «Здоровье». Разрешите доступ в Настройках > Конфиденциальность и безопасность > Здоровье.";
 
 /* Settings > Walking Speed > Slow preset label */
 "settings_controller.walking_speed.slow" = "Медленная (~3 км/ч)";
@@ -1242,32 +1275,17 @@
 /* Settings > Walking Speed section > Speed picker */
 "settings_controller.walking_speed.title" = "Скорость ходьбы";
 
-/* Settings > Walking Speed section > HealthKit toggle */
-"settings_controller.walking_speed.use_healthkit" = "Использовать данные приложения «Здоровье»";
-
-/* Settings > Walking Speed section footer identifying the Apple Health integration; the argument is the app name */
-"settings_controller.walking_speed_section.healthkit_footer_fmt" = "%@ может считывать вашу скорость ходьбы из приложения «Здоровье», чтобы оценить, сколько времени займёт путь до остановки. Приложение никогда не записывает данные в «Здоровье».";
-
 /* Settings > Walking Speed section title */
 "settings_controller.walking_speed_section.title" = "Скорость ходьбы";
 
 /* A message that appears when a user's alarm is created. */
 "stop_controller.alarm_created_message" = "Напоминание создано";
 
-/* A header for the arrivals and departures section of the stop controller. */
-"stop_controller.arrival_departure_header" = "Прибытия и отправления";
-
 /* Title for the menu that filters departures by data type */
 "stop_controller.arrival_filter.menu_title" = "Тип отправления";
 
-/* Message shown when the Departure Type filter hides every departure at a stop */
-"stop_controller.arrival_filter.no_results" = "Нет отправлений, соответствующих текущему фильтру. Измените тип отправления в меню ⋯.";
-
 /* An error message displayed when a stop is shown by tapping on a bookmark—and the bookmark doesn't seem to point to a valid stop any longer. This problem will occur when a transit agency changes its stop IDs, perhaps as part of an annual transit system realignment. */
 "stop_controller.bad_bookmark_error_message" = "Эта закладка, возможно, больше не работает. Может быть, ваше транспортное агентство что-то изменило? Удалите закладку и создайте её заново.";
-
-/* Title of the error shown when a stop is opened from a bookmark that no longer points to a valid stop. */
-"stop_controller.bad_bookmark_error_title" = "Неработающая закладка";
 
 /* A string listing the data providers (agencies) for this stop's data. It contains one or more providers separated by commas. e.g. Data provided by King County Metro, Sound Transit */
 "stop_controller.data_attribution_format" = "Данные предоставлены %@";
@@ -1277,24 +1295,6 @@
 
 /* Title shown when an external survey link cannot be opened */
 "stop_controller.external_survey_error.title" = "Не удалось открыть опрос";
-
-/* Load More button */
-"stop_controller.load_more_button" = "Загрузить ещё";
-
-/* A header for the past arrivals and departures section of the stop controller. */
-"stop_controller.past_departures_header" = "Прошедшие отправления";
-
-/* Header for past departures of a specific route */
-"stop_controller.past_departures_route_header" = "Прошедшие отправления — %@";
-
-/* This is an instruction given to the user the first time they look at a stop view instructing them on how to access more options, including the ability to add alarms. */
-"stop_controller.swipe_spotlight_text.with_alarm" = "Смахните по строке, чтобы увидеть больше опций, включая добавление напоминаний.";
-
-/* This is an instruction given to the user the first time they look at a stop view instructing them on how to access more options, EXCLUDING the ability to add alarms. */
-"stop_controller.swipe_spotlight_text.without_alarm" = "Смахните по строке, чтобы увидеть больше опций.";
-
-/* Button to reveal departures that leave before the rider's transfer arrival. Parameter is the count of hidden departures. Plural forms live in Localizable.stringsdict; the value above is only the not-found fallback. */
-"stop_controller.transfer_show_earlier_departures_fmt" = "Показать более ранние отправления (%d)";
 
 /* Title of a transit stop in Shortcuts and Siri when the app has no name for it. The parameter is the stop's ID, such as 1_75403. */
 "stop_entity.fallback_title_fmt" = "Остановка %@";
@@ -1524,15 +1524,6 @@
 /* Divider between departures you'd miss on foot and ones you can still catch. %d is the walk time in minutes. */
 "stop_page.walk_divider_fmt" = "%d МИН. ПЕШКОМ — НИЖЕ УСПЕЕТЕ";
 
-/* Title of the Sorting section */
-"stop_preferences_controller.sorting_section.header_title" = "Сортировка";
-
-/* Sort by route option */
-"stop_preferences_controller.sorting_section.sort_by_route" = "Сортировать по маршруту";
-
-/* Sort by time option */
-"stop_preferences_controller.sorting_section.sort_by_time" = "Сортировать по времени";
-
 /* Title of the Edit Stop preferences controller */
 "stop_preferences_controller.title" = "Фильтр маршрутов";
 
@@ -1653,9 +1644,6 @@
 /* Primary button on the survey launcher card; opens the survey. */
 "survey_launcher.take_survey_button" = "Пройти опрос";
 
-/* Title of the survey launcher card on the stop screen. */
-"survey_launcher.title" = "Помогите улучшить транспорт";
-
 /* Message shown when an external survey link cannot be opened */
 "survey_vc.external_survey_error.message" = "Не удалось открыть ссылку на опрос. Повторите попытку позже.";
 
@@ -1695,21 +1683,6 @@
 /* A notice when a transit alert doesn't have body text. */
 "transit_alert.no_additional_details.body" = "Дополнительные сведения отсутствуют.";
 
-/* Describes the next trip of this vehicle. e.g. Continues as 10 - Downtown Seattle */
-"trip_details_controller.continues_as_fmt" = "Продолжает движение как %@";
-
-/* Last report: <TIME> */
-"trip_details_controller.last_report_fmt" = "Последние данные: %@";
-
-/* Service alerts header in the trip details controller. */
-"trip_details_controller.service_alerts_footer" = "Детали рейса";
-
-/* Button that moves the map to focus on the selected stop */
-"trip_details_controller.show_on_map" = "Показать на карте";
-
-/* Describes the previous trip of this vehicle. e.g. Starts as 10 - Downtown Seattle */
-"trip_details_controller.starts_as_fmt" = "Начинает движение как %@";
-
 /* Shown beside a Retry button when loading the trip's stop list failed. */
 "trip_page.stops_failed" = "Не удалось загрузить остановки этого рейса.";
 
@@ -1730,12 +1703,6 @@
 
 /* Voiceover text explaining that this stop is not part of the shared ride */
 "trip_stop.outside_ride.accessibility_label" = "Не входит в совместную поездку";
-
-/* Voiceover text explaining that this stop is the user's destination */
-"trip_stop.user_destination.accessibility_label" = "Ваш пункт назначения";
-
-/* Voiceover text explaining that the vehicle is currently at this stop */
-"trip_stop.vehicle_location.accessibility_label" = "Транспорт находится здесь";
 
 /* Suggested invocation phrase for Siri Shortcut */
 "user_activity_builder.show_me_my_bus" = "Покажи мой автобус";
@@ -1814,24 +1781,6 @@
 
 /* Voiceover text describing no departures in the near-future. */
 "voiceover.bookmarkarrivaldata.value.noupcomingdepartures_fmt" = "Нет предстоящих отправлений";
-
-/* A label for blind or low-vision users on the UI element that describes how long it takes to walk to the stop. */
-"walk_time_view.accessibility_label" = "Время пешком до остановки";
-
-/* A label for blind or low-vision users on the UI element that describes how long it takes to bike to the stop. */
-"walk_time_view.accessibility_label_bike" = "Время на велосипеде до остановки";
-
-/* Accessibility string with placeholders for distance from stop, walking time to stop, and predicted arrival time. e.g. 1.2 miles. Takes 17 minutes to walk, arriving at 9:41 am */
-"walk_time_view.accessibility_value" = "%1$@. Идти пешком %2$@, прибытие в %3$@";
-
-/* Accessibility string with placeholders for distance from stop, biking time to stop, and predicted arrival time. e.g. 1.2 miles. Takes 6 minutes to bike, arriving at 9:41 am */
-"walk_time_view.accessibility_value_bike" = "%1$@. Ехать на велосипеде %2$@, прибытие в %3$@";
-
-/* Format string with placeholders for distance from stop, travel time to stop, and predicted arrival time. e.g. 1.2 miles, 17m: arriving at 09:41 A.M. */
-"walk_time_view.distance_time_fmt" = "%1$@, %2$@: прибытие в %3$@";
-
-/* Accessibility label for the transfer arrival banner shown when navigating to a connecting stop. */
-"walk_time_view.transfer_accessibility_label" = "Время прибытия на пересадку";
 
 /* Spoken value for the map weather control. First %@ is the temperature, second is the weather condition. */
 "weather.button_accessibility_value_format" = "%1$@, %2$@";
@@ -2004,8 +1953,6 @@
 "settings_controller.debug_section.test_device_description.placeholder" = "напр., iPhone Аарона";
 /* Settings > Map section > Show Apple MapKit Points of Interest */
 "settings_controller.map_section.shows_points_of_interest" = "Объекты на карте";
-/* Title of the message shown when the server has no stop at the requested ID. */
-"stop_controller.stop_not_found_title" = "Остановка не найдена";
 /* VoiceOver announcement posted when the Departure Type filter changes which departures are visible. */
 "stop_page.a11y.filter_changed" = "Фильтр отправлений изменён";
 /* VoiceOver announcement when the Past disclosure is closed. */
@@ -2046,6 +1993,8 @@
 "trip_page.card.distance_stops_a11y_fmt" = "ещё %1$@, остановок: %2$d";
 /* Trip card line: how far the vehicle is from the rider's stop. %1$@ is a distance like '1.2 mi', %2$d the number of stops in between. Plural forms live in Localizable.stringsdict; this value is only the not-found fallback. */
 "trip_page.card.distance_stops_fmt" = "ещё %1$@ · остановок: %2$d";
+/* Row on the trip page naming the trip the same vehicle runs next, which a rider who stays on board rides into. %@ is that trip's route and headsign, e.g. 'Continues as 10 - Downtown Seattle'. */
+"trip_page.continues_as_fmt" = "Продолжает движение как %@";
 /* Confirmation shown after a ghost bus report (a scheduled bus that never came) is submitted. */
 "trip_page.ghost_bus_report_sent" = "Спасибо! Ваше сообщение отправлено.";
 /* Error shown when a ghost bus report can't be submitted because the region's Obaco service is unreachable. */
@@ -2062,6 +2011,8 @@
 "trip_page.report_ghost_bus" = "Сообщить об автобусе-призраке";
 /* Short caption on the trip page button opening the route's schedule. Keep it to one short word: it shares a row with three other buttons. */
 "trip_page.schedule" = "Расписание";
+/* Row on the trip page naming the trip the same vehicle runs just before this one. %@ is that trip's route and headsign, e.g. 'Starts as 10 - Downtown Seattle'. */
+"trip_page.starts_as_fmt" = "Начинает движение как %@";
 /* VoiceOver clause on a stop the vehicle has already served. */
 "trip_page.stop_list.a11y_passed" = "уже пройдена";
 /* VoiceOver label for a collapsed run of stops between the vehicle and the rider's stop, e.g. '5 stops before your stop'. Plural forms live in Localizable.stringsdict; this value is only the not-found fallback. */
@@ -2100,8 +2051,6 @@
 "trip_progress.passed_your_stop" = "Ваша остановка пройдена";
 /* Shows the current stop position. e.g. Stop 5 of 18 */
 "trip_progress.stop_count_fmt" = "Остановка %1$d из %2$d";
-/* Voiceover text explaining that the vehicle has already passed this stop */
-"trip_stop.passed_stop.accessibility_label" = "Пройденная остановка";
 
 /* Accessibility label for the mic button that starts voice search. */
 "search_sheet.voice_search.start" = "Голосовой поиск";
@@ -2421,3 +2370,9 @@
 
 /* Title of the page that explains an error in detail. */
 "problem_details.title" = "Подробности проблемы";
+
+/* VoiceOver hint for an actionable search result row. */
+"search_controller.accessibility.open_result" = "Открывает этот результат.";
+
+/* VoiceOver hint for a quick search row, which runs a search and keeps the search field open. */
+"search_controller.accessibility.quick_search" = "Ищет это.";

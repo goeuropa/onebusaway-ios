@@ -54,6 +54,15 @@ public class Formatters: NSObject {
         return formatter
     }()
 
+    /// Spells the unit out ("3.4 miles", never "3.4 mi") for VoiceOver, which
+    /// reads an abbreviation letter by letter, or not at all. The nearby list
+    /// and the rental sheets share it. `distanceFormatter` is for the screen.
+    @MainActor public static let spokenDistanceFormatter: MKDistanceFormatter = {
+        let formatter = MKDistanceFormatter()
+        formatter.unitStyle = .full
+        return formatter
+    }()
+
     // MARK: - Formatted Times
 
     /// Returns a representation of `date` that varies depending on whether `date` happens to be from today or another day.
@@ -116,9 +125,9 @@ public class Formatters: NSObject {
     /// because there a region-zone time is indistinguishable from a local one.
     ///
     /// Using this directly is right for a run of times that share one context and
-    /// establish the zone between them: the stop lists in `TripStopListItem`,
-    /// `TripStopListView` and `DestinationStopPickerController` are all times along
-    /// a single trip, where a badge on every row would be noise. Audited for #1438.
+    /// establish the zone between them: the stop lists in `TripStopListView` and
+    /// `DestinationStopPickerController` are all times along a single trip, where a
+    /// badge on every row would be noise. Audited for #1438.
     public lazy var timeFormatter: DateFormatter = {
         let timeFormatter = DateFormatter()
         timeFormatter.dateStyle = .none
@@ -144,26 +153,6 @@ public class Formatters: NSObject {
     public func formattedDateRange(from: Date, to: Date) -> String {
         return dateIntervalFormatter.string(from: from, to: to)
     }
-
-    /// Creates formatted strings for time intervals.
-    /// - Note: If you need strings for accessibility, use `accessibilityPositionalTimeFormatter`
-    /// instead as `"15m"` is misinterpreted by VoiceOver as `"15 meters"`.
-    public lazy var positionalTimeFormatter: DateComponentsFormatter = {
-        let formatter = DateComponentsFormatter()
-        formatter.calendar = locale.calendar
-        formatter.allowedUnits = [.hour, .minute]
-        formatter.unitsStyle = .abbreviated
-        return formatter
-    }()
-
-    /// Creates VoiceOver-friendly strings for time intervals.
-    public lazy var accessibilityPositionalTimeFormatter: DateComponentsFormatter = {
-        let formatter = DateComponentsFormatter()
-        formatter.calendar = locale.calendar
-        formatter.allowedUnits = [.hour, .minute]
-        formatter.unitsStyle = .full
-        return formatter
-    }()
 
     // MARK: - ArrivalDeparture
     // MARK: Full attributed explanation
@@ -824,37 +813,6 @@ public class Formatters: NSObject {
         case .nw: return OBALoc("formatters.cardinal_adjective.northwest", value: "NW bound", comment: "Headed in a northwestern direction")
         case .unknown: return nil
         }
-    }
-
-    // MARK: - Transfer-Relative Time
-
-    /// Formats minutes relative to a transfer arrival time for the short time badge.
-    /// Positive = future departure after arrival, zero = on arrival, negative = already departed.
-    public func shortFormattedTransferTime(minutes: Int) -> String {
-        if minutes == 0 {
-            return OBALoc(
-                "formatters.transfer.on_arrival",
-                value: "NOW",
-                comment: "Short text shown when a departure occurs at the same time as the rider's transfer arrival."
-            )
-        }
-        let fmt = OBALoc(
-            "formatters.short_time_fmt",
-            value: "%dm",
-            comment: "Short formatted time text for arrivals/departures. Example: 7m means that this event happens 7 minutes in the future. -7m means 7 minutes in the past."
-        )
-        return String(format: fmt, minutes)
-    }
-
-    /// Formats a transfer arrival banner string. e.g., "Arriving at 4:10 PM via 10 - Capitol Hill"
-    public func transferArrivalBannerText(arrivalTime: Date, routeDisplay: String) -> String {
-        let formattedTime = formattedClockTime(arrivalTime)
-        let fmt = OBALoc(
-            "formatters.transfer.arrival_banner_fmt",
-            value: "Arriving at %@ via %@",
-            comment: "Transfer arrival banner. First parameter is the arrival time, second is the route name and headsign. e.g. 'Arriving at 4:10 PM via 10 - Capitol Hill'"
-        )
-        return String(format: fmt, formattedTime, routeDisplay)
     }
 
     // MARK: - Search

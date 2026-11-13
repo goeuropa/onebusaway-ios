@@ -195,11 +195,13 @@ nonisolated enum AppSheetRoute: SheetRouteable {
     case bookmarksAll
 
     // Stacked layer
-    case stopDetails(stopID: Stop.ID)
+    // The context is the trip the rider tapped this stop on, when there was one,
+    // and isn't part of the route's identity: see `id`.
+    case stopDetails(stopID: Stop.ID, transferContext: TransferContext? = nil)
     case tripPlanner(TripPlannerRequest)
     // The convertible, not just its trip ID: the trip page's view model fetches
     // with the vehicle and service date as well, which an ID can't supply.
-    case tripDetails(TripConvertible)
+    case tripDetails(TripConvertible, destinationStopID: StopID? = nil)
     case routePicker
     case currentTrip(route: Route)
     case transitAlert(alertID: String)
@@ -243,7 +245,11 @@ nonisolated extension AppSheetRoute {
         case .home, .search, .nearbyAll, .recentStopsAll, .bookmarksAll,
              .routePicker, .more, .settings, .mapSettings:
             return caseName
-        case .stopDetails(let stopID):
+        case .stopDetails(let stopID, _):
+            // Not the transfer context. A stop is one sheet however it was
+            // reached, so `SheetCoordinator.open` goes back to a copy already open
+            // rather than stacking a second, and routes rebuilt from the stop ID
+            // alone (a sheet's map drawing, the source of its taps) still match.
             return "\(caseName)-\(stopID)"
         case .tripPlanner(let request):
             // Analytics key based on payload presence. Privacy guard: no
@@ -265,10 +271,11 @@ nonisolated extension AppSheetRoute {
             }
             let suffix = parts.isEmpty ? "blank" : parts.joined(separator: "_")
             return "\(caseName)_\(suffix)"
-        case .tripDetails(let convertible):
-            // Keyed on the trip alone, not on which model carried it, so a trip
-            // reached from an arrival and from a vehicle has one identity.
-            return "\(caseName)-\(convertible.tripID)"
+        case .tripDetails(let convertible, let destinationStopID):
+            // Keyed on the trip and optional destination stop so a shared trip
+            // with a destination is distinguished from a bare trip.
+            let destSuffix = destinationStopID.map { "-\($0)" } ?? ""
+            return "\(caseName)-\(convertible.tripID)\(destSuffix)"
         case .currentTrip(let route):
             return "\(caseName)-\(route.id)"
         case .transitAlert(let alertID):
@@ -319,6 +326,11 @@ nonisolated extension AppSheetRoute {
             return false
         }
     }
+
+    /// Whether this is a stop page.
+    var isStopDetails: Bool {
+        if case .stopDetails = self { true } else { false }
+    }
 }
 
 nonisolated extension AppSheetRoute {
@@ -333,16 +345,32 @@ nonisolated extension AppSheetRoute {
         return .fraction(0.99)
     }
 
-    /// Height of the home sheet's smallest detent. Shared by `MapPanelRootView`
-    /// so the map's bottom safe-area padding matches the collapsed sheet.
+    /// The collapsed home sheet's height at the default text size: the estimate
+    /// for the first frame, before `HomeCollapsedDetent` measures the search row.
     ///
-    /// Sized to `HomeSheetView`'s search-bar row and nothing else, so the
-    /// collapsed sheet reads as a search field rather than as a list that got
-    /// cut off: a body-metrics capsule (~48pt: one line of text plus its 14pt
-    /// vertical padding, top and bottom) under the row's own 16pt top and 12pt
-    /// bottom padding, less the couple of points the drag indicator already
-    /// occupies above it.
-    static let homeCollapsedHeight: CGFloat = 75
+    /// The search row and the tab bar under it, and nothing else, so the
+    /// collapsed sheet reads as those two controls rather than as a list that got
+    /// cut off. A regular-width sheet has no tab bar yet (`HomeTabs.showsTabs`),
+    /// so its collapsed sheet shows the top of the list in that space.
+    static let homeCollapsedHeight: CGFloat = homeSearchRowHeight + homeTabBarHeight
+
+    /// The home sheet's smallest detent; see `HomeCollapsedDetent`.
+    static var homeCollapsedDetent: PresentationDetent { .custom(HomeCollapsedDetent.self) }
+
+    /// `HomeTabBar`'s 54pt capsule and the padding under it: 11pt, about its side
+    /// margin, so it sits evenly in the sheet's rounded bottom.
+    ///
+    /// Not less: with it, the collapsed sheet is as short as iOS 26 will draw a
+    /// floating sheet. A few points shorter (a detent under ~100pt on an iPhone 17
+    /// Pro) and it draws the sheet narrower and lifted off the bottom instead.
+    static let homeTabBarHeight: CGFloat = 65
+
+    /// `HomeSheetView`'s search row at the default text size: a body-metrics
+    /// capsule (~50pt: one line of text plus its 14pt vertical padding, top and
+    /// bottom) under the row's own 16pt top padding and
+    /// `HomeTabs.searchRowBottomPadding` under it. An estimate for the first
+    /// frame: `HomeCollapsedDetent` fits the row as measured.
+    static let homeSearchRowHeight: CGFloat = 71
 
     /// Height of the trip planner's tip detent — a "peek" rung that leaves the
     /// map dominant when the panel is minimized. OTPKit's
@@ -362,8 +390,8 @@ nonisolated extension AppSheetRoute {
             // background interaction to `.disabled` only when the sheet is
             // parked at `largeDetent` (covers ~the full screen).
             return SheetDetentConfiguration(
-                detents: [.height(AppSheetRoute.homeCollapsedHeight), .medium, AppSheetRoute.largeDetent],
-                initialDetent: .height(AppSheetRoute.homeCollapsedHeight),
+                detents: [AppSheetRoute.homeCollapsedDetent, .medium, AppSheetRoute.largeDetent],
+                initialDetent: AppSheetRoute.homeCollapsedDetent,
                 isDismissDisabled: true,
                 backgroundInteraction: .enabled,
                 fullScreenDetent: AppSheetRoute.largeDetent
@@ -387,22 +415,19 @@ nonisolated extension AppSheetRoute {
                 backgroundInteraction: .disabled
             )
         case .stopDetails:
-            // `backgroundInteraction` must be stated explicitly here, exactly as
-            // the other `[.large]`-only routes above do. The default is
-            // `.enabled(upThrough: .medium)`, which maps to
-            // `UISheetPresentationController.largestUndimmedDetentIdentifier =
-            // .medium`. With `.medium` absent from `detents`, UIKit has no detent
-            // at which to begin dimming, so the sheet stays undimmed and
-            // non-modal and every touch falls through to the map behind it —
-            // the sheet renders but neither scrolls nor responds to taps.
+            // Opens at `.medium`, as `.tripDetails` does: the panel's map draws the
+            // stop's routes and arriving vehicles behind the sheet, and a
+            // full-height start would cover them.
             //
-            // Routes that safely leave the default (`.tripPlanner`, `.more`, …)
-            // all carry `.medium` in their detent set.
+            // It keeps the default `backgroundInteraction`,
+            // `.enabled(upThrough: .medium)`, which needs `.medium` in `detents`.
+            // Without it UIKit has no detent at which to begin dimming, so the
+            // sheet stays non-modal and every touch falls through to the map; that
+            // is why the `[.large]`-only routes above state `.disabled`.
             return SheetDetentConfiguration(
-                detents: [.large],
-                initialDetent: .large,
-                isDismissDisabled: false,
-                backgroundInteraction: .disabled
+                detents: [.medium, .large],
+                initialDetent: .medium,
+                isDismissDisabled: false
             )
         case .tripPlanner:
             // Opens at `.medium`: planning a trip is a map task, and the origin and

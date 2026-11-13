@@ -13,7 +13,7 @@ import Foundation
 import Testing
 
 /// The rules that tie Settings rows to each other, and the write-through that
-/// replaced saving on dismissal. HealthKit and the Experimental flags have
+/// replaced saving on dismissal. Speed sync and the Experimental flags have
 /// their own suites.
 @MainActor
 @Suite(.serialized)
@@ -34,7 +34,7 @@ final class SettingsViewModelTests: OBATestCase {
     }
 
     private func makeViewModel() -> SettingsViewModel {
-        SettingsViewModel(application: application, isHealthKitAvailable: false)
+        SettingsViewModel(application: application)
     }
 
     private var defaults: UserDefaults { application.userDefaults }
@@ -86,6 +86,23 @@ final class SettingsViewModelTests: OBATestCase {
 
     // MARK: - Write-through
 
+    @Test func `Walking directions asks by default and ignores an unknown saved provider`() {
+        #expect(makeViewModel().walkingDirectionsProvider == .askEveryTime)
+        #expect(self.defaults.object(forKey: WalkingDirectionsProvider.defaultsKey) == nil)
+
+        defaults.set("unknown-provider", forKey: WalkingDirectionsProvider.defaultsKey)
+        #expect(makeViewModel().walkingDirectionsProvider == .askEveryTime)
+    }
+
+    @Test(arguments: WalkingDirectionsProvider.allCases)
+    func `Walking directions provider is saved and restored when settings reopens`(provider: WalkingDirectionsProvider) {
+        let vm = makeViewModel()
+        vm.walkingDirectionsProvider = provider
+
+        #expect(self.defaults.string(forKey: WalkingDirectionsProvider.defaultsKey) == provider.rawValue)
+        #expect(makeViewModel().walkingDirectionsProvider == provider)
+    }
+
     @Test func `Opening settings writes nothing`() {
         application.userDataStore.walkingSpeedMetersPerSecond = 1.55
         application.userDataStore.walkingSpeedSource = .manual
@@ -107,43 +124,43 @@ final class SettingsViewModelTests: OBATestCase {
     }
 
     @Test func `Settings seed from and save to the store`() {
-        application.userDataStore.showTransferArrivalBanner = true
+        application.userDataStore.highlightTransferTrip = true
         let vm = makeViewModel()
-        #expect(vm.showsTransferArrivalBanner)
+        #expect(vm.highlightsTransferTrip)
 
-        vm.showsTransferArrivalBanner = false
+        vm.highlightsTransferTrip = false
         vm.reducesStopColors = true
         vm.mapShowsScale = true
 
-        #expect(!self.application.userDataStore.showTransferArrivalBanner)
+        #expect(!self.application.userDataStore.highlightTransferTrip)
         #expect(self.application.userDataStore.stopUIReducedColors)
         #expect(self.application.mapRegionManager.mapViewShowsScale)
     }
 
-    @Test func `Turning walking health kit off saves manual at the preset on screen`() {
-        application.userDataStore.walkingSpeedSource = .healthKit
+    @Test func `Turning walking sync off saves manual at the preset on screen`() {
+        application.userDataStore.walkingSpeedSource = .synced
         application.userDataStore.walkingSpeedMetersPerSecond = 1.65
-        let vm = SettingsViewModel(application: application, isHealthKitAvailable: true)
+        let vm = SettingsViewModel(application: application)
         #expect(vm.walkingSpeed == .fast)
 
-        vm.walkingSpeedUsesHealthKit = false
+        vm.walkingSpeedIsSynced = false
 
         #expect(self.application.userDataStore.walkingSpeedSource == .manual)
         expectClose(self.application.userDataStore.walkingSpeedMetersPerSecond, WalkingSpeedPreset.fast.rawValue)
     }
 
     /// A sync that lands while Settings is open changes the stored speed after `init`
-    /// seeded the picker; turning HealthKit off must snap the synced speed, not the seed.
-    @Test func `Turning walking health kit off snaps the speed synced during this visit`() {
-        application.userDataStore.walkingSpeedSource = .healthKit
+    /// seeded the picker; turning sync off must snap the synced speed, not the seed.
+    @Test func `Turning walking sync off snaps the speed synced during this visit`() {
+        application.userDataStore.walkingSpeedSource = .synced
         application.userDataStore.walkingSpeedMetersPerSecond = 0.9
-        let vm = SettingsViewModel(application: application, isHealthKitAvailable: true)
+        let vm = SettingsViewModel(application: application)
         #expect(vm.walkingSpeed == .slow)
 
         // What WalkingSpeedManager writes when a sample lands.
         application.userDataStore.walkingSpeedMetersPerSecond = 1.75
 
-        vm.walkingSpeedUsesHealthKit = false
+        vm.walkingSpeedIsSynced = false
 
         #expect(vm.walkingSpeed == .fast)
         expectClose(self.application.userDataStore.walkingSpeedMetersPerSecond, WalkingSpeedPreset.fast.rawValue)

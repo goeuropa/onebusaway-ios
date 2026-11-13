@@ -417,6 +417,9 @@
 /* VoiceOver hint for a home sheet section header, which opens that section's full list. */
 "home_sheet.section_header.a11y_hint" = "이 섹션의 모든 항목을 표시합니다.";
 
+/* Title of the map panel's Home tab, which holds search and the nearby stops. It replaces the Map tab: the map is always behind the sheet. */
+"home_sheet.tab.home" = "홈";
+
 /* Alert message for Live Activity error. \"Settings\" is the iOS Settings app. */
 "live_activity.error.message" = "설정에서 실시간 액티비티 설정을 확인해 주세요.";
 
@@ -582,6 +585,9 @@
 /* Accessibility label for website button */
 "map_item_controller.website_accessibility" = "웹 사이트 열기";
 
+/* VoiceOver hint on a vehicle marker drawn for an open stop on the map panel. Tapping it opens the vehicle's trip. */
+"map_panel.stop_vehicle.hint" = "이 운행을 표시합니다.";
+
 /* Displayed in the map status view at the top of the map when the user has declined to give the app access to their location */
 "map_status_view.location_services_unavailable" = "위치 서비스를 사용할 수 없음";
 
@@ -705,6 +711,9 @@
 /* Body shown on the Nearby Stops index sheet when no map viewport, device location, or region is available to search around. */
 "nearby_stops_sheet.no_location.body" = "지도를 움직이거나 위치 서비스를 켜면 주변 정류장을 볼 수 있습니다.";
 
+/* Siri asks which stop to report departures for when the user didn't name one. */
+"next_departures_at_stop_intent.choose_stop" = "어떤 정류장인가요?";
+
 /* Siri response when the requested bookmark was deleted or belongs to a different region. */
 "next_departures_intent.bookmark_unavailable" = "해당 즐겨찾기는 현재 지역에서 사용할 수 없습니다.";
 
@@ -720,7 +729,7 @@
 /* Siri response listing the departures after the next one. {List of 'in X minutes'} */
 "next_departures_intent.later_departures_fmt" = "그다음은 %@입니다.";
 
-/* Siri response when departures could not be fetched. {Bookmark name} */
+/* Siri response when departures could not be fetched. {Bookmark or stop name} */
 "next_departures_intent.load_failed_fmt" = "%@의 출발 정보를 불러올 수 없습니다. 연결 상태를 확인하고 다시 시도하세요.";
 
 /* Siri response when the user asks for their next departures but has no trip bookmarks in the current region. */
@@ -737,6 +746,21 @@
 
 /* Joins two complete Siri sentences: {first departure sentence} {later departures sentence}. Use the language's separator between sentences; Chinese uses none. */
 "next_departures_intent.sentences_join_fmt" = "%1$@ %2$@";
+
+/* Siri response: one departure from a stop. {Route short name} to {Headsign} {'now' or 'in X minutes'}, for example '8 to Downtown in 4 minutes'. */
+"next_departures_intent.stop_departure_fmt" = "%2$@행 %1$@ 노선 %3$@";
+
+/* Siri response: one departure from a stop whose trip has no destination name. {Route short name} {'now' or 'in X minutes'}, for example '8 in 4 minutes'. */
+"next_departures_intent.stop_departure_no_headsign_fmt" = "%1$@ 노선 %2$@";
+
+/* Siri response listing the next departures from a stop. {Stop name}: {list of departures, such as '8 to Downtown in 4 minutes and 49 to Capitol Hill in 12 minutes'}. */
+"next_departures_intent.stop_departures_fmt" = "%1$@ 다음 출발: %2$@.";
+
+/* Siri response when nothing leaves a stop in the next hour. {Stop name} */
+"next_departures_intent.stop_no_departures_fmt" = "앞으로 1시간 동안 %@에서 출발하는 차량이 없습니다.";
+
+/* Siri response when the requested stop belongs to a different region than the one the app is using. */
+"next_departures_intent.stop_unavailable" = "해당 정류장은 현재 지역에 없습니다.";
 
 /* Vehicle occupancy is very high */
 "occupancy_status.crushed_standing_room_only" = "입석만 가능 (매우 혼잡)";
@@ -918,6 +942,12 @@
 /* Title for the empty set indicator on the Recent Stops controller. */
 "recent_stops.empty_set.title" = "최근 정류장 없음";
 
+/* Alert message directing the user to the Bookmarks tab when a stop has multiple bookmarks. */
+"recent_stops.multiple_bookmarks.body" = "이 정류장에는 즐겨찾기가 여러 개 있습니다. 즐겨찾기 탭에서 관리하세요.";
+
+/* Alert title shown when quick-unbookmarking a stop that has more than one stop bookmark. */
+"recent_stops.multiple_bookmarks.title" = "여러 개의 즐겨찾기";
+
 /* Title of the Alarms section of the Recents controller */
 "recent_stops_controller.alarms_section.title" = "미리 알림";
 
@@ -1089,6 +1119,15 @@
 /* Error shown when a tapped search result cannot be turned into something to display. */
 "search_results_sheet.unresolvable_result" = "이 검색 결과를 열 수 없습니다.";
 
+/* Search scope tag showing all search result types. */
+"search_scope.all" = "All";
+
+/* Search scope tag filtering results to places and addresses. */
+"search_scope.places" = "Places";
+
+/* Search scope tag filtering results to transit routes. */
+"search_scope.routes" = "Routes";
+
 /* Accessibility label for the button that clears the search query. */
 "search_sheet.clear_query" = "지우기";
 
@@ -1134,11 +1173,11 @@
 /* Settings section title for controlling which arrivals/departures are shown */
 "settings_controller.arrival_display_section.title" = "도착·출발 정보 표시";
 
-/* Settings > Arrival Display > Toggle that shows the Arriving at XX:XX via route banner when opening a stop from a trip */
-"settings_controller.arrival_display_section.transfer_banner" = "환승 도착 배너 표시";
+/* Settings > Arrival & Departure Display > Toggle that highlights the rider's trip in a stop's departures when they open that stop from the trip */
+"settings_controller.arrival_display_section.highlight_trip" = "정류장 화면에서 내 운행 강조";
 
-/* Settings > Arrival & Departure Display > Footer describing the transfer banner and region time zone toggles */
-"settings_controller.arrival_display_section.footer" = "환승 배너: 여행에서 정류장을 열면 도착 시각 기준으로 시간이 표시됩니다. 지역 시간대: 시각은 교통 지역의 시간대를 사용하며, 휴대폰과 다를 때 짧은 배지가 표시됩니다. 둘은 서로 독립적입니다.";
+/* Settings > Arrival & Departure Display > Footer describing the trip highlight and region time zone toggles */
+"settings_controller.arrival_display_section.footer" = "운행 강조: 운행에서 정류장을 열면 정류장 화면에서 해당 운행의 출발이 강조됩니다. 지역 시간대: 시각은 교통 지역의 시간대를 사용하며, 휴대폰과 다를 때 짧은 배지가 표시됩니다. 둘은 서로 독립적입니다.";
 
 /* Settings > Arrival & Departure Display > Opt-in toggle for displaying arrival clocks in the transit region's time zone */
 "settings_controller.arrival_display_section.region_time_zone" = "지역 시간대로 시간 표시";
@@ -1155,17 +1194,8 @@
 /* Settings > Bike Mode section footer */
 "settings_controller.bike_mode_section.footer" = "정류장까지의 소요 시간 추정, 도착 예정 시간, 정류장 화면에 더 빠른 이동 속도를 사용합니다.";
 
-/* Settings > Bike Mode section footer identifying the Apple Health integration; the argument is the app name */
-"settings_controller.bike_mode_section.healthkit_footer_fmt" = "%@은(는) 건강 앱에서 사이클링 속도를 읽을 수 있습니다. 건강 앱에 데이터를 기록하지는 않습니다.";
-
 /* Settings > Bike Mode > on/off toggle */
 "settings_controller.bike_mode.title" = "자전거 모드";
-
-/* Settings > Bike Mode section > HealthKit toggle */
-"settings_controller.bike_mode.use_healthkit" = "건강 앱 데이터 사용";
-
-/* Settings > Bike Mode > HealthKit denial or no-data toast */
-"settings_controller.bike_mode.healthkit_unavailable" = "건강 앱에서 자전거 속도를 동기화할 수 없습니다. 표준 자전거 속도를 사용합니다.";
 
 /* Settings > Debug section > Refresh regions on every launch */
 "settings_controller.debug_section.always_refresh_regions" = "실행할 때마다 지역 새로고침";
@@ -1181,12 +1211,6 @@
 
 /* Settings > Experimental section > Map panel toggle */
 "settings_controller.experimental_section.map_panel" = "지도 패널 사용";
-
-/* Settings > Experimental section > Footer indicating changes apply on relaunch */
-"settings_controller.experimental_section.map_panel.footer" = "적용하려면 앱을 다시 실행하세요.";
-
-/* Settings > Experimental section > New stop page toggle */
-"settings_controller.experimental_section.new_stop_page" = "새 정류장 페이지 사용";
 
 /* Settings > Experimental section title */
 "settings_controller.experimental_section.title" = "실험적 기능";
@@ -1227,14 +1251,23 @@
 /* Settings > Surveys section title */
 "settings_controller.survey_section.title" = "설문조사";
 
+/* Apple Maps walking directions provider option */
+"settings_controller.walking_directions.apple" = "Apple 지도";
+
+/* Walking directions provider option that keeps the maps app chooser */
+"settings_controller.walking_directions.ask" = "매번 묻기";
+
+/* Google Maps walking directions provider option */
+"settings_controller.walking_directions.google" = "Google 지도";
+
+/* Settings picker for the default external walking directions provider */
+"settings_controller.walking_directions.title" = "도보 경로";
+
 /* Settings > Walking Speed > Average preset label */
 "settings_controller.walking_speed.avg" = "보통 (시속 약 5km)";
 
 /* Settings > Walking Speed > Fast preset label */
 "settings_controller.walking_speed.fast" = "빠름 (시속 약 6.5km)";
-
-/* Settings > Walking Speed > HealthKit denial or no-data toast */
-"settings_controller.walking_speed.healthkit_unavailable" = "건강 앱에서 보행 속도를 동기화할 수 없습니다. 설정 > 개인정보 보호 및 보안 > 건강에서 접근을 허용해 주세요.";
 
 /* Settings > Walking Speed > Slow preset label */
 "settings_controller.walking_speed.slow" = "느림 (시속 약 3km)";
@@ -1242,32 +1275,17 @@
 /* Settings > Walking Speed section > Speed picker */
 "settings_controller.walking_speed.title" = "보행 속도";
 
-/* Settings > Walking Speed section > HealthKit toggle */
-"settings_controller.walking_speed.use_healthkit" = "건강 앱 데이터 사용";
-
-/* Settings > Walking Speed section footer identifying the Apple Health integration; the argument is the app name */
-"settings_controller.walking_speed_section.healthkit_footer_fmt" = "%@은(는) 건강 앱에서 걷기 속도를 읽어 정류장까지 걸어가는 데 걸리는 시간을 추정할 수 있습니다. 건강 앱에 데이터를 기록하지는 않습니다.";
-
 /* Settings > Walking Speed section title */
 "settings_controller.walking_speed_section.title" = "보행 속도";
 
 /* A message that appears when a user's alarm is created. */
 "stop_controller.alarm_created_message" = "미리 알림이 생성되었습니다";
 
-/* A header for the arrivals and departures section of the stop controller. */
-"stop_controller.arrival_departure_header" = "도착 및 출발";
-
 /* Title for the menu that filters departures by data type */
 "stop_controller.arrival_filter.menu_title" = "출발 유형";
 
-/* Message shown when the Departure Type filter hides every departure at a stop */
-"stop_controller.arrival_filter.no_results" = "현재 필터와 일치하는 출발이 없습니다. ⋯ 메뉴에서 출발 유형을 변경하세요.";
-
 /* An error message displayed when a stop is shown by tapping on a bookmark—and the bookmark doesn't seem to point to a valid stop any longer. This problem will occur when a transit agency changes its stop IDs, perhaps as part of an annual transit system realignment. */
 "stop_controller.bad_bookmark_error_message" = "이 즐겨찾기는 더 이상 작동하지 않을 수 있습니다. 운영 기관에서 무언가를 변경했나요? 즐겨찾기를 삭제하고 다시 만들어 주세요.";
-
-/* Title of the error shown when a stop is opened from a bookmark that no longer points to a valid stop. */
-"stop_controller.bad_bookmark_error_title" = "손상된 즐겨찾기";
 
 /* A string listing the data providers (agencies) for this stop's data. It contains one or more providers separated by commas. e.g. Data provided by King County Metro, Sound Transit */
 "stop_controller.data_attribution_format" = "데이터 제공: %@";
@@ -1277,24 +1295,6 @@
 
 /* Title shown when an external survey link cannot be opened */
 "stop_controller.external_survey_error.title" = "설문조사를 열 수 없음";
-
-/* Load More button */
-"stop_controller.load_more_button" = "더 불러오기";
-
-/* A header for the past arrivals and departures section of the stop controller. */
-"stop_controller.past_departures_header" = "지난 출발";
-
-/* Header for past departures of a specific route */
-"stop_controller.past_departures_route_header" = "지난 출발 - %@";
-
-/* This is an instruction given to the user the first time they look at a stop view instructing them on how to access more options, including the ability to add alarms. */
-"stop_controller.swipe_spotlight_text.with_alarm" = "행을 쓸어넘기면 미리 알림 추가를 포함한 더 많은 옵션을 볼 수 있습니다.";
-
-/* This is an instruction given to the user the first time they look at a stop view instructing them on how to access more options, EXCLUDING the ability to add alarms. */
-"stop_controller.swipe_spotlight_text.without_alarm" = "행을 쓸어넘기면 더 많은 옵션을 볼 수 있습니다.";
-
-/* Button to reveal departures that leave before the rider's transfer arrival. Parameter is the count of hidden departures. Plural forms live in Localizable.stringsdict; the value above is only the not-found fallback. */
-"stop_controller.transfer_show_earlier_departures_fmt" = "이전 출발 %d건 표시";
 
 /* Title of a transit stop in Shortcuts and Siri when the app has no name for it. The parameter is the stop's ID, such as 1_75403. */
 "stop_entity.fallback_title_fmt" = "정류장 %@";
@@ -1524,15 +1524,6 @@
 /* Divider between departures you'd miss on foot and ones you can still catch. %d is the walk time in minutes. */
 "stop_page.walk_divider_fmt" = "도보 %d분 — 아래부터 탑승 가능";
 
-/* Title of the Sorting section */
-"stop_preferences_controller.sorting_section.header_title" = "정렬 기준";
-
-/* Sort by route option */
-"stop_preferences_controller.sorting_section.sort_by_route" = "노선순 정렬";
-
-/* Sort by time option */
-"stop_preferences_controller.sorting_section.sort_by_time" = "시간순 정렬";
-
 /* Title of the Edit Stop preferences controller */
 "stop_preferences_controller.title" = "노선 필터";
 
@@ -1653,9 +1644,6 @@
 /* Primary button on the survey launcher card; opens the survey. */
 "survey_launcher.take_survey_button" = "설문조사 참여";
 
-/* Title of the survey launcher card on the stop screen. */
-"survey_launcher.title" = "대중교통 개선에 참여하기";
-
 /* Message shown when an external survey link cannot be opened */
 "survey_vc.external_survey_error.message" = "이 설문조사 링크를 열 수 없습니다. 나중에 다시 시도해 주세요.";
 
@@ -1695,21 +1683,6 @@
 /* A notice when a transit alert doesn't have body text. */
 "transit_alert.no_additional_details.body" = "추가 세부 정보가 없습니다.";
 
-/* Describes the next trip of this vehicle. e.g. Continues as 10 - Downtown Seattle */
-"trip_details_controller.continues_as_fmt" = "%@(으)로 운행 계속";
-
-/* Last report: <TIME> */
-"trip_details_controller.last_report_fmt" = "마지막 보고: %@";
-
-/* Service alerts header in the trip details controller. */
-"trip_details_controller.service_alerts_footer" = "운행 세부 정보";
-
-/* Button that moves the map to focus on the selected stop */
-"trip_details_controller.show_on_map" = "지도에 표시";
-
-/* Describes the previous trip of this vehicle. e.g. Starts as 10 - Downtown Seattle */
-"trip_details_controller.starts_as_fmt" = "%@(으)로 운행 시작";
-
 /* Shown beside a Retry button when loading the trip's stop list failed. */
 "trip_page.stops_failed" = "이 운행의 정류장을 불러오지 못했습니다.";
 
@@ -1730,12 +1703,6 @@
 
 /* Voiceover text explaining that this stop is not part of the shared ride */
 "trip_stop.outside_ride.accessibility_label" = "공유 탑승에 포함되지 않음";
-
-/* Voiceover text explaining that this stop is the user's destination */
-"trip_stop.user_destination.accessibility_label" = "내 목적지";
-
-/* Voiceover text explaining that the vehicle is currently at this stop */
-"trip_stop.vehicle_location.accessibility_label" = "차량이 여기에 있습니다";
 
 /* Suggested invocation phrase for Siri Shortcut */
 "user_activity_builder.show_me_my_bus" = "내 버스 보여줘";
@@ -1814,24 +1781,6 @@
 
 /* Voiceover text describing no departures in the near-future. */
 "voiceover.bookmarkarrivaldata.value.noupcomingdepartures_fmt" = "예정된 출발 없음";
-
-/* A label for blind or low-vision users on the UI element that describes how long it takes to walk to the stop. */
-"walk_time_view.accessibility_label" = "정류장까지 도보 시간";
-
-/* A label for blind or low-vision users on the UI element that describes how long it takes to bike to the stop. */
-"walk_time_view.accessibility_label_bike" = "정류장까지 자전거 이동 시간";
-
-/* Accessibility string with placeholders for distance from stop, walking time to stop, and predicted arrival time. e.g. 1.2 miles. Takes 17 minutes to walk, arriving at 9:41 am */
-"walk_time_view.accessibility_value" = "%1$@. 도보로 %2$@ 걸리며, %3$@에 도착합니다";
-
-/* Accessibility string with placeholders for distance from stop, biking time to stop, and predicted arrival time. e.g. 1.2 miles. Takes 6 minutes to bike, arriving at 9:41 am */
-"walk_time_view.accessibility_value_bike" = "%1$@. 자전거로 %2$@ 걸리며, %3$@에 도착합니다";
-
-/* Format string with placeholders for distance from stop, travel time to stop, and predicted arrival time. e.g. 1.2 miles, 17m: arriving at 09:41 A.M. */
-"walk_time_view.distance_time_fmt" = "%1$@, %2$@: %3$@ 도착";
-
-/* Accessibility label for the transfer arrival banner shown when navigating to a connecting stop. */
-"walk_time_view.transfer_accessibility_label" = "환승 도착 시간";
 
 /* Spoken value for the map weather control. First %@ is the temperature, second is the weather condition. */
 "weather.button_accessibility_value_format" = "%1$@, %2$@";
@@ -2004,8 +1953,6 @@
 "settings_controller.debug_section.test_device_description.placeholder" = "예: Aaron의 iPhone";
 /* Settings > Map section > Show Apple MapKit Points of Interest */
 "settings_controller.map_section.shows_points_of_interest" = "관심 지점";
-/* Title of the message shown when the server has no stop at the requested ID. */
-"stop_controller.stop_not_found_title" = "정류장을 찾을 수 없음";
 /* VoiceOver announcement posted when the Departure Type filter changes which departures are visible. */
 "stop_page.a11y.filter_changed" = "출발 유형 필터 변경됨";
 /* VoiceOver announcement when the Past disclosure is closed. */
@@ -2046,6 +1993,8 @@
 "trip_page.card.distance_stops_a11y_fmt" = "%1$@ 거리, 정류장 %2$d개 전";
 /* Trip card line: how far the vehicle is from the rider's stop. %1$@ is a distance like '1.2 mi', %2$d the number of stops in between. Plural forms live in Localizable.stringsdict; this value is only the not-found fallback. */
 "trip_page.card.distance_stops_fmt" = "%1$@ 거리 · 정류장 %2$d개";
+/* Row on the trip page naming the trip the same vehicle runs next, which a rider who stays on board rides into. %@ is that trip's route and headsign, e.g. 'Continues as 10 - Downtown Seattle'. */
+"trip_page.continues_as_fmt" = "%@(으)로 운행 계속";
 /* Confirmation shown after a ghost bus report (a scheduled bus that never came) is submitted. */
 "trip_page.ghost_bus_report_sent" = "감사합니다! 신고를 보냈습니다.";
 /* Error shown when a ghost bus report can't be submitted because the region's Obaco service is unreachable. */
@@ -2062,6 +2011,8 @@
 "trip_page.report_ghost_bus" = "유령 버스 신고";
 /* Short caption on the trip page button opening the route's schedule. Keep it to one short word: it shares a row with three other buttons. */
 "trip_page.schedule" = "시간표";
+/* Row on the trip page naming the trip the same vehicle runs just before this one. %@ is that trip's route and headsign, e.g. 'Starts as 10 - Downtown Seattle'. */
+"trip_page.starts_as_fmt" = "%@(으)로 운행 시작";
 /* VoiceOver clause on a stop the vehicle has already served. */
 "trip_page.stop_list.a11y_passed" = "이미 지나감";
 /* VoiceOver label for a collapsed run of stops between the vehicle and the rider's stop, e.g. '5 stops before your stop'. Plural forms live in Localizable.stringsdict; this value is only the not-found fallback. */
@@ -2100,8 +2051,6 @@
 "trip_progress.passed_your_stop" = "내 정류장 지나감";
 /* Shows the current stop position. e.g. Stop 5 of 18 */
 "trip_progress.stop_count_fmt" = "%2$d개 중 %1$d번째 정류장";
-/* Voiceover text explaining that the vehicle has already passed this stop */
-"trip_stop.passed_stop.accessibility_label" = "지나간 정류장";
 
 /* Accessibility label for the mic button that starts voice search. */
 "search_sheet.voice_search.start" = "음성 검색";
@@ -2421,3 +2370,9 @@
 
 /* Title of the page that explains an error in detail. */
 "problem_details.title" = "문제 세부 정보";
+
+/* VoiceOver hint for an actionable search result row. */
+"search_controller.accessibility.open_result" = "이 결과를 엽니다.";
+
+/* VoiceOver hint for a quick search row, which runs a search and keeps the search field open. */
+"search_controller.accessibility.quick_search" = "이 항목을 검색합니다.";

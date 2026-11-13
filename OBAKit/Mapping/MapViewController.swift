@@ -91,7 +91,13 @@ class MapViewController: UIViewController,
 
     lazy var onDemandProbeController = OnDemandProbeController.make(application: application)
     var onDemandDockHost: OnDemandDockHostController?
-    var tripPlannerFallback = TripPlannerFallbackContext()
+    lazy var tripPlanEmptyFallback: TripPlanEmptyFallback = {
+        let fallback = TripPlanEmptyFallback(probeController: onDemandProbeController, notificationCenter: application.notificationCenter)
+        fallback.onChange = { [weak self] isShowingCard in self?.tripPlanEmptyFallbackDidChange(isShowingCard: isShowingCard) }
+        return fallback
+    }()
+    /// The planner panel's delegate, held here because the panel keeps it weakly.
+    var tripPlannerPanelObserver: TripPlannerPanelObserver?
 
     // MARK: - Init
 
@@ -221,10 +227,6 @@ class MapViewController: UIViewController,
         application.mapRegionManager.mapViewDelegate = self
         viewModel.reloadBookmarks()
 
-        // Settings is the only thing that can change the callout rule, and getting back here is
-        // the first thing that happens after it closes.
-        application.mapRegionManager.refreshStopAnnotationCallouts()
-
         navigationController?.setNavigationBarHidden(true, animated: false)
         updateControlsPlacement(animated: false)
 
@@ -279,12 +281,8 @@ class MapViewController: UIViewController,
     /// card is the single entry point for every map survey: tapping `Take survey`
     /// opens an external survey, or presents the full in-app survey for others.
     private func presentMapSurveyCard(for survey: Survey) {
-        var title = survey.name
-        if survey.isExternalSurvey, let hero = survey.heroQuestion {
-            title = hero.content.labelText
-        }
         let card = SurveyLauncherCardView(style: .floating)
-        card.configure(title: title, subtitle: nil)
+        card.configure(title: survey.launcherTitle, subtitle: nil)
         card.onTakeSurvey = { [weak self] in self?.handleMapSurveyTakeSurvey(survey) }
         card.onDismiss = { [weak self] in self?.handleMapSurveyDismiss(survey) }
 
@@ -328,8 +326,7 @@ class MapViewController: UIViewController,
     }
 
     private func handleMapSurveyDismiss(_ survey: Survey) {
-        application.surveyService.markSurveyForLater(survey)
-        application.surveyService.setNextReminderDate()
+        application.surveyService.postpone(survey)
         dismissMapSurveyCard()
     }
 
@@ -346,13 +343,7 @@ class MapViewController: UIViewController,
     }
 
     private func showMapExternalSurveyError() {
-        let alert = UIAlertController(
-            title: OBALoc("survey_launcher.external_survey_error.title", value: "Can't Open Survey", comment: "Title shown when an external survey link cannot be opened"),
-            message: OBALoc("survey_launcher.external_survey_error.message", value: "This survey link couldn't be opened. Please try again later.", comment: "Message shown when an external survey link cannot be opened"),
-            preferredStyle: .alert
-        )
-        alert.addAction(UIAlertAction(title: Strings.ok, style: .default))
-        topmostPresentedController.present(alert, animated: true)
+        topmostPresentedController.present(ExternalSurveyLauncher.errorAlert(), animated: true)
     }
 
     // MARK: - User Location
@@ -677,20 +668,14 @@ class MapViewController: UIViewController,
         // EC12: notify ViewModel so it can refresh data (e.g. weather) without UIKit imports.
         viewModel.onAppBecameActive()
 
-        guard
-            let resignedActiveAt = resignedActiveAt,
-            abs(resignedActiveAt.timeIntervalSinceNow) > 600
-        else {
-            return
-        }
-
-        // Same rule as launch: don't yank a rider in another city onto GPS
-        // just because the app sat in the background for ten minutes (#615).
-        if let region = application.regionsService.currentRegion,
-           let location = application.locationService.currentLocation,
-           !region.contains(location: location) {
-            return
-        }
+        // Shared with the map panel. The UIKit map re-centers whatever it shows,
+        // as it always has.
+        guard let resignedActiveAt, ReturnRecenter.shouldRecenter(
+            absence: abs(resignedActiveAt.timeIntervalSinceNow),
+            region: application.regionsService.currentRegion,
+            location: application.locationService.currentLocation,
+            isShowingSheet: false
+        ) else { return }
 
         centerMapOnUserLocation()
     }
@@ -737,7 +722,7 @@ class MapViewController: UIViewController,
     /// presentation the router builds is a standard, opaque screen with a nav-bar back button
     /// and contained focus, and it skips the sheet path's map-focus wiring (route highlight,
     /// recentering, tab-bar hiding, `stopSheetStopID`) — map-visual bookkeeping that means
-    /// nothing while a pushed screen covers the map, exactly as the legacy push path skips it.
+    /// nothing while a pushed screen covers the map.
     ///
     /// Read at open time only: a sheet already onscreen when VoiceOver is switched on is left
     /// as-is.
@@ -764,14 +749,9 @@ class MapViewController: UIViewController,
         mapRegionManager.mapView.deselectAnnotation(annotation, animated: false)
     }
 
-    /// Routes a stop screen to the presentation that suits it: the redesigned Stop page comes
-    /// up as a half-detent sheet over the map, the legacy screen still pushes.
-    ///
-    /// The branch keys off the controller `makeStopController` actually returned rather than
-    /// re-reading `FeatureFlags.isNewStopPageEnabled`. That factory has a second reason to fall
-    /// back to the legacy screen — a non-nil transfer context — so a duplicated flag check here
-    /// would eventually disagree with it and drop `StopViewController` into a panel it was
-    /// never built for.
+    /// Brings the Stop page up as a half-detent sheet over the map. `stopController` is a plain
+    /// `UIViewController` because the context-menu commit hands back the preview's controller
+    /// untyped; anything other than the Stop page is pushed rather than dropped.
     private func present(stopController: UIViewController, deselecting annotation: MKAnnotation? = nil) {
         guard let stopPageVC = stopController as? StopPageViewController else {
             application.viewRouter.navigate(to: stopController, from: self)
@@ -896,8 +876,8 @@ class MapViewController: UIViewController,
             stopPageVC?.showTripPage(for: departure)
         }
 
-        // Combine over a @MainActor ObservableObject from UIKit: the exact pattern
-        // `StopViewController.bindArrivalsSink()` already ships under Swift 6
+        // Combine over a @MainActor ObservableObject from UIKit: the same pattern
+        // `StopPageViewController.bindArrivalsFeedback()` uses under Swift 6
         // strict concurrency. `sink(receiveValue:)` takes a plain non-Sendable
         // closure, so it inherits @MainActor and crosses no isolation boundary.
         //
@@ -960,8 +940,8 @@ class MapViewController: UIViewController,
         }
     }
 
-    /// Presents the feedback prompt after a stop sheet is dismissed — a natural
-    /// stopping point, and the only one available in the new stop page flow.
+    /// Presents the feedback prompt after a stop sheet is dismissed, a natural
+    /// stopping point.
     private lazy var feedbackPromptPresenter = FeedbackPromptPresenter(application: application)
 
     // MARK: - Feedback Prompt
@@ -1151,13 +1131,13 @@ class MapViewController: UIViewController,
     }
 
     func updateVoiceover() {
-        mapRegionManager.preferredLoadDataRegionFudgeFactor = UIAccessibility.isVoiceOverRunning ? 1.5 : MapRegionManager.DefaultLoadDataRegionFudgeFactor
+        mapRegionManager.preferredLoadDataRegionFudgeFactor = UIAccessibility.isVoiceOverRunning ? MapRegionManager.VoiceOverLoadDataRegionFudgeFactor : MapRegionManager.DefaultLoadDataRegionFudgeFactor
 
         if UIAccessibility.isVoiceOverRunning {
             floatingPanel.move(to: .half, animated: true)
 
             if !floatingPanel.userHasSeenFullSheetVoiceoverChange {
-                topmostPresentedController.present(floatingPanel.fullSheetVoiceoverAlert(), animated: true)
+                topmostPresentedController.present(OBAFloatingPanelController.fullSheetVoiceoverAlert(), animated: true)
                 floatingPanel.userHasSeenFullSheetVoiceoverChange = true
             }
         }
@@ -1433,11 +1413,7 @@ extension MapViewController {
             topmostPresentedController.present(alert, animated: true) {
                 mapView.deselectAnnotation(view.annotation, animated: true)
             }
-        } else if !view.canShowCallout, let stop = selectableStop(for: view.annotation) {
-            // No callout means there is no chevron to tap, so selection is the open gesture.
-            // `StopAnnotationView.updateCalloutVisibility()` owns that decision — don't duplicate
-            // its reasoning here, or the two will drift and leave annotations that select but
-            // never open.
+        } else if let stop = selectableStop(for: view.annotation) {
             application.analytics?.reportEvent(pageURL: "app://localhost/map", label: AnalyticsLabels.mapStopAnnotationTapped, value: nil)
             show(stop: stop, deselecting: view.annotation)
         } else if let annotation = view.annotation as? UserDroppedPin {
@@ -1477,12 +1453,6 @@ extension MapViewController {
             let interaction = UIContextMenuInteraction(delegate: self)
             stopAnnotationView.addInteraction(interaction)
         }
-    }
-
-    func mapView(_ mapView: MKMapView, annotationView view: MKAnnotationView, calloutAccessoryControlTapped control: UIControl) {
-        guard let stop = selectableStop(for: view.annotation) else { return }
-        application.analytics?.reportEvent(pageURL: "app://localhost/map", label: AnalyticsLabels.mapStopAnnotationTapped, value: nil)
-        show(stop: stop, deselecting: view.annotation)
     }
 
     /// The stop an annotation opens, for the two annotation types that render as a
@@ -1529,7 +1499,7 @@ extension MapViewController {
                 show(stop: result)
             case let result as VehicleStatus:
                 if let convertible = TripConvertible(vehicleStatus: result) {
-                    let tripController = TripViewController(application: application, tripConvertible: convertible)
+                    let tripController = application.viewRouter.makeTripController(tripConvertible: convertible)
                     application.viewRouter.navigate(to: tripController, from: self)
                 }
                 else {

@@ -43,4 +43,50 @@ final class MoreSheetHostTests: OBATestCase {
         #expect(nav.viewControllers.count == 1)
         #expect(nav.topViewController is MoreViewController)
     }
+
+    /// On iOS 26 the sheet's own background shows through the screen — its
+    /// Liquid Glass in light mode, its opaque fill in dark — as it does behind
+    /// the SwiftUI sheets; earlier systems keep the screen's opaque backgrounds.
+    @Test @MainActor
+    func `The More screen clears its backgrounds on iOS 26`() throws {
+        let application = buildApplication(queue: queue, dataLoader: MockDataLoader(testName: name))
+
+        let nav = MoreSheetHost.makeNavigationController(application: application)
+        let more = try #require(nav.topViewController as? MoreViewController)
+
+        if #available(iOS 26.0, *) {
+            #expect(more.view.backgroundColor == .clear)
+            #expect(more.listView.backgroundColor == .clear)
+        } else {
+            #expect(more.view.backgroundColor != .clear)
+        }
+    }
+
+    /// The More sheet could only be swiped away; the other index sheets close
+    /// from a button.
+    @Test @MainActor
+    func `The More sheet has a Close button beside Settings`() {
+        let application = buildApplication(queue: queue, dataLoader: MockDataLoader(testName: name))
+        var closes = 0
+
+        let nav = MoreSheetHost.makeNavigationController(application: application) { closes += 1 }
+        let items = nav.topViewController?.navigationItem.rightBarButtonItems ?? []
+
+        #expect(items.count == 2)
+        #expect(items.last?.title == Strings.settings)
+        #expect(items.first?.primaryAction != nil)
+    }
+
+    /// As the home sheet's More tab there's no sheet of its own to close: the tab
+    /// bar is the way out.
+    @Test @MainActor
+    func `The More tab has no Close button`() {
+        let application = buildApplication(queue: queue, dataLoader: MockDataLoader(testName: name))
+
+        let nav = MoreSheetHost.makeNavigationController(application: application, onClose: nil)
+        let items = nav.topViewController?.navigationItem.rightBarButtonItems ?? []
+
+        #expect(items.count == 1)
+        #expect(items.first?.title == Strings.settings)
+    }
 }

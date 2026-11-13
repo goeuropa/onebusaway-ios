@@ -231,8 +231,8 @@ struct DepartureRowView: View {
     }
 }
 
-/// Long-press context-menu parity with today's `ArrivalDepartureItem`
-/// menu actions (Alarm / Schedule / Save).
+/// Long-press context-menu actions for a departure row (Alarm / Schedule /
+/// Save).
 struct DepartureRowActions {
     let canAlarm: Bool
     let hasAlarm: Bool
@@ -241,8 +241,8 @@ struct DepartureRowActions {
     let onBookmark: () -> Void
     let onShowTrip: () -> Void
     let onShareTrip: () -> Void
-    /// Lazily builds the long-press preview (a `TripViewController` embedded via a
-    /// representable). Built by the hosting VC so `Application`/UIKit stay out of
+    /// Lazily builds the long-press preview (a `TripMapHostPreview`, which embeds
+    /// the trip map host). Built by the hosting VC so `Application`/UIKit stay out of
     /// the view layer; `AnyView` is acceptable here because it lives inside the
     /// context menu's lazily-evaluated preview closure, not the row structure.
     let makePreview: () -> AnyView

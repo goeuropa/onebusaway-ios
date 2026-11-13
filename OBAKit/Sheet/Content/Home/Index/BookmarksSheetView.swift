@@ -20,17 +20,24 @@ import OBAKitCore
 /// `Presentation.sheet`, which swaps pull-to-refresh for a toolbar button,
 /// since a downward drag here is already the sheet's dismiss gesture.
 ///
-/// Manage Bookmarks/Groups is deliberately not offered here — that stays a
-/// tab-level editing surface.
+/// Edit opens Manage Bookmarks/Groups, as the tab's Edit button does: the panel
+/// has no tab to leave it to.
 struct BookmarksSheetView: View {
     let application: Application
 
     @StateObject private var viewModel: BookmarksViewModel
     @EnvironmentObject var coordinator: SheetCoordinator<AppSheetRoute>
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.isHomeSheetTab) private var isHomeSheetTab
+    @Environment(\.isCoveredBySheet) private var isCoveredBySheet
 
     @State private var editingBookmark: Bookmark?
+    @State private var isManaging = false
     @State private var isShowingTrackError = false
+    /// Between `onAppear` and `onDisappear`. A home sheet tab that isn't selected
+    /// is still in the hierarchy and still sees `isCoveredBySheet` change, but
+    /// mustn't start polling when it does.
+    @State private var isOnScreen = false
 
     /// A refresh the user asked for, as opposed to the 30 s poll `start()`
     /// installs. Deliberately not `viewModel.isLoading`, which the background
@@ -96,7 +103,7 @@ struct BookmarksSheetView: View {
             },
             makeStopPreview: { stopID in
                 AnyView(
-                    StopViewControllerPreview(stopID: stopID, application: application)
+                    StopPagePreview(stopID: stopID, application: application)
                         .frame(width: 320, height: 400)
                 )
             }
@@ -133,8 +140,15 @@ struct BookmarksSheetView: View {
                 .navigationTitle(Text(Strings.bookmarks))
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        SheetDismissButton(.close) { dismiss() }
+                    if !isHomeSheetTab {
+                        ToolbarItem(placement: .topBarLeading) {
+                            SheetDismissButton(.close) { dismiss() }
+                        }
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button(OBALoc("bookmarks_controller.groups_button_title", value: "Edit", comment: "Groups button title in Bookmarks controller")) {
+                            isManaging = true
+                        }
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         refreshButton
@@ -145,10 +159,31 @@ struct BookmarksSheetView: View {
                 }
         }
         .searchSheetBackground()
-        .onAppear { viewModel.start() }
+        .onAppear {
+            isOnScreen = true
+            viewModel.start()
+        }
         // Stops the 30 s poll when the sheet goes away. The tab does the same on
         // `viewWillDisappear`.
-        .onDisappear { viewModel.deactivate() }
+        .onDisappear {
+            isOnScreen = false
+            viewModel.deactivate()
+        }
+        // Covered by a stacked sheet it stays in the hierarchy, so `onDisappear`
+        // never runs, and the poll stops here. (As a home sheet tab, `TabView`
+        // runs `onAppear`/`onDisappear` on each switch.)
+        .onChange(of: isCoveredBySheet) { _, isCovered in
+            guard isOnScreen else { return }
+            if isCovered { viewModel.deactivate() } else { viewModel.start() }
+        }
+        // Fresh arrivals for running Live Activities, as the tab pushes them. The
+        // home sheet only loads the bookmarks it previews, so an activity for any
+        // other bookmark gets its content from here.
+        .onReceive(viewModel.didUpdate) { _ in
+            BookmarkActions.updateRunningLiveActivities(application: application) { [viewModel] bookmark in
+                viewModel.arrivalDepartures(for: bookmark)
+            }
+        }
         .onChange(of: coordinator.stackedRoutes.count) { previousCount, count in
             // Rebuild when a sheet stacked above this one closes: the stop page it
             // pushes can add or remove a bookmark, and this view is never removed
@@ -163,6 +198,18 @@ struct BookmarksSheetView: View {
                 editingBookmark = nil
                 viewModel.rebuildSections()
             }
+        }
+        .sheet(isPresented: $isManaging) {
+            ManageBookmarksHost(
+                application: application,
+                onChange: { viewModel.rebuildSections() },
+                onClose: { isManaging = false }
+            )
+        }
+        // Swiping the editor away doesn't call its delegate, and a reorder saves
+        // as it goes, so the list rebuilds however the editor went.
+        .onChange(of: isManaging) { _, isManaging in
+            if !isManaging { viewModel.rebuildSections() }
         }
         .alert(
             OBALoc("live_activity.error.title", value: "Unable to Start Tracking", comment: "Alert title when Live Activity fails to start"),

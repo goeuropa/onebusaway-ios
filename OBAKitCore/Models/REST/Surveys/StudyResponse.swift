@@ -132,18 +132,6 @@ extension Survey {
         return questions.first { $0.position == 1 }
     }
 
-    /// The hero question's display text, trimmed of surrounding whitespace, or
-    /// `nil` when there is no hero question or its text is blank. Callers supply
-    /// their own (localized) fallback — e.g. a survey launcher title — since the
-    /// model layer has no access to UI localization.
-    public var heroQuestionTitle: String? {
-        guard let title = heroQuestion?.content.labelText.trimmingCharacters(in: .whitespacesAndNewlines),
-              !title.isEmpty else {
-            return nil
-        }
-        return title
-    }
-
     /// Returns all questions except the hero question
     public var remainingQuestions: [SurveyQuestion] {
         guard let hero = heroQuestion else { return questions }
@@ -185,6 +173,16 @@ extension Survey {
     /// survey (e.g. Qualtrics) rather than collecting answers in-app.
     public var isExternalSurvey: Bool {
         return heroQuestion?.content.type == .externalSurvey
+    }
+
+    /// The title on the map's survey launcher card, on both maps: an external
+    /// survey's hero question, which is what the rider is asked, otherwise
+    /// the survey's name.
+    public var launcherTitle: String {
+        if isExternalSurvey, let hero = heroQuestion {
+            return hero.content.labelText
+        }
+        return name
     }
 
 }

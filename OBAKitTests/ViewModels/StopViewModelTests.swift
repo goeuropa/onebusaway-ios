@@ -443,8 +443,8 @@ final class StopViewModelTests: OBATestCase {
         #expect(viewModel.arrivalDepartureFilter == .scheduledOnly)
     }
 
-    /// Updating through the view model persists app-wide, so the legacy page,
-    /// the SwiftUI page, and Settings all observe the change.
+    /// Updating through the view model persists app-wide, so the stop page and
+    /// Settings both observe the change.
     @Test @MainActor
     func `Updating the arrival departure filter persists it`() {
         let dataLoader = MockDataLoader(testName: name)
@@ -483,8 +483,8 @@ final class StopViewModelTests: OBATestCase {
     // MARK: - $stop re-emit guard
 
     /// `$stop` must not re-emit across refreshes when the underlying value is unchanged.
-    /// Re-emission would re-run the VC's `applyData` + `configureTabBarButtons` + title
-    /// assignment for no reason on every 30 s refresh cycle.
+    /// Re-emission would rebuild `StopPageViewController`'s bar items and user activity
+    /// for no reason on every 30 s refresh cycle.
     @Test @MainActor
     func `Stop does not re emit when unchanged across refreshes`() async {
         let dataLoader = MockDataLoader(testName: name)
@@ -924,16 +924,12 @@ final class StopViewModelTests: OBATestCase {
 
     // MARK: - Router transfer routing (#1277)
 
-    /// With the new-stop-page flag ON, a transfer opens the new stop page and
-    /// keeps the effective context (highlight UX). The legacy banner screen is
-    /// only for when the flag is off.
+    /// A transfer opens the stop page and keeps the effective context
+    /// (highlight UX).
     @Test @MainActor
-    func `Make stop controller transfer context uses new stop page when flag on`() throws {
+    func `Make stop controller transfer context uses the stop page`() throws {
         let dataLoader = MockDataLoader(testName: name)
         let app = createApplication(dataLoader: dataLoader, analytics: AnalyticsMock())
-
-        // The new-stop-page flag defaults to ON when unset.
-        #expect(FeatureFlags.isNewStopPageEnabled(userDefaults: app.userDefaults))
 
         let stop = try #require(try Fixtures.loadSomeStops().first)
 
@@ -951,16 +947,15 @@ final class StopViewModelTests: OBATestCase {
         #expect(plainController is StopPageViewController)
     }
 
-    /// The banner/highlight toggle drops the effective transfer context. Routing
+    /// The trip highlight toggle drops the effective transfer context. Routing
     /// must use that same helper so a raw non-nil context with the toggle off
     /// lands as an ordinary stop (no highlight).
     @Test @MainActor
-    func `Make stop controller ignores transfer context when the banner toggle is off`() throws {
+    func `Make stop controller ignores transfer context when the trip highlight is off`() throws {
         let dataLoader = MockDataLoader(testName: name)
         let app = createApplication(dataLoader: dataLoader, analytics: AnalyticsMock())
-        #expect(FeatureFlags.isNewStopPageEnabled(userDefaults: app.userDefaults))
 
-        app.userDataStore.showTransferArrivalBanner = false
+        app.userDataStore.highlightTransferTrip = false
 
         let stop = try #require(try Fixtures.loadSomeStops().first)
         let transfer = TransferContext(
@@ -1048,6 +1043,68 @@ final class StopViewModelTests: OBATestCase {
         #expect(viewModel.alarmError != nil)
         #expect(viewModel.alarm(for: departure) != nil)
         #expect(!app.userDataStore.alarms.isEmpty)
+    }
+
+    /// The trip page removed the alarm while this stop page stayed underneath:
+    /// its bell goes at once, not at the next refresh.
+    @Test @MainActor
+    func `An alarm removed on another screen drops the bell without a refresh`() async throws {
+        let dataLoader = MockDataLoader(testName: name)
+        let app = createApplication(
+            dataLoader: dataLoader,
+            analytics: AnalyticsMock(),
+            arrivalsFixture: "arrivals_and_departures_for_stop_1_10020.json"
+        )
+        dataLoader.mock(data: Data()) { $0.url?.path.contains("/alarms/") ?? false }
+        try #require(app.obacoService != nil)
+
+        let viewModel = StopViewModel(application: app, stopID: testStopID)
+        await viewModel.refresh()
+        let departure = try #require(viewModel.stopArrivals?.arrivalsAndDepartures.first)
+        let region = try #require(app.currentRegion)
+        let alarm = try Fixtures.loadAlarm()
+        alarm.deepLink = ArrivalDepartureDeepLink(arrivalDeparture: departure, regionID: region.regionIdentifier)
+        alarm.set(tripDate: Date(timeIntervalSinceNow: 900), alarmOffset: 5)
+        app.userDataStore.add(alarm: alarm)
+        await viewModel.refresh()
+        #expect(viewModel.alarm(for: departure) != nil)
+
+        try await AlarmRemover(application: app).remove(alarm)
+
+        #expect(viewModel.alarm(for: departure) == nil)
+        #expect(app.userDataStore.alarms.isEmpty)
+    }
+
+    /// The stop page deletes through `AlarmRemover`, which tells the other screens.
+    @Test @MainActor
+    func `Cancelling an alarm on the stop page tells the other screens`() async throws {
+        let dataLoader = MockDataLoader(testName: name)
+        let app = createApplication(
+            dataLoader: dataLoader,
+            analytics: AnalyticsMock(),
+            arrivalsFixture: "arrivals_and_departures_for_stop_1_10020.json"
+        )
+        dataLoader.mock(data: Data()) { $0.url?.path.contains("/alarms/") ?? false }
+
+        let viewModel = StopViewModel(application: app, stopID: testStopID)
+        await viewModel.refresh()
+        let departure = try #require(viewModel.stopArrivals?.arrivalsAndDepartures.first)
+        let region = try #require(app.currentRegion)
+        let alarm = try Fixtures.loadAlarm()
+        alarm.deepLink = ArrivalDepartureDeepLink(arrivalDeparture: departure, regionID: region.regionIdentifier)
+        alarm.set(tripDate: Date(timeIntervalSinceNow: 900), alarmOffset: 5)
+        app.userDataStore.add(alarm: alarm)
+        await viewModel.refresh()
+
+        let posted = SendableBox<[URL]>([])
+        let observer = app.notificationCenter.addObserver(forName: .alarmRemoved, object: nil, queue: nil) { note in
+            if let url = note.userInfo?[AlarmRemover.alarmURLKey] as? URL { posted.value.append(url) }
+        }
+        defer { app.notificationCenter.removeObserver(observer) }
+
+        #expect(await viewModel.cancelAlarm(for: departure))
+
+        #expect(posted.value == [alarm.url])
     }
 
     // MARK: - Transient Toast

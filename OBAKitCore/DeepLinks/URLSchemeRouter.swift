@@ -11,9 +11,19 @@ import CoreLocation
 import Foundation
 
 /// A data object for viewing a stop from decoding an URL with `URLSchemeRouter`.
-public struct StopURLData {
+public struct StopURLData: Equatable {
     public let stopID: StopID
-    public let regionID: Int
+    public let regionID: Int?
+
+    /// Initializes a `StopURLData` instance.
+    ///
+    /// - Parameters:
+    ///   - stopID: The unique identifier of the target stop.
+    ///   - regionID: The optional region identifier hosting the stop.
+    public init(stopID: StopID, regionID: Int? = nil) {
+        self.stopID = stopID
+        self.regionID = regionID
+    }
 }
 
 /// `AddRegionURLData` is a data structure that encapsulates the information needed to add a new region
@@ -99,7 +109,7 @@ public class URLSchemeRouter: NSObject {
         }
 
         switch components.host {
-        case viewStopHost:
+        case viewStopHost, "stop", "viewStop":
             return decodeViewStop(from: components)
         case addRegionHost:
             return decodeAddRegion(from: components)
@@ -156,15 +166,31 @@ public class URLSchemeRouter: NSObject {
         return components.url!
     }
 
-    /// Decodes a `StopURLData` struct from `url`, which can be used to display a `StopViewController`.
+    /// Decodes a `StopURLData` struct from `url`, which can be used to display a stop.
     /// - Parameter url: An URL created from calling `URLSchemeRouter.encode()`
     private func decodeViewStop(from components: URLComponents) -> URLType? {
         guard
-            let stopID = components.queryItem(named: "stopID")?.value,
-            let regionIDString = components.queryItem(named: "regionID")?.value,
-            let regionID = Int(regionIDString) else {
-                return nil
+            let stopID = components.queryItem(named: "stopID")?.value
+                ?? components.queryItem(named: "stop_id")?.value
+                ?? components.queryItem(named: "id")?.value
+        else {
+            return nil
         }
+        let regionIDString = components.queryItem(named: "regionID")?.value
+            ?? components.queryItem(named: "region_id")?.value
+            ?? components.queryItem(named: "region")?.value
+
+        let isStopHost = components.host == "stop"
+        let regionID: Int?
+        if let regionIDString {
+            guard let parsed = Int(regionIDString) else { return nil }
+            regionID = parsed
+        } else if isStopHost {
+            regionID = nil
+        } else {
+            return nil
+        }
+
         return .viewStop(StopURLData(stopID: stopID, regionID: regionID))
     }
 

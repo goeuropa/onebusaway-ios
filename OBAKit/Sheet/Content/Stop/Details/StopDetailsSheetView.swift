@@ -28,6 +28,19 @@ import ActivityKit
 /// It deliberately does NOT observe `StopViewModel` — `StopDetailsSheetView`
 /// remains the sole observer, and owns the `@StateObject`/`@State` that give the
 /// view model and the presenter their lifetimes.
+/// How a stop sheet reaches the map it sits over: it hands over its route chips'
+/// focus when it appears, and every arrivals emission after that.
+///
+/// Closures rather than the display model itself, so the factory decides which
+/// sheet route owns the drawing and the sheet doesn't need to know.
+struct StopSheetMapLink {
+    let show: (StopMapFocus) -> Void
+    let apply: (_ arrivals: StopArrivals?, _ isListFiltered: Bool, _ preferences: StopPreferences) -> Void
+
+    /// For a sheet over no map. Its chips render plain; see `StopMapFocus`.
+    static let none = StopSheetMapLink(show: { _ in }, apply: { _, _, _ in })
+}
+
 struct StopDetailsSheetRootView: View {
     /// Forwarded so the route this view was built for stays readable without
     /// instantiating the sheet, both in debug output and to the factory's tests.
@@ -38,6 +51,7 @@ struct StopDetailsSheetRootView: View {
     let feedback: DataLoadFeedbackGenerator
     let formatters: Formatters
     let userDefaults: UserDefaults
+    var mapLink: StopSheetMapLink = .none
 
     var body: some View {
         StopDetailsSheetView(
@@ -46,7 +60,8 @@ struct StopDetailsSheetRootView: View {
             presenter: makePresenter(),
             feedback: feedback,
             formatters: formatters,
-            userDefaults: userDefaults
+            userDefaults: userDefaults,
+            mapLink: mapLink
         )
         .defaultAppStorage(userDefaults)
     }
@@ -69,6 +84,7 @@ struct StopDetailsSheetView: View {
     /// then, both in debug output and to the factory's tests.
     let stopID: StopID
 
+    @Environment(\.isCoveredBySheet) private var isCoveredBySheet
     @StateObject private var viewModel: StopViewModel
     @EnvironmentObject private var coordinator: SheetCoordinator<AppSheetRoute>
 
@@ -89,16 +105,16 @@ struct StopDetailsSheetView: View {
     @StateObject private var presenter: StopPageActionPresenter
 
     /// The header's route chips decorate themselves from map focus — route
-    /// colour, live-vehicle dot, tap-to-highlight. That channel is wired only
-    /// through the UIKit `MapViewController`; this sheet sits over the SwiftUI
-    /// map panel, which has none. An unwired instance is a supported mode: every
-    /// route reports unfocusable, so the chips render plain, carry no button
-    /// trait, and their tap gesture is a no-op. See `StopMapFocus`.
+    /// colour, live-vehicle dot, tap-to-highlight. `mapLink` hands it to the
+    /// panel's `StopFocusMapDisplayModel`, which fills it in as it draws the
+    /// stop's routes. Unwired (`StopSheetMapLink.none`) is a supported mode:
+    /// every route reports unfocusable, so the chips render plain, carry no
+    /// button trait, and their tap gesture is a no-op. See `StopMapFocus`.
     ///
     /// `@StateObject` so it is one instance for the life of the sheet rather
-    /// than a fresh object per body pass. It never publishes, so observing it
-    /// costs nothing.
+    /// than a fresh object per body pass. The map model holds it weakly.
     @StateObject private var mapFocus = StopMapFocus()
+    private let mapLink: StopSheetMapLink
 
     private let feedback: DataLoadFeedbackGenerator
     private let formatters: Formatters
@@ -118,8 +134,8 @@ struct StopDetailsSheetView: View {
     /// nothing derived from it affects layout.
     @State private var viewportHeight: CGFloat = 0
     @State private var userActivity: NSUserActivity?
-    /// Gates the one-shot success haptic to the first arrivals load, matching
-    /// `StopViewController.bindArrivalsSink()`; later refreshes are silent.
+    /// Gates the one-shot success haptic to the first arrivals load; later
+    /// refreshes are silent.
     @State private var firstLoad = true
     /// Drives the top bar's spinner. Distinct from `viewModel.isLoading`, which
     /// also flips for the ~15s background refresh — the rider did not ask for
@@ -134,9 +150,11 @@ struct StopDetailsSheetView: View {
         presenter: @autoclosure @escaping () -> StopPageActionPresenter,
         feedback: DataLoadFeedbackGenerator,
         formatters: Formatters,
-        userDefaults: UserDefaults
+        userDefaults: UserDefaults,
+        mapLink: StopSheetMapLink = .none
     ) {
         self.stopID = stopID
+        self.mapLink = mapLink
         _viewModel = StateObject(wrappedValue: viewModel())
         _presenter = StateObject(wrappedValue: presenter())
         self.feedback = feedback
@@ -176,7 +194,7 @@ struct StopDetailsSheetView: View {
             // button only, which is why that button stays pinned.
             //
             // Scroll position drives the title's OPACITY and the action row's
-            // overlay position — never the height of the `safeAreaInset` below.
+            // overlay position — never the height of the top bar's inset below.
             // An inset whose height depends on scroll position feeds back on
             // itself: measured on device, collapsing a 170pt header shifted
             // `contentOffset.y + contentInsets.top` by exactly 170, so the metric
@@ -196,16 +214,14 @@ struct StopDetailsSheetView: View {
             } action: { _, height in
                 viewportHeight = height
             }
-            // Fixed height — it holds only the top bar, so nothing here resizes
-            // as the list scrolls.
-            .safeAreaInset(edge: .top, spacing: 0) { topBar }
-            // Fixed height, like the top bar above it. An inset whose height
-            // tracked scroll position is what pegged the main thread here once;
-            // a constant one has no such loop, and it means the list reserves
-            // the capsule's room itself — so the last departure cannot hide
-            // underneath it and no hand-tuned bottom margin has to be kept in
-            // sync with the capsule's height.
-            .safeAreaInset(edge: .bottom, spacing: 0) { actionRow(navigation: navigation) }
+            // Both bars are fixed height — the top holds only the bar, the bottom
+            // only the action capsule — so nothing here resizes as the list
+            // scrolls. An inset whose height tracked scroll position is what
+            // pegged the main thread here once; a constant one has no such loop,
+            // and it means the list reserves the capsule's room itself — so the
+            // last departure cannot hide underneath it and no hand-tuned bottom
+            // margin has to be kept in sync with the capsule's height.
+            .stopSheetChrome(top: { topBar }, bottom: { actionRow(navigation: navigation) })
             // Bottom-trailing overlay, for the same reason the action row is an
             // overlay: it takes no part in the list's layout, so it cannot feed
             // back into scroll geometry.
@@ -219,11 +235,20 @@ struct StopDetailsSheetView: View {
             .environment(\.obaFormatters, formatters)
             .onChange(of: content.routeIDs) { _, ids in reconcileExpandedRoute(against: ids) }
             .refreshesOnForeground(
-                onForeground: { Task { await viewModel.start() } },
+                // A covered sheet starts when it's uncovered instead.
+                onForeground: { if !isCoveredBySheet { Task { await viewModel.start() } } },
                 onBackground: { viewModel.deactivate() }
             )
             .onReceive(viewModel.$stop.compactMap { $0 }, perform: publishUserActivity(for:))
             .onReceive(viewModel.$stopArrivals.compactMap { $0 }) { _ in signalFirstLoad() }
+            .onAppear { mapLink.show(mapFocus) }
+            // The emitted values, never `viewModel`'s properties read back:
+            // `@Published` emits in `willSet`, so those still hold the old ones.
+            .onReceive(
+                viewModel.$stopArrivals.combineLatest(viewModel.$isListFiltered, viewModel.$stopPreferences)
+            ) { arrivals, isListFiltered, preferences in
+                mapLink.apply(arrivals, isListFiltered, preferences)
+            }
             .onReceive(viewModel.$operationError.compactMap { $0 }) { _ in feedback.dataLoad(.failed) }
             .onReceive(viewModel.presentFullSurvey, perform: showFullSurvey(_:))
             .onReceive(viewModel.surveySubmissionError, perform: presenter.showError)
@@ -433,7 +458,9 @@ struct StopDetailsSheetView: View {
             onWalkingDirections: navigation.showWalkingDirections,
             onDirectionsToHere: navigation.showDirectionsToHere,
             onDirectionsFromHere: navigation.showDirectionsFromHere,
-            onReportProblem: navigation.showReportProblem
+            onReportProblem: navigation.showReportProblem,
+            isProximityAlertActive: viewModel.proximityAlert != nil,
+            onToggleProximityAlert: navigation.toggleProximityAlert
         )
     }
 
@@ -446,13 +473,13 @@ struct StopDetailsSheetView: View {
 
     /// The floating "back to top" control, above the action capsule.
     ///
-    /// The capsule is a bottom safe-area inset, so this overlay's bottom edge
+    /// The capsule is a bottom safe-area bar (`stopSheetChrome`), so this overlay's bottom edge
     /// already sits above it and the padding below is clearance from the
     /// capsule, not from the sheet's edge.
     /// Clearance above the action capsule.
     ///
     /// The button is an `.overlay(alignment: .bottomTrailing)` applied *after*
-    /// the `safeAreaInset` the capsule is mounted in, so it aligns to the
+    /// the `stopSheetChrome` bar the capsule is mounted in, so it aligns to the
     /// sheet's whole frame — the inset does not push it up, and without this it
     /// sits directly on the capsule. Derived from the capsule's own metric
     /// rather than measured, so the two cannot drift apart and no geometry
@@ -464,5 +491,42 @@ struct StopDetailsSheetView: View {
             .padding(.trailing, 16)
             .padding(.bottom, Self.scrollToTopClearance)
             .animation(.snappy(duration: 0.2), value: showsScrollToTop)
+    }
+}
+
+// MARK: - Liquid Glass
+
+private extension View {
+    /// The pinned top bar and action row, and on iOS 26 the sheet's glass
+    /// showing through everything between them.
+    ///
+    /// One `#available` for all of it: each such branch in a `@ViewBuilder` is
+    /// type-erased, and this wraps the whole list on a body that re-runs on
+    /// the view model's per-second status timer.
+    ///
+    /// On iOS 26 the bars are `safeAreaBar`s, which reserve the same fixed room
+    /// a `safeAreaInset` does and also give the list the system's soft scroll
+    /// edge beneath them. Where the sheet shows its glass (`showsSheetGlass`:
+    /// light mode), clearing the list, and the top bar and departure rows
+    /// through `drawsOnSheetGlass`, lets that glass show through the whole sheet
+    /// while it's partway up the screen; the system turns it opaque by itself
+    /// at full height. In dark mode they stay opaque.
+    @ViewBuilder
+    func stopSheetChrome(
+        @ViewBuilder top: () -> some View,
+        @ViewBuilder bottom: () -> some View
+    ) -> some View {
+        if #available(iOS 26.0, *) {
+            safeAreaBar(edge: .top, spacing: 0, content: top)
+                .safeAreaBar(edge: .bottom, spacing: 0, content: bottom)
+                // A no-op where the sheet is opaque: a List's own background
+                // is already transparent in an iOS 26 sheet, which is why the
+                // opaque case needs the sheet painted.
+                .scrollContentBackground(.hidden)
+                .sheetGlassBackground(opaque: Color(uiColor: .systemBackground))
+        } else {
+            safeAreaInset(edge: .top, spacing: 0, content: top)
+                .safeAreaInset(edge: .bottom, spacing: 0, content: bottom)
+        }
     }
 }

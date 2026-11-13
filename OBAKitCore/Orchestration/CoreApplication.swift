@@ -52,11 +52,7 @@ open class CoreApplication: NSObject,
     /// valid is saved. The single resolution point for every consumer — the
     /// stop pages and Settings must not re-derive this from `UserDefaults`.
     public var effectiveArrivalDepartureFilter: ArrivalDepartureFilter {
-        if let saved = userDefaults.string(forKey: CoreAppConfig.arrivalDepartureFilterUserDefaultsKey),
-           let filter = ArrivalDepartureFilter(rawValue: saved) {
-            return filter
-        }
-        return defaultArrivalDepartureFilter
+        ArrivalDepartureFilter.effective(in: userDefaults, brandDefault: defaultArrivalDepartureFilter)
     }
 
     /// Persists the rider's arrival/departure filter choice, the write half of
@@ -187,7 +183,7 @@ open class CoreApplication: NSObject,
     }
 
     /// Called after a sync of `regionID` wrote stops to the cache. Does nothing
-    /// here; `Application` rebuilds the Spotlight index from the cache.
+    /// here; `Application` indexes the synced stops in Spotlight.
     open func regionStopSyncWroteStops(regionID: Int) {}
 
     /// Asks for a sync of the current region after a short pause. Does nothing

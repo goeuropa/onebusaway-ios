@@ -20,10 +20,6 @@ protocol TripStopListEntry {
     var scheduledArrival: Date? { get }
     /// Where to draw this stop's dot. Optional so a feed that omits a stop's
     /// location costs one marker rather than the whole trip.
-    ///
-    /// Named `stopCoordinate`, not `coordinate`: `TripStopTime` is already an
-    /// `MKAnnotation` and so already has a non-optional `coordinate`, which
-    /// can neither be redeclared nor witness an optional requirement.
     var stopCoordinate: CLLocationCoordinate2D? { get }
 }
 
@@ -57,9 +53,42 @@ struct TripStopListModel {
         let isPassed: Bool
         let isVehicleHere: Bool
         let isUserStop: Bool
+        /// Where the rider got on, when a shared link named where they step off.
+        /// When set, this row carries the boarding stop marker and `isUserStop`
+        /// marks the destination. See `RiderStops.boardingMarkerIndex`.
+        let isBoardingStop: Bool
+        /// Whether this stop is outside the shared ride (before boarding or after
+        /// stepping off). Faded like a passed stop. See `RiderStops.rideIndices`.
+        let isOutsideRide: Bool
         /// The end of the line. Carries the terminal marker on the map and the
         /// end cap on the list's connector.
         let isTerminal: Bool
+
+        init(
+            id: String,
+            stopID: StopID,
+            name: String,
+            coordinate: CLLocationCoordinate2D?,
+            date: Date?,
+            isPassed: Bool,
+            isVehicleHere: Bool,
+            isUserStop: Bool,
+            isBoardingStop: Bool = false,
+            isOutsideRide: Bool = false,
+            isTerminal: Bool
+        ) {
+            self.id = id
+            self.stopID = stopID
+            self.name = name
+            self.coordinate = coordinate
+            self.date = date
+            self.isPassed = isPassed
+            self.isVehicleHere = isVehicleHere
+            self.isUserStop = isUserStop
+            self.isBoardingStop = isBoardingStop
+            self.isOutsideRide = isOutsideRide
+            self.isTerminal = isTerminal
+        }
     }
 
     let rows: [Row]
@@ -68,17 +97,79 @@ struct TripStopListModel {
     let vehicleIndex: Int?
     /// The row marked as the rider's stop, if any.
     let userIndex: Int?
+    /// The row marked as the boarding stop on a shared trip, if any.
+    let boardingIndex: Int?
+
+    init(
+        rows: [Row],
+        vehicleIndex: Int?,
+        userIndex: Int?,
+        boardingIndex: Int? = nil
+    ) {
+        self.rows = rows
+        self.vehicleIndex = vehicleIndex
+        self.userIndex = userIndex
+        self.boardingIndex = boardingIndex ?? rows.firstIndex { $0.isBoardingStop }
+    }
+
+    /// The stop list the trip page shows for `convertible`. Its list and its
+    /// map's dots are both built from this, so they can't disagree about which
+    /// stop is the rider's on a shared trip.
+    static func make(
+        convertible: TripConvertible,
+        details: TripDetails?,
+        sharedDestinationStopID: StopID?
+    ) -> TripStopListModel {
+        let departure = convertible.arrivalDeparture
+        return make(
+            stopTimes: details?.stopTimes ?? [],
+            userStopID: departure?.stopID,
+            userStopSequence: departure?.stopSequence,
+            closestStopID: convertible.tripStatus?.closestStopID,
+            sharedDestinationStopID: sharedDestinationStopID
+        )
+    }
 
     static func make<S: TripStopListEntry>(
         stopTimes: [S],
         userStopID: StopID?,
         userStopSequence: Int?,
-        closestStopID: StopID?
+        closestStopID: StopID?,
+        sharedDestinationStopID: StopID? = nil
     ) -> TripStopListModel {
-        let userIndex = userStopID.flatMap {
-            index(in: stopTimes, stopID: $0, stopSequence: userStopSequence)
+        let riderStops: RiderStops? = userStopID.map {
+            riderStops(
+                in: stopTimes,
+                userStopID: $0,
+                userStopSequence: userStopSequence,
+                sharedDestinationStopID: sharedDestinationStopID
+            )
         }
-        let vehicleIndex = vehicleIndex(in: stopTimes, closestStopID: closestStopID, userIndex: userIndex)
+
+        let userIndex: Int?
+        let boardingIndex: Int?
+
+        if let riderStops {
+            userIndex = riderStops.userStopIndex
+            boardingIndex = riderStops.boardingMarkerIndex
+        } else if let sharedDestinationStopID {
+            userIndex = destinationStopIndex(in: stopTimes, destinationStopID: sharedDestinationStopID, boardingIndex: nil)
+            boardingIndex = nil
+        } else {
+            userIndex = nil
+            boardingIndex = nil
+        }
+
+        let rideIndices = riderStops?.rideIndices
+        // Anchored on where the rider boards even when the marker has moved to a
+        // shared destination. The trip arrives as the boarding stop's
+        // `ArrivalDeparture`, so that is the one stop the shared trip's own data
+        // is about.
+        let vehicleIndex = vehicleIndex(
+            in: stopTimes,
+            closestStopID: closestStopID,
+            userIndex: riderStops?.boardingIndex ?? userIndex
+        )
 
         let rows = stopTimes.enumerated().map { index, stopTime in
             Row(
@@ -90,16 +181,23 @@ struct TripStopListModel {
                 isPassed: vehicleIndex.map { index < $0 } ?? false,
                 isVehicleHere: index == vehicleIndex,
                 isUserStop: index == userIndex,
+                isBoardingStop: index == boardingIndex,
+                isOutsideRide: rideIndices.map { !$0.contains(index) } ?? false,
                 isTerminal: index == stopTimes.count - 1
             )
         }
 
-        return TripStopListModel(rows: rows, vehicleIndex: vehicleIndex, userIndex: userIndex)
+        return TripStopListModel(
+            rows: rows,
+            vehicleIndex: vehicleIndex,
+            userIndex: userIndex,
+            boardingIndex: boardingIndex
+        )
     }
 
-    /// The rider's rows on a trip, as the UIKit trip page needs them. One
-    /// resolution feeds the stop list, the progress header, and the map's stop
-    /// pins, so none of them can disagree about which row is "your stop".
+    /// The rider's rows on a trip. One resolution feeds the stop list and the
+    /// trip's other readers, so none of them can disagree about which row is
+    /// "your stop".
     struct RiderStops {
         /// Where the rider boards: the row the trip's own `ArrivalDeparture` is
         /// for, so its `arrivalDepartureMinutes` count down to this row.
@@ -134,32 +232,9 @@ struct TripStopListModel {
             guard let boardingIndex, let destinationIndex, boardingIndex < destinationIndex else { return nil }
             return boardingIndex...destinationIndex
         }
-
-        /// The progress header's countdown. On a shared trip, the destination's
-        /// own prediction once it has loaded. Until then, and on every other
-        /// trip, the boarding stop's, which `TripProgressViewModel` shows only
-        /// while the boarding stop is also the rider's stop. See #449.
-        ///
-        /// - Parameters:
-        ///   - boardingMinutes: Minutes until the vehicle reaches the boarding stop.
-        ///   - destinationMinutes: Minutes until it reaches the shared
-        ///     destination, or `nil` until that prediction has loaded.
-        func countdown(boardingMinutes: Int?, destinationMinutes: Int?) -> Countdown {
-            if let destinationIndex, let destinationMinutes {
-                return Countdown(stopIndex: destinationIndex, minutes: destinationMinutes)
-            }
-            return Countdown(stopIndex: boardingIndex, minutes: boardingMinutes)
-        }
     }
 
-    /// What the progress header counts down to: a row, and the minutes until
-    /// the vehicle reaches it. Built by `RiderStops.countdown`.
-    struct Countdown {
-        let stopIndex: Int?
-        let minutes: Int?
-    }
-
-    /// Resolves the rider's rows from the trip panel's `ArrivalDeparture`.
+    /// Resolves the rider's rows from the trip's `ArrivalDeparture`.
     /// `sharedDestinationStopID` is set when the trip was opened from a shared
     /// link that named where the sharer steps off. See #449.
     static func riderStops(
@@ -219,35 +294,6 @@ struct TripStopListModel {
         // slice out of bounds.
         let searchStart = min((boardingIndex.map { $0 + 1 }) ?? 0, stopTimes.count)
         return stopTimes[searchStart...].firstIndex { $0.stopID == destinationStopID }
-    }
-
-    /// Vehicle row for UIKit (and any caller that only has IDs), using the same
-    /// loop-aware rules as `make` / `vehicleIndex`. #1425: do not replace this
-    /// with `firstIndex { $0.stopID == closestStopID }`.
-    static func vehicleStopIndex<S: TripStopListEntry>(
-        in stopTimes: [S],
-        closestStopID: StopID?,
-        userStopID: StopID?,
-        userStopSequence: Int?
-    ) -> Int? {
-        let userIndex = userStopID.flatMap {
-            index(in: stopTimes, stopID: $0, stopSequence: userStopSequence)
-        }
-        return vehicleIndex(in: stopTimes, closestStopID: closestStopID, userIndex: userIndex)
-    }
-
-    /// Convenience overload for the trip panel's `ArrivalDeparture`.
-    static func vehicleStopIndex(
-        in stopTimes: [TripStopTime],
-        closestStopID: StopID?,
-        arrivalDeparture: ArrivalDeparture?
-    ) -> Int? {
-        vehicleStopIndex(
-            in: stopTimes,
-            closestStopID: closestStopID,
-            userStopID: arrivalDeparture?.stopID,
-            userStopSequence: arrivalDeparture?.stopSequence
-        )
     }
 
     /// The vehicle's position, resolved from a stop ID that a loop route can
@@ -349,24 +395,57 @@ extension TripStopListModel {
     static let maximumApproachingStops = 3
 
     /// The runs to collapse, in list order.
+    ///
+    /// Neither the vehicle marker nor the rider's stops (the destination and the
+    /// boarding stop on a shared trip) are ever collapsed into a run.
     var groups: [CollapsedGroup] {
         guard let vehicleIndex else { return [] }
 
-        // Passed stops, split around the rider's stop when the vehicle has
-        // already been through it. The run that ends at the vehicle is named
-        // the same either way: it is the run that grows as the vehicle moves.
-        var passedRuns = [(id: "passed", range: 0..<vehicleIndex)]
-        if let userIndex, userIndex < vehicleIndex {
+        // Passed stops, split around rider stops (boarding and destination)
+        // when the vehicle has already been through them. The run that ends at
+        // the vehicle is named the same either way: it is the run that grows as
+        // the vehicle moves.
+        let passedSplits = [boardingIndex, userIndex]
+            .compactMap { $0 }
+            .filter { $0 < vehicleIndex }
+            .sorted()
+
+        let passedRuns: [(id: String, range: Range<Int>)]
+        switch passedSplits.count {
+        case 0:
+            passedRuns = [(id: "passed", range: 0..<vehicleIndex)]
+        case 1:
+            let split = passedSplits[0]
             passedRuns = [
-                (id: "passed-before-your-stop", range: 0..<userIndex),
-                (id: "passed", range: (userIndex + 1)..<vehicleIndex)
+                (id: "passed-before-your-stop", range: 0..<split),
+                (id: "passed", range: (split + 1)..<vehicleIndex)
             ]
+        case 2:
+            let first = passedSplits[0]
+            let second = passedSplits[1]
+            passedRuns = [
+                (id: "passed-before-your-stop", range: 0..<first),
+                (id: "passed-between-your-stops", range: (first + 1)..<second),
+                (id: "passed", range: (second + 1)..<vehicleIndex)
+            ]
+        default:
+            passedRuns = []
         }
+
         var groups = passedRuns
             .filter { $0.range.count >= Self.minimumPassedRun }
             .map { group(id: $0.id, kind: .passed, range: $0.range) }
 
-        if let userIndex, userIndex - vehicleIndex - 1 > Self.maximumApproachingStops {
+        // Approaching stops ahead of the vehicle, split around the boarding stop
+        // if the vehicle hasn't reached it yet.
+        if let boardingIndex, vehicleIndex < boardingIndex {
+            if boardingIndex - vehicleIndex - 1 > Self.maximumApproachingStops {
+                groups.append(group(id: "approaching-boarding", kind: .approaching, range: (vehicleIndex + 1)..<boardingIndex))
+            }
+            if let userIndex, userIndex - boardingIndex - 1 > Self.maximumApproachingStops {
+                groups.append(group(id: "approaching", kind: .approaching, range: (boardingIndex + 1)..<userIndex))
+            }
+        } else if let userIndex, userIndex - vehicleIndex - 1 > Self.maximumApproachingStops {
             groups.append(group(id: "approaching", kind: .approaching, range: (vehicleIndex + 1)..<userIndex))
         }
 
@@ -405,8 +484,7 @@ extension TripStopListModel {
 /// omits the time.
 extension TripStopTime: TripStopListEntry {
     /// Reads through the resolved `stop` reference, which `loadReferences`
-    /// populates before any of this renders — the same access `TripStopListItem`
-    /// uses.
+    /// populates before any of this renders.
     var stopName: String { stop.name }
     var scheduledArrival: Date? { arrivalDate }
     var stopCoordinate: CLLocationCoordinate2D? { stop.location.coordinate }

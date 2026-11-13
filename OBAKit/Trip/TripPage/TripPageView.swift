@@ -20,12 +20,17 @@ struct TripPageActions {
     var canStartLiveActivity = false
     var canReportGhostBus = false
     var onBack: () -> Void = {}
-    var onSelectStop: (StopID) -> Void = { _ in }
+    /// The whole row, not just its stop: the time on it is when this trip
+    /// reaches the stop, which the stop it opens needs for transfers.
+    var onSelectStop: (TripStopListModel.Row) -> Void = { _ in }
+    /// The "Starts as" or "Continues as" row, by which side of the trip it's on.
+    var onSelectAdjacentTrip: (TripAdjacentTrips.Order) -> Void = { _ in }
     var onLiveActivity: () -> Void = {}
     var onBookmark: () -> Void = {}
     var onSchedule: () -> Void = {}
     var onAlarm: () -> Void = {}
     var onReportGhostBus: () -> Void = {}
+    var onSelectAlert: (ServiceAlert) -> Void = { _ in }
 }
 
 /// Thin hosting wrapper for `TripPageView`. Its only job is to apply
@@ -126,14 +131,7 @@ struct TripPageView: View {
         Color(uiColor: route?.color ?? ThemeColors.shared.brand)
     }
 
-    private var stopList: TripStopListModel {
-        TripStopListModel.make(
-            stopTimes: viewModel.tripDetails?.stopTimes ?? [],
-            userStopID: departure?.stopID,
-            userStopSequence: departure?.stopSequence,
-            closestStopID: convertible.tripStatus?.closestStopID
-        )
-    }
+    private var stopList: TripStopListModel { viewModel.stopList }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -153,15 +151,24 @@ struct TripPageView: View {
                 VStack(alignment: .leading, spacing: StopTripSpacing.tripPage(compactMode)) {
                     card
 
+                    // The trip's own alerts, as the classic trip panel lists them
+                    // above its stops. The stop page's card, so the two read alike.
+                    if let alerts = viewModel.tripDetails?.serviceAlerts, !alerts.isEmpty {
+                        ServiceAlertsSection(alerts: alerts, onSelect: actions.onSelectAlert)
+                    }
+
                     let list = stopList
                     if !list.rows.isEmpty {
                         sectionHeader(stopCountTitle(list.rows.count))
 
                         TripStopListView(
                             model: list,
+                            adjacentTrips: viewModel.adjacentTrips,
+                            loadingAdjacentTrip: viewModel.loadingAdjacentTrip,
                             routeColor: routeColor,
                             routeType: route?.routeType ?? .unknown,
-                            onSelect: { actions.onSelectStop($0.stopID) }
+                            onSelect: { actions.onSelectStop($0) },
+                            onSelectAdjacentTrip: { actions.onSelectAdjacentTrip($0) }
                         )
                     } else {
                         // Never render the absence as blank space. The stop list is
@@ -227,9 +234,13 @@ struct TripPageView: View {
         }
     }
 
+    private var activeDeparture: ArrivalDeparture? {
+        viewModel.destinationArrivalDeparture ?? departure
+    }
+
     private var card: some View {
         TripCardView(
-            departure: departure,
+            departure: activeDeparture,
             routeShortName: route?.shortName ?? "",
             headsign: departure?.tripHeadsign ?? convertible.trip.headsign ?? route?.shortName ?? "",
             routeColor: routeColor,

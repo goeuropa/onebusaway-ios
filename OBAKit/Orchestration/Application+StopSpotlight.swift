@@ -14,14 +14,19 @@ import OBAKitCore
 extension Application {
     /// Starts keeping the current region's stops in Spotlight, and indexes them
     /// now: `regionsService(_:updatedRegion:)` doesn't fire on a normal launch.
-    /// Called from `application(_:didFinishLaunching:)`, so only a launched app
-    /// writes the index.
+    /// See `StopSpotlightIndexer.indexOrReplace()` for when that clears the index
+    /// first. Called from `application(_:didFinishLaunching:)`, so only a
+    /// launched app writes the index. It also becomes
+    /// `StopSpotlightIndexer.current`, so Spotlight's re-index requests reach it.
     func startStopSpotlightIndexing() {
-        stopSpotlightIndexer = StopSpotlightIndexer(
+        let indexer = StopSpotlightIndexer(
             userDataStore: userDataStore,
             stopCache: stopCacheRepository,
+            userDefaults: userDefaults,
             currentRegion: { [weak self] in self?.currentRegion }
         )
-        stopSpotlightIndexer?.replaceAll()
+        stopSpotlightIndexer = indexer
+        StopSpotlightIndexer.current = indexer
+        indexer.indexOrReplace()
     }
 }
