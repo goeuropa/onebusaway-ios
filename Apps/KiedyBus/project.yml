@@ -12,8 +12,9 @@ targets:
         name: App
         group: KiedyBus
         # gpx files are simulated-location fixtures for schemes, not app
-        # resources; keep them out of the bundle. project.yml is project wiring.
-        excludes: ["gpx_files", "project.yml"]
+        # resources; keep them out of the bundle. project.yml and watch.yml are
+        # project wiring, not resources.
+        excludes: ["gpx_files", "project.yml", "watch.yml"]
       - path: Apps/Shared/CommonClient
         name: Common
         group: KiedyBus
@@ -22,45 +23,59 @@ targets:
       properties:
         com.apple.security.application-groups:
           - group.pl.kiedybus.iphone
+        com.apple.developer.associated-domains:
+          - applinks:onebusaway.co
+          - applinks:www.onebusaway.co
+          - applinks:sidecar.onebusaway.org
+        com.apple.developer.in-app-payments:
+          - merchant.pl.kiedybus.iphone
     info:
       path: Apps/KiedyBus/Info.plist
       properties:
+        NSSupportsLiveActivities: true
+        NSSupportsLiveActivitiesFrequentUpdates: true
         CFBundleDisplayName: KiedyBus
         CFBundleURLTypes: [{CFBundleTypeRole: "Editor", CFBundleURLIconFile: "", CFBundleURLName: "kiedybus", CFBundleURLSchemes: ["kiedybus"]}]
+        # fb, twitter and comgooglemaps come from Apps/Shared/app_shared.yml;
+        # XcodeGen concatenates the two lists, so repeating them here duplicated them.
+        LSApplicationQueriesSchemes:
+          - fb313213768708402HART
+          - org.sdmts.riderapp.compassmobile.payments
+          - org.sdmts.pronto
+          - co.bytemark.tgt
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: false
-          NSExceptionDomains:
-            goeuropa.eu:
-              NSTemporaryExceptionAllowsInsecureHTTPLoads: true
-              NSIncludesSubdomains: true
-            iplaner.pl:
-              NSTemporaryExceptionAllowsInsecureHTTPLoads: true
-              NSIncludesSubdomains: true
-            kiedybus.pl:
-              NSTemporaryExceptionAllowsInsecureHTTPLoads: true
-              NSIncludesSubdomains: true
-        NSHumanReadableCopyright: © goEuropa
-        # Shown when a nearby (proximity) alert asks for Always; see app_shared.yml.
-        NSLocationAlwaysAndWhenInUseUsageDescription: "Show your location on the map. Nearby alerts also use your location in the background to let you know when you're approaching a stop you chose, even when the app is closed."
-        NSLocationWhenInUseUsageDescription: Show your location on the map
+          NSExceptionDomains: {
+            "onebusaway.co": {
+                NSIncludesSubdomains: true,
+                NSExceptionAllowsInsecureHTTPLoads: true
+            },
+            "sidecar.onebusaway.org": {
+                NSIncludesSubdomains: true,
+                NSExceptionAllowsInsecureHTTPLoads: true
+            }
+          }
+        NSHumanReadableCopyright: © goEuropa & Open Transit Software Foundation
         NSUserActivityTypes:
           - pl.kiedybus.iphone.user_activity.stop
           - pl.kiedybus.iphone.user_activity.trip
         OBAKitConfig:
           AppDevelopersEmailAddress: info@goeuropa.eu
           AppGroup: group.pl.kiedybus.iphone
+          AppStoreID: "org.onebusaway"
           BundledRegionsFileName: regions.json
-          ExtensionURLScheme: kiedybus
+          Donations:
+            Enabled: false
+            DonationManagementPortal: "https://opentransitsoftwarefoundation.org/manage-donations"
+          ExtensionURLScheme: onebusaway
           MoreTab:
-            HeaderSupportText: "Powered by goEuropa"
-            ShowHelpOutSection: false
-            CustomLinks:
-              - Title: "goEuropa Website"
-                URL: "https://www.goeuropa.eu"
-          PrivacyPolicyURL: https://www.goeuropa.eu
-          RESTServerAPIKey: web
+            ShowHelpOutSection: true
+            DevelopURL: "https://kiedybus.pl"
+          PrivacyPolicyURL: https://kiedybus.pl/polityka-prywatnosci.html
+          PushNotificationAPIKey: d5d0d28a-6091-46cd-9627-0ce01ffa9f9e
+          RESTServerAPIKey: org.onebusaway.iphone
           RegionsServerBaseAddress: https://kiedybus.pl
-          RegionsServerAPIPath: /regions-v4.json
+          RegionsServerAPIPath: /regions-v3.json
     settings:
       base:
         DEVELOPMENT_TEAM: 85APG5FQFE
@@ -78,19 +93,24 @@ targets:
           AppGroup: group.pl.kiedybus.iphone
           BundledRegionsFileName: regions.json
           ExtensionURLScheme: kiedybus
-          RESTServerAPIKey: pl.kiedybus.iphone
+          RESTServerAPIKey: org.onebusaway.iphone
           RegionsServerBaseAddress: https://kiedybus.pl
-          RegionsServerAPIPath: /regions-v4.json
+          RegionsServerAPIPath: /regions-v3.json
     settings:
       base:
         DEVELOPMENT_TEAM: 85APG5FQFE
         PRODUCT_BUNDLE_IDENTIFIER: pl.kiedybus.iphone.OBAWidget
 include:
+  - path: OBAKitUITests/project.yml
   - path: Apps/Shared/app_shared.yml
   - path: Apps/Shared/info_plist.yml
+  - path: Apps/Shared/analytics_fx_config.yml
+  - path: Apps/Shared/push_config.yml
   - path: OBAKitTests/project.yml
   - path: OBAWidget/project.yml
+  - path: Apps/KiedyBus/watch.yml
+    relativePaths: false
+    enable: ${OBA_WATCH}
   - path: Apps/Shared/healthkit.yml
     relativePaths: false
     enable: ${OBA_HEALTHKIT}
-
