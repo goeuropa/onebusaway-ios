@@ -113,6 +113,7 @@ public struct ErrorReport: Sendable {
         case cellularDataRestricted
         case captivePortal
         case noRegionSelected
+        case authentication
         /// Not worth telling the rider about; see ``ErrorReport/isSilent``.
         case silent
         /// Not a failed request: an error that carries its own message, like
@@ -208,7 +209,7 @@ public struct ErrorReport: Sendable {
 
         // Checked on the raw error: classification turns a cancellation into
         // `networkFailure` ("You're offline"), and an unreadable payload with no
-        // region name into an `UnstructuredError` that would read as its own message.
+        // region name into an error that would read as its own message.
         let ownMessage = Self.ownMessage(of: classified)
         if !Self.isCancellation(error), !Self.isUnreadablePayload(error), let message = ownMessage {
             self.cause = .message
@@ -322,6 +323,7 @@ public struct ErrorReport: Sendable {
         }
 
         switch apiError {
+        case .requestFailure(let response) where [401, 403].contains(response.statusCode): return .authentication
         case .rateLimited: return .rateLimited
         case .serverError: return .serverError
         case .serverUnavailable: return .serverUnavailable
@@ -392,6 +394,8 @@ public struct ErrorReport: Sendable {
             return OBALoc("error_report.summary.captive_portal", value: "Open the network's login page to continue.", comment: "One-line toast text under a title saying the Wi-Fi network needs the rider to sign in.")
         case .noRegionSelected:
             return OBALoc("error_report.summary.no_region_selected", value: "Choose your region to see transit info.", comment: "One-line toast text: no transit region has been selected.")
+        case .authentication:
+            return OBALoc("error_report.summary.authentication", value: "The server didn't accept this app's request.", comment: "One-line toast text for an authentication or authorization failure that the rider cannot fix in the app.")
         case .silent, .message, .fallback:
             return fallbackSummary
         }
@@ -432,6 +436,8 @@ public struct ErrorReport: Sendable {
         case .noRegionSelected:
             let fmt = OBALoc("error_report.explanation.no_region_selected_fmt", value: "%@ needs to know which transit region you're in.", comment: "Explanation of an error where no transit region is selected. The substituted value is the app name.")
             return String(format: fmt, Bundle.main.appName)
+        case .authentication:
+            return OBALoc("error_report.explanation.authentication", value: "The server didn't accept this app's request. Please contact support if this continues.", comment: "Explanation of an authentication or authorization failure that the rider cannot fix in the app.")
         case .silent, .message, .fallback:
             return fallbackExplanation
         }
@@ -511,7 +517,7 @@ public struct ErrorReport: Sendable {
             return 429
         case .serverError:
             return 500
-        case .serverUnavailable(_, let statusCode):
+        case .serverUnavailable(_, let statusCode, _):
             return statusCode
         default:
             return nil
@@ -519,10 +525,12 @@ public struct ErrorReport: Sendable {
     }
 
     private static func innermostError(_ error: Error) -> Error {
-        if case .networkFailure(let inner?) = error as? APIError {
+        switch error as? APIError {
+        case .networkFailure(let inner?), .serverUnavailable(_, _, let inner?):
             return inner
+        default:
+            return error
         }
-        return error
     }
 
     private static func requestURL(from error: Error) -> URL? {
@@ -550,10 +558,46 @@ public struct ErrorReport: Sendable {
         return nil
     }
 
-    private static func stripQuery(_ url: URL) -> URL {
+    static func stripQuery(_ url: URL) -> URL {
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
         components.query = nil
         components.fragment = nil
         return components.url ?? url
+    }
+
+    // MARK: - Crash Reporting
+
+    /// `error` with the query stripped from every failing request URL in its
+    /// userInfo, its underlying error's, and so on down (#1710).
+    ///
+    /// Crashlytics writes each userInfo value's `description`, and a nested
+    /// error's description includes its own userInfo. The query holds the
+    /// region's API key and, for calls like stops-for-location, the rider's
+    /// coordinates. Same domain and code, so reports still group together.
+    /// Returned as is when there is nothing to strip.
+    public static func sanitizedForReporting(_ error: Error) -> Error {
+        sanitized(error as NSError) ?? error
+    }
+
+    /// Nil when `error` has no URL with a query to strip.
+    private static func sanitized(_ error: NSError) -> NSError? {
+        var userInfo = error.userInfo
+        var changed = false
+
+        if let url = userInfo[NSURLErrorFailingURLErrorKey] as? URL, stripQuery(url) != url {
+            userInfo[NSURLErrorFailingURLErrorKey] = stripQuery(url)
+            changed = true
+        }
+        if let string = userInfo[NSURLErrorFailingURLStringErrorKey] as? String,
+           let url = URL(string: string), stripQuery(url) != url {
+            userInfo[NSURLErrorFailingURLStringErrorKey] = stripQuery(url).absoluteString
+            changed = true
+        }
+        if let underlying = userInfo[NSUnderlyingErrorKey] as? NSError, let clean = sanitized(underlying) {
+            userInfo[NSUnderlyingErrorKey] = clean
+            changed = true
+        }
+
+        return changed ? NSError(domain: error.domain, code: error.code, userInfo: userInfo) : nil
     }
 }

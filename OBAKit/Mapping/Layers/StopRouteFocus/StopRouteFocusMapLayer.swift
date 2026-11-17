@@ -100,11 +100,27 @@ final class StopRouteFocusMapLayer: NSObject, MapLayer {
     private var presentationToken = UUID()
     private var shapeTasks: [Task<Void, Never>] = []
 
-    init(mapView: MKMapView, shapeCache: ShapeCache, formatters: Formatters) {
+    // MARK: - Estimated positions
+
+    /// `nil` leaves every vehicle where the feed says.
+    private let vehicleEstimation: StopVehicleEstimation?
+    /// Vehicles whose marker follows an estimate, by `DrawnVehicle.id`.
+    private var estimates: [String: VehicleEstimate] { vehicleEstimation?.estimates ?? [:] }
+    /// The latest arrivals' server clock; see `StopVehicleEstimation.refresh`.
+    private var serverClock: ServerClockSample?
+
+    init(
+        mapView: MKMapView,
+        shapeCache: ShapeCache,
+        formatters: Formatters,
+        vehicleEstimation: StopVehicleEstimation? = nil
+    ) {
         self.mapView = mapView
         self.shapeCache = shapeCache
         self.formatters = formatters
+        self.vehicleEstimation = vehicleEstimation
         super.init()
+        vehicleEstimation?.onEstimates = { [weak self] in self?.apply(estimates: $0, previous: $1) }
     }
 
     /// Cancels and drops every cached shape. Called by `MapViewController` when
@@ -115,8 +131,12 @@ final class StopRouteFocusMapLayer: NSObject, MapLayer {
     /// callers fire-and-forget.
     @discardableResult
     func invalidateShapeCache() -> Task<Void, Never> {
-        let shapeCache = shapeCache
-        return Task { await shapeCache.removeAll() }
+        let shapeCache = shapeCache, vehicleEstimation = vehicleEstimation
+        return Task {
+            await shapeCache.removeAll()
+            // Trip IDs are region-scoped too.
+            await vehicleEstimation?.removeAllSchedules()
+        }
     }
 
     // MARK: - Presentation lifecycle
@@ -160,6 +180,7 @@ final class StopRouteFocusMapLayer: NSObject, MapLayer {
         presentationToken = UUID()
         for task in shapeTasks { task.cancel() }
         shapeTasks.removeAll()
+        vehicleEstimation?.stop()
         cancellables.removeAll()
         focus = nil
         focusedVehicleID = nil
@@ -183,10 +204,13 @@ final class StopRouteFocusMapLayer: NSObject, MapLayer {
     /// first load — the previous value was nil, no departure resolved, and
     /// `syncVehicleAnnotations` skipped every one — and left every refresh after
     /// resolving a generation stale.
-    func apply(arrivals: StopArrivals?, isListFiltered: Bool, preferences: StopPreferences) {
+    func apply(arrivals: StopArrivals?, isListFiltered: Bool, preferences: StopPreferences, serverClock: ServerClockSample? = nil) {
+        self.serverClock = serverClock
         let all = arrivals?.arrivalsAndDepartures ?? []
         // Assigned before `update`, which consults it for every vehicle.
-        departureProvider = { departureID in all.first { $0.id == departureID } }
+        // Asked once per vehicle, twice a poll: a lookup, not a scan.
+        let byID = Dictionary(all.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        departureProvider = { byID[$0] }
 
         let visible = StopRouteFocusModel.visibleDepartures(
             all,
@@ -214,6 +238,7 @@ final class StopRouteFocusMapLayer: NSObject, MapLayer {
 
         syncVehicleAnnotations()
         syncRouteOverlays()
+        refreshEstimationInputs()
     }
 
     /// Whether this layer is standing down so another can have the map.
@@ -229,6 +254,7 @@ final class StopRouteFocusMapLayer: NSObject, MapLayer {
         isSuppressed = suppressed
 
         guard !suppressed else {
+            vehicleEstimation?.stop()
             removeAllContent()
             // Shapes are pinned by route so a refresh doesn't redraw an unchanged
             // line. Clearing the pins is what lets them be drawn again on the way
@@ -240,6 +266,7 @@ final class StopRouteFocusMapLayer: NSObject, MapLayer {
 
         syncVehicleAnnotations()
         syncRouteOverlays()
+        refreshEstimationInputs()
     }
 
     /// A vehicle marker tap. `MapViewController` calls this from
@@ -320,10 +347,12 @@ final class StopRouteFocusMapLayer: NSObject, MapLayer {
 
             if let existing = survivors[vehicle.id] {
                 let routeColor = model.routes.first { $0.routeID == vehicle.routeID }?.color ?? tintColor
-                existing.update(tripStatus: tripStatus, coordinate: vehicle.coordinate, routeColor: routeColor)
+                let estimate = estimates[vehicle.id]
+                existing.update(tripStatus: tripStatus, coordinate: vehicle.coordinate, routeColor: routeColor, movesMarker: estimate == nil)
                 if let view = mapView.view(for: existing) as? PulsingVehicleAnnotationView {
                     view.realTimeAnnotationColor = routeColor
                     view.applyTripStatus(tripStatus)
+                    view.applyEstimate(estimate)
                 }
                 next.append(existing)
             } else {
@@ -333,7 +362,7 @@ final class StopRouteFocusMapLayer: NSObject, MapLayer {
                     routeColor: model.routes.first { $0.routeID == vehicle.routeID }?.color ?? tintColor,
                     departureID: vehicle.departureID,
                     tripStatus: tripStatus,
-                    coordinate: vehicle.coordinate
+                    coordinate: estimates[vehicle.id]?.coordinate ?? vehicle.coordinate
                 )
                 next.append(annotation)
                 toAdd.append(annotation)
@@ -356,6 +385,29 @@ final class StopRouteFocusMapLayer: NSObject, MapLayer {
         for annotation in annotations {
             guard let view = mapView.view(for: annotation) as? PulsingVehicleAnnotationView else { continue }
             view.zPriority = (annotation.routeID == focus?.focusedRouteID) ? .max : .defaultUnselected
+        }
+    }
+
+    // MARK: - Estimation
+
+    private func refreshEstimationInputs() {
+        vehicleEstimation?.refresh(vehicles: model.vehicles, serverClock: serverClock) { departureProvider?($0) }
+    }
+
+    private func apply(estimates: [String: VehicleEstimate], previous: [String: VehicleEstimate]) {
+        for annotation in annotations {
+            let view = mapView.view(for: annotation) as? PulsingVehicleAnnotationView
+            if let estimate = estimates[annotation.id] {
+                VehicleCoordinateUpdate.follow(
+                    annotation, to: estimate.coordinate, snap: estimate.shouldSnap,
+                    duration: VehicleEstimationDriver.glideDuration(for: estimate), in: mapView
+                )
+                view?.applyEstimate(estimate)
+            } else if previous[annotation.id] != nil {
+                // Back to the feed; the next arrivals poll moves it there.
+                if let status = annotation.tripStatus { view?.applyTripStatus(status) }
+                view?.applyEstimate(nil)
+            }
         }
     }
 
@@ -614,16 +666,6 @@ final class StopRouteFocusMapLayer: NSObject, MapLayer {
         return [formatters.accessibilityLabelForArrivalDeparture(routeAndHeadsign: routeAndHeadsign), vehicle].joined(separator: ", ")
     }
 
-    /// Relative-time formatter for "position updated 12s ago". Held statically —
-    /// constructing one per callout is measurably wasteful and they are stateless.
-    private static let updatedFormatter: RelativeDateTimeFormatter = {
-        let formatter = RelativeDateTimeFormatter()
-        // `.abbreviated` ("12s ago"), not `.short` ("12 sec. ago") — the design's
-        // freshness line, and short enough not to wrap under the countdown.
-        formatter.unitsStyle = .abbreviated
-        return formatter
-    }()
-
     /// "Vehicle NNNN" — see the spec's callout content list.
     private static let vehicleLabelFormat = OBALoc(
         "vehicle_callout.vehicle_label_fmt",
@@ -651,7 +693,7 @@ final class StopRouteFocusMapLayer: NSObject, MapLayer {
             statusColor: status.color,
             // There is no `Formatters.formattedLastUpdated`. `ArrivalDeparture`
             // carries `lastUpdated: Date` (:35); format it here.
-            updatedText: Self.updatedFormatter.localizedString(for: departure.lastUpdated, relativeTo: Date()),
+            updatedText: RelativeDateTimeFormatter.vehiclePositionAge.localizedString(for: departure.lastUpdated, relativeTo: Date()),
             routeColor: annotation.routeColor,
             onFollow: { [weak self] in self?.onFollowTrip?(departure) }
         )

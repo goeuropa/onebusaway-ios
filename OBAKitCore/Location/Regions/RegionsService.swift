@@ -82,23 +82,31 @@ public class RegionsService: NSObject, LocationServiceDelegate {
         // One-time migration from UserDefaults to disk-based storage.
         RegionsService.migrateFromUserDefaultsIfNeeded(userDefaults: userDefaults, fileStorage: fileStorage)
 
-        if let regions = RegionsService.loadStoredRegions(from: fileStorage), regions.count > 0 {
-            self.regions = regions
+        let loadedStoredRegions = RegionsService.loadStoredRegions(from: fileStorage)
+        if let loadedStoredRegions, !loadedStoredRegions.isEmpty {
+            self.regions = loadedStoredRegions
+            self.hasCompletedSuccessfulRefresh = userDefaults.bool(forKey: RegionsService.hasCompletedSuccessfulRefreshUserDefaultsKey)
+                || userDefaults.object(forKey: RegionsService.regionsUpdatedAtUserDefaultsKey) != nil
         }
         else {
             self.regions = RegionsService.bundledRegions(path: bundledRegionsFilePath)
+            self.hasCompletedSuccessfulRefresh = false
         }
 
         super.init()
+
+        // A saved successful list may predate dropped-region tracking.
+        clearRetiredRegionFallback()
 
         if let delegate = delegate {
             addDelegate(delegate)
         }
 
         let autoSelectRegion = userDefaults.bool(forKey: RegionsService.automaticallySelectRegionUserDefaultsKey) || currentRegion == nil
+        let autoSelectionRegions = self.autoSelectionRegions
 
         if autoSelectRegion, let location = locationService.currentLocation {
-            currentRegion = RegionsService.firstRegion(in: self.regions, containing: location)
+            currentRegion = RegionsService.firstRegion(in: autoSelectionRegions, containing: location)
         }
 
         // Fixed region from OBAKitConfig: match by name, then fall back to URL.
@@ -117,7 +125,7 @@ public class RegionsService: NSObject, LocationServiceDelegate {
 
         // Auto-select when only one active region is available.
         if currentRegion == nil {
-            let activeRegions = self.regions.filter { $0.isActive }
+            let activeRegions = autoSelectionRegions.filter { $0.isActive }
             if activeRegions.count == 1, let onlyRegion = activeRegions.first {
                 currentRegion = onlyRegion
             }
@@ -187,6 +195,23 @@ public class RegionsService: NSObject, LocationServiceDelegate {
 
     // MARK: - Regions Data
 
+    /// Tracks whether a network refresh of the regions list has ever succeeded.
+    ///
+    /// Persisted under `hasCompletedSuccessfulRefreshUserDefaultsKey`, and also seeded from
+    /// `regionsUpdatedAtUserDefaultsKey` when stored regions load from disk, so it lasts across
+    /// launches. It starts false when the app falls back to the bundled regions, until a refresh succeeds.
+    private var hasCompletedSuccessfulRefresh: Bool = false
+
+    /// Whether the last network refresh of the regions list failed.
+    public private(set) var lastRefreshFailed: Bool = false
+
+    /// Whether the current regions list is trusted. Once any refresh has succeeded, trust lasts
+    /// across launches. The list is untrusted while `lastRefreshFailed` is true, or when the app
+    /// falls back to the bundled regions.
+    var canTrustRegionsList: Bool {
+        hasCompletedSuccessfulRefresh && !lastRefreshFailed
+    }
+
     public private(set) var regions: [Region] {
         didSet {
             if regions.count > 0 {
@@ -200,18 +225,46 @@ public class RegionsService: NSObject, LocationServiceDelegate {
     /// The app's currently-selected `Region`.
     ///
     /// The region identifier is persisted in `UserDefaults`. On read, the full `Region` is
-    /// looked up by identifier so that stale object data is never stored on disk.
+    /// looked up by identifier in the known regions list. If the identifier cannot be found in the
+    /// current regions list and the list cannot be trusted (while `lastRefreshFailed` is true, or when
+    /// the app has fallen back to the bundled regions), the getter falls back to the cached copy
+    /// in `ResolvedRegionStore` to preserve the user's selection offline or during network outages.
+    /// Once a network refresh succeeds, the regions list is trusted: if the stored identifier is not
+    /// in the updated regions list (e.g. after a region is retired or deleted from the server), the
+    /// getter returns `nil` and the cached copy is cleared. The same cleanup also runs at launch
+    /// when the saved list is trusted. A region recorded as dropped stays `nil` while the list is
+    /// untrusted, even if the bundled regions still include it.
     ///
-    /// - Note: The getter can return `nil` when no region has been selected yet, or when the
-    ///   stored identifier no longer matches any known region (e.g. after a region is deleted).
-    ///   The setter silently ignores `nil` — assigning `nil` has no effect and does not clear
-    ///   the stored identifier.
+    /// - Note: The getter returns `nil` when no region has been selected yet, when the stored
+    ///   identifier cannot be resolved and no valid fallback exists, or after a trusted refresh shows
+    ///   the region no longer exists. The setter silently ignores `nil` — assigning `nil` has no
+    ///   effect and does not clear the stored identifier.
     public var currentRegion: Region? {
         get {
             guard let identifier = userDefaults.object(forKey: RegionsService.currentRegionIdentifierUserDefaultsKey) as? Int else {
                 return nil
             }
-            return find(id: identifier)
+            if let region = find(id: identifier) {
+                // An untrusted list, such as the bundled one, can still hold a retired region.
+                if !canTrustRegionsList, region.isCustom != true,
+                   RegionsService.isDroppedRegionIdentifier(identifier, userDefaults: userDefaults) {
+                    return nil
+                }
+                return region
+            }
+
+            if !canTrustRegionsList {
+                if RegionsService.isDroppedRegionIdentifier(identifier, userDefaults: userDefaults) {
+                    return nil
+                }
+                let fallbackStore = ResolvedRegionStore(userDefaults: userDefaults)
+                if let fallbackRegion = fallbackStore.region(bundledRegionsFilePath: bundledRegionsFilePath),
+                   fallbackRegion.regionIdentifier == identifier {
+                    return fallbackRegion
+                }
+            }
+
+            return nil
         }
         set {
             guard let newValue else { return }
@@ -219,8 +272,17 @@ public class RegionsService: NSObject, LocationServiceDelegate {
             let storedIdentifier = userDefaults.object(forKey: RegionsService.currentRegionIdentifierUserDefaultsKey) as? Int
             guard newValue.regionIdentifier != storedIdentifier else { return }
 
+            RegionsService.removeDroppedRegionIdentifier(newValue.regionIdentifier, userDefaults: userDefaults)
+
             userDefaults.set(newValue.regionIdentifier, forKey: RegionsService.currentRegionIdentifierUserDefaultsKey)
             notifyDelegatesRegionChanged(newValue)
+        }
+    }
+
+    private var autoSelectionRegions: [Region] {
+        guard !canTrustRegionsList else { return regions }
+        return regions.filter {
+            $0.isCustom == true || !RegionsService.isDroppedRegionIdentifier($0.regionIdentifier, userDefaults: userDefaults)
         }
     }
 
@@ -230,7 +292,7 @@ public class RegionsService: NSObject, LocationServiceDelegate {
             return nil
         }
 
-        return RegionsService.firstRegion(in: regions, containing: location)
+        return RegionsService.firstRegion(in: autoSelectionRegions, containing: location)
     }
 
     public var automaticallySelectRegion: Bool {
@@ -348,7 +410,29 @@ public class RegionsService: NSObject, LocationServiceDelegate {
     /// Readable off the main actor: App Intent entity queries are `nonisolated`
     /// and must look up the same key the service writes.
     public nonisolated static let currentRegionIdentifierUserDefaultsKey = "OBACurrentRegionIdentifierUserDefaultsKey"
+    public nonisolated static let hasCompletedSuccessfulRefreshUserDefaultsKey = "OBAHasCompletedSuccessfulRefreshUserDefaultsKey"
+    public nonisolated static let droppedRegionIdentifiersUserDefaultsKey = "OBADroppedRegionIdentifiersUserDefaultsKey"
     static let regionsUpdatedAtUserDefaultsKey = "OBARegionsUpdatedAtUserDefaultsKey"
+
+    public nonisolated static func recordDroppedRegionIdentifier(_ identifier: Int, userDefaults: UserDefaults) {
+        var dropped = userDefaults.array(forKey: droppedRegionIdentifiersUserDefaultsKey) as? [Int] ?? []
+        if !dropped.contains(identifier) {
+            dropped.append(identifier)
+            userDefaults.set(dropped, forKey: droppedRegionIdentifiersUserDefaultsKey)
+        }
+    }
+
+    public nonisolated static func isDroppedRegionIdentifier(_ identifier: Int, userDefaults: UserDefaults) -> Bool {
+        let dropped = userDefaults.array(forKey: droppedRegionIdentifiersUserDefaultsKey) as? [Int] ?? []
+        return dropped.contains(identifier)
+    }
+
+    public nonisolated static func removeDroppedRegionIdentifier(_ identifier: Int, userDefaults: UserDefaults) {
+        guard var dropped = userDefaults.array(forKey: droppedRegionIdentifiersUserDefaultsKey) as? [Int],
+              let index = dropped.firstIndex(of: identifier) else { return }
+        dropped.remove(at: index)
+        userDefaults.set(dropped, forKey: droppedRegionIdentifiersUserDefaultsKey)
+    }
 
     // Legacy keys — kept only for the one-time migration read; not written after migration.
     static let legacyStoredRegionsUserDefaultsKey = "OBAStoredRegionsUserDefaultsKey"
@@ -515,12 +599,43 @@ public class RegionsService: NSObject, LocationServiceDelegate {
             return
         }
 
-        let regions = try await apiService.getRegions(apiPath: apiPath).list
-        guard !regions.isEmpty else {
+        do {
+            let regions = try await apiService.getRegions(apiPath: apiPath).list
+            guard !regions.isEmpty else {
+                return
+            }
+
+            hasCompletedSuccessfulRefresh = true
+            userDefaults.set(true, forKey: RegionsService.hasCompletedSuccessfulRefreshUserDefaultsKey)
+            lastRefreshFailed = false
+            self.regions = regions
+
+            clearRetiredRegionFallback()
+        } catch {
+            lastRefreshFailed = true
+            throw error
+        }
+    }
+
+    private func clearRetiredRegionFallback() {
+        guard canTrustRegionsList,
+              let identifier = userDefaults.object(forKey: RegionsService.currentRegionIdentifierUserDefaultsKey) as? Int else { return }
+
+        if regions.contains(where: { $0.regionIdentifier == identifier }) {
+            RegionsService.removeDroppedRegionIdentifier(identifier, userDefaults: userDefaults)
             return
         }
 
-        self.regions = regions
+        // One read decides both that custom regions are readable and that this one is absent.
+        guard let customRegions = try? fileStorage.loadCustomRegions(),
+              !customRegions.contains(where: { $0.regionIdentifier == identifier }) else { return }
+
+        // The selected custom region cannot be deleted, so a missing one means its file failed to load.
+        let store = ResolvedRegionStore(userDefaults: userDefaults)
+        if let cached = store.storedRegion, cached.regionIdentifier == identifier, cached.isCustom == true { return }
+
+        store.write(nil)
+        RegionsService.recordDroppedRegionIdentifier(identifier, userDefaults: userDefaults)
     }
 
     /// Fetches the current list of `Region`s from the network.

@@ -9,6 +9,7 @@
 
 import Foundation
 import MapKit
+import SwiftUI
 import Testing
 @testable import OBAKit
 @testable import OBAKitCore
@@ -25,6 +26,21 @@ enum ModelDecodingError: Error {
 final class FormattersTests: OBATestCase {
     let usLocale = Locale(identifier: "en_US")
     let calendar = Calendar(identifier: .gregorian)
+
+    @Test func `SwiftUI formatter environment has a usable default`() {
+        let formatters = EnvironmentValues().obaFormatters
+
+        #expect(formatters.formattedClockTime(Date(timeIntervalSince1970: 0)).isEmpty == false)
+    }
+
+    @Test func `SwiftUI formatter environment preserves injected formatter`() {
+        var environment = EnvironmentValues()
+        let injected = Formatters(locale: usLocale, calendar: calendar, themeColors: ThemeColors())
+
+        environment.obaFormatters = injected
+
+        #expect(environment.obaFormatters === injected)
+    }
 
     @Test func example() {
         let formatters = Formatters(locale: usLocale, calendar: calendar, themeColors: ThemeColors())
@@ -232,6 +248,32 @@ final class FormattersTests: OBATestCase {
         #expect(label.contains("\u{2026}"))
         #expect(!label.contains("..."))
         #expect(!label.hasPrefix("Routes:"))
+    }
+
+    // MARK: - Map route pill (panel map)
+
+    @Test func `Map route label sorts numerically like the stop page`() throws {
+        let routes = try makeRoutes(shortNames: ["372", "75", "65"])
+        let label = try #require(Formatters.mapRouteLabel(routes))
+        #expect(label.routeNames == ["65", "75", "372"])
+        #expect(label.overflowCount == 0)
+        #expect(label.overflowText == nil)
+        #expect(label.segments == ["65", "75", "372"])
+    }
+
+    @Test func `Map route label counts the routes past the limit`() throws {
+        let routes = try makeRoutes(shortNames: ["372", "65", "75", "10", "20"])
+        let label = try #require(Formatters.mapRouteLabel(routes, limit: 3))
+        #expect(label.routeNames == ["10", "20", "65"])
+        #expect(label.overflowCount == 2)
+        #expect(label.overflowText == "+2")
+        #expect(label.segments == ["10", "20", "65", "+2"])
+    }
+
+    @Test func `Map route label is nil without routes`() throws {
+        #expect(Formatters.mapRouteLabel([]) == nil)
+        let routes = try makeRoutes(shortNames: ["10"])
+        #expect(Formatters.mapRouteLabel(routes, limit: 0) == nil)
     }
 
     /// Home/Recent use `Stop.subtitle` (`"Routes: …"` with every route), not

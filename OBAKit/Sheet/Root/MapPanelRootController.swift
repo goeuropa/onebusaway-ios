@@ -24,6 +24,11 @@ public final class MapPanelRootController: UIViewController {
     let coordinator: SheetCoordinator<AppSheetRoute>
     private let host: UIHostingController<MapPanelRootView>
     private let bridge: TripPresentationBridge
+    /// Kept, with `probeController` and `layersModel`, so the panel can unhook them from the
+    /// shared services when it goes away.
+    let stopsObserver: MapStopsObserver
+    let probeController: OnDemandProbeController
+    let layersModel: MapPanelLayersModel
 
     public init(application: Application) {
         self.application = application
@@ -40,13 +45,8 @@ public final class MapPanelRootController: UIViewController {
         // trip planner sheet can push the same model instance the map renders from.
         let stopsObserver = MapStopsObserver(application: application)
         // Built here for the same reason: the trip sheet hands its trip to this
-        // instance, and the map draws from it. The rider's location only frames
-        // the trip when the app may use it.
-        let tripFocusMapDisplayModel = TripFocusMapDisplayModel(userLocation: { [weak application] in
-            guard let locationService = application?.locationService,
-                  locationService.isLocationUseAuthorized else { return nil }
-            return locationService.currentLocation?.coordinate
-        })
+        // instance, and the map draws from it.
+        let tripFocusMapDisplayModel = Self.makeTripFocusMapDisplayModel(application: application)
         // Built here for the same reason: the stop sheet hands its arrivals to this
         // instance, and the map draws from it.
         let stopFocusMapDisplayModel = Self.makeStopFocusMapDisplayModel(application: application)
@@ -88,25 +88,52 @@ public final class MapPanelRootController: UIViewController {
         )
         self.host = UIHostingController(rootView: rootView)
         self.bridge = bridge
+        self.stopsObserver = stopsObserver
+        self.probeController = probeController
+        self.layersModel = layersModel
         super.init(nibName: nil, bundle: nil)
         self.bridge.host = self
         self.application.viewRouter.register(mapPanelRootController: self)
     }
 
+    /// The rider's location only frames the trip when the app may use it.
+    private static func makeTripFocusMapDisplayModel(application: Application) -> TripFocusMapDisplayModel {
+        TripFocusMapDisplayModel(userLocation: { [weak application] in
+            guard let locationService = application?.locationService,
+                  locationService.isLocationUseAuthorized else { return nil }
+            return locationService.currentLocation?.coordinate
+        })
+    }
+
     /// The API service is read per fetch because it changes with the region; the
-    /// panel empties the shape cache then too.
+    /// panel empties the shape and schedule caches then too.
     private static func makeStopFocusMapDisplayModel(application: Application) -> StopFocusMapDisplayModel {
-        StopFocusMapDisplayModel(
-            shapeCache: ShapeCache { [weak application] shapeID in
-                guard let apiService = await application?.apiService else { throw CancellationError() }
-                return try await apiService.getShape(id: shapeID).entry.points
-            },
-            formatters: application.formatters
+        let shapeCache = ShapeCache { [weak application] shapeID in
+            guard let apiService = await application?.apiService else { throw CancellationError() }
+            return try await apiService.getShape(id: shapeID).entry.points
+        }
+        return StopFocusMapDisplayModel(
+            shapeCache: shapeCache,
+            formatters: application.formatters,
+            vehicleEstimation: StopVehicleEstimation(
+                userDefaults: application.userDefaults,
+                shapeCache: shapeCache,
+                apiService: { [weak application] in await application?.apiService }
+            )
         )
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    /// The SwiftUI graph this panel hosts can outlive it: after the map experience switches,
+    /// UIKit can keep the last panel's environment, and the models in it, alive. The three that
+    /// act on shared services stop here rather than when they are freed.
+    isolated deinit {
+        stopsObserver.stopObserving()
+        probeController.detach(from: application)
+        layersModel.stopObserving()
     }
 
     public override func viewDidLoad() {

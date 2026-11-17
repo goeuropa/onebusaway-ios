@@ -66,7 +66,16 @@ extension MapViewController {
             return try await apiService.getShape(id: shapeID).entry.points
         }
         mapRegionManager.registerMapLayer(
-            StopRouteFocusMapLayer(mapView: mapRegionManager.mapView, shapeCache: shapeCache, formatters: application.formatters)
+            StopRouteFocusMapLayer(
+                mapView: mapRegionManager.mapView,
+                shapeCache: shapeCache,
+                formatters: application.formatters,
+                vehicleEstimation: StopVehicleEstimation(
+                    userDefaults: application.userDefaults,
+                    shapeCache: shapeCache,
+                    apiService: { [weak apiService] in apiService }
+                )
+            )
         )
 
         // Registered alongside, and torn down on the same region change: the trip

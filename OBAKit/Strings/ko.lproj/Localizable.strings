@@ -64,17 +64,23 @@
 /* Filter option to show only departures with scheduled data and no real-time information */
 "arrival_departure_filter.scheduled_only" = "시간표 기준만";
 
-/* Shown on a trip bookmark card with the estimated arrival time at the bookmark's destination stop, based on real-time data. 1st placeholder is the destination stop's name, 2nd is the time, e.g. 'Arrives Pine St at 5:41 PM'. */
-"bookmark_card.destination.arrives_fmt" = "Arrives %1$@ at %2$@";
+/* Shown on a trip bookmark card with the estimated arrival time at the bookmark's destination stop, based on real-time data. 1st placeholder is the destination stop's name, 2nd is the time, e.g. 'Arrives 5:41 PM · Pine St'. */
+"bookmark_card.destination.arrives_fmt" = "%2$@ 도착 · %1$@";
 
 /* Shown on a trip bookmark card with the scheduled arrival time at the bookmark's destination stop, when no real-time data is available. 1st placeholder is the destination stop's name, 2nd is the time. */
-"bookmark_card.destination.arrives_scheduled_fmt" = "Arrives %1$@ at %2$@ (scheduled)";
+"bookmark_card.destination.arrives_scheduled_fmt" = "%2$@ 도착 (예정) · %1$@";
+
+/* VoiceOver sentence for a trip bookmark's scheduled arrival time at its destination stop, when no real-time data is available. 1st placeholder is the destination stop's name, 2nd is the time. */
+"bookmark_card.destination.arrives_scheduled_spoken_fmt" = "%2$@에 %1$@ 도착 (예정)";
+
+/* VoiceOver sentence for a trip bookmark's estimated arrival time at its destination stop, based on real-time data. 1st placeholder is the destination stop's name, 2nd is the time, e.g. 'Arrives Pine St at 5:41 PM'. */
+"bookmark_card.destination.arrives_spoken_fmt" = "%2$@에 %1$@ 도착";
 
 /* Shown on a trip bookmark card while the arrival time at the bookmark's destination stop is loading. The placeholder is the destination stop's name. */
-"bookmark_card.destination.loading_fmt" = "Loading arrival at %@…";
+"bookmark_card.destination.loading_fmt" = "%@ 도착 시간 불러오는 중…";
 
 /* Shown on a trip bookmark card when none of the upcoming trips on the route stop at the bookmark's destination stop. The placeholder is the destination stop's name. */
-"bookmark_card.destination.not_served_fmt" = "Upcoming trips don't stop at %@";
+"bookmark_card.destination.not_served_fmt" = "다음 운행은 %@에 정차하지 않습니다";
 
 /* Context menu action that pins a bookmark to the top of the home sheet's bookmarks section. */
 "bookmarks_controller.context_menu.pin" = "고정";
@@ -108,6 +114,9 @@
 
 /* Title of the Bookmarks tab */
 "bookmarks_controller.title" = "즐겨찾기";
+
+/* Header of the Bookmarks list section holding bookmarks that aren't in a group, shown below the user's bookmark groups. */
+"bookmarks_controller.other_bookmarks_section.title" = "기타";
 
 /* The title for the bookmarks controller section that shows bookmarks that aren't in a group. */
 "bookmarks_controller.ungrouped_bookmarks_section.title" = "즐겨찾기";
@@ -299,16 +308,16 @@
 "edit_bookmark_controller.destination_default_name_fmt" = "%1$@ → %2$@ (%3$@)";
 
 /* Value of the Destination Stop row on the Add Bookmark screen when no destination stop has been chosen. */
-"edit_bookmark_controller.destination_row.none" = "None";
+"edit_bookmark_controller.destination_row.none" = "없음";
 
 /* Title of the row on the Add Bookmark screen that opens the list of stops to choose the trip's destination from. */
-"edit_bookmark_controller.destination_row.title" = "Destination Stop";
+"edit_bookmark_controller.destination_row.title" = "목적지 정류장";
 
 /* Footer under the destination stop row on the Add Bookmark screen. */
-"edit_bookmark_controller.destination_section.footer" = "Optional. Choose where you get off to also see when this trip arrives there.";
+"edit_bookmark_controller.destination_section.footer" = "선택 사항. 내리는 곳을 선택하면 이 운행이 그곳에 도착하는 시간도 볼 수 있습니다.";
 
 /* Header above the destination stop on the Add/Edit Bookmark screen. */
-"edit_bookmark_controller.destination_section.header_title" = "Destination";
+"edit_bookmark_controller.destination_section.header_title" = "목적지";
 
 /* Indicates that the user wants to create a duplicate bookmark. */
 "edit_bookmark_controller.duplicate_alert.affirmative_button" = "복사본 만들기";
@@ -326,7 +335,7 @@
 "edit_bookmark_controller.name_section.header_title" = "즐겨찾기 이름";
 
 /* Button on the Add Bookmark screen that clears the chosen destination stop. */
-"edit_bookmark_controller.remove_destination_button" = "Remove Destination";
+"edit_bookmark_controller.remove_destination_button" = "목적지 삭제";
 
 
 /* Header above the read-only Stop ID on the Edit Bookmark screen. */
@@ -414,11 +423,35 @@
 /* Title for the home sheet's empty state, shown when there are no nearby stops, no recent stops, and no bookmarks. */
 "home_sheet.empty_set.title" = "아직 아무것도 없습니다";
 
+/* Title of a shortcut on the map panel's home sheet that opens the trip planner. Short: it sits under a small round icon. */
+"home_sheet.explore.plan_trip" = "경로 계획";
+
+/* Title of a shortcut on the map panel's home sheet that shows or hides rental bikes and scooters on the map. Short: it sits under a small round icon. */
+"home_sheet.explore.rentals" = "자전거 및 킥보드";
+
+/* Header of a section on the map panel's home sheet that holds shortcuts to other features: the trip planner, bikes and scooters on the map, and alarms. */
+"home_sheet.explore.title" = "둘러보기";
+
 /* VoiceOver hint for a home sheet section header, which opens that section's full list. */
 "home_sheet.section_header.a11y_hint" = "이 섹션의 모든 항목을 표시합니다.";
 
-/* Title of the map panel's Home tab, which holds search and the nearby stops. It replaces the Map tab: the map is always behind the sheet. */
-"home_sheet.tab.home" = "홈";
+/* Subtitle of the Customize Map row on the map panel's home sheet. */
+"home_sheet.settings.customize_map.subtitle" = "지도 표시 옵션 변경";
+
+/* Title of a row on the map panel's home sheet that opens the map display options: basemap, routes and layers. */
+"home_sheet.settings.customize_map.title" = "지도 사용자화";
+
+/* Subtitle of the More row on the map panel's home sheet, listing some of what the More screen holds. */
+"home_sheet.settings.more.subtitle" = "기부, 지역 변경, 피드백 보내기 등";
+
+/* Subtitle of the More row on the map panel's home sheet, in an app without donations, listing some of what the More screen holds. */
+"home_sheet.settings.more.subtitle_no_donations" = "지역 변경, 피드백 보내기 등";
+
+/* Subtitle of the Settings row on the map panel's home sheet. */
+"home_sheet.settings.settings.subtitle" = "앱 설정 변경";
+
+/* Header of the last section on the map panel's home sheet, which holds rows for map display options, app settings, and the More screen. */
+"home_sheet.settings.title" = "설정 및 더 보기";
 
 /* Alert message for Live Activity error. \"Settings\" is the iOS Settings app. */
 "live_activity.error.message" = "설정에서 실시간 액티비티 설정을 확인해 주세요.";
@@ -1120,13 +1153,13 @@
 "search_results_sheet.unresolvable_result" = "이 검색 결과를 열 수 없습니다.";
 
 /* Search scope tag showing all search result types. */
-"search_scope.all" = "All";
+"search_scope.all" = "전체";
 
 /* Search scope tag filtering results to places and addresses. */
-"search_scope.places" = "Places";
+"search_scope.places" = "장소";
 
 /* Search scope tag filtering results to transit routes. */
-"search_scope.routes" = "Routes";
+"search_scope.routes" = "노선";
 
 /* Accessibility label for the button that clears the search query. */
 "search_sheet.clear_query" = "지우기";
@@ -1203,11 +1236,17 @@
 /* Settings > Debug section > Debug mode */
 "settings_controller.debug_section.debug_mode" = "디버그 모드";
 
+/* Settings > Debug section > Toggle that draws a vehicle's last reported GPS position and the server's position beside its estimated marker */
+"settings_controller.debug_section.show_raw_vehicle_fix" = "보고된 차량 위치 표시";
+
 /* Settings > Debug section title */
 "settings_controller.debug_section.title" = "디버그";
 
 /* Settings > Experimental section > Toggle that merges overlapping stop pins on the map into a single numbered pin */
 "settings_controller.experimental_section.cluster_stops" = "지도에서 가까운 정류장 묶기";
+
+/* Settings > Experimental section > Toggle that moves a followed trip's vehicle along its route between real-time updates, instead of showing it where it last reported */
+"settings_controller.experimental_section.estimate_vehicle_positions" = "차량의 현재 위치 추정";
 
 /* Settings > Experimental section > Map panel toggle */
 "settings_controller.experimental_section.map_panel" = "지도 패널 사용";
@@ -1317,9 +1356,6 @@
 /* Title of the alert shown when the user tries to set a departure alarm but notifications are denied in Settings. */
 "stop_page.alarm_permission_denied.title" = "알림이 꺼져 있음";
 
-/* Divider between departures you'd miss on a bike and ones you can still catch. %d is the bike time in minutes. */
-"stop_page.bike_divider_fmt" = "자전거 %d분 — 아래부터 탑승 가능";
-
 /* VoiceOver description of the bike divider. %d is bike minutes. */
 "stop_page.bike_divider_a11y_fmt" = "이 지점 위의 출발편은 정류장까지 자전거 %d분보다 먼저 출발합니다";
 
@@ -1329,8 +1365,26 @@
 /* Shown in place of the minutes countdown when the vehicle is departing now */
 "stop_page.countdown.now" = "지금";
 
-/* Title of the prompt shown when the rider taps the stop header's walk or bike time and the region has a trip planner. */
-"stop_page.directions_prompt.title" = "앱에서 이 정류장까지의 경로를 확인하시겠습니까?";
+/* VoiceOver hint on the stop page's bike-time buttons (header pill and departures divider) when the region has a trip planner. */
+"stop_page.directions.bike_a11y_hint" = "이 정류장까지의 자전거 경로를 제공합니다.";
+
+/* Title of the sheet shown when the rider taps a bike time on the stop page. */
+"stop_page.directions.bike_sheet_title" = "이 정류장까지 자전거로";
+
+/* Action that hands walking directions to this stop to a maps app. */
+"stop_page.directions.open_in_maps" = "지도에서 열기";
+
+/* Action that plans a bike trip to this stop in the app's trip planner. */
+"stop_page.directions.show_bike_directions" = "자전거 경로 보기";
+
+/* Action that plans a walk to this stop in the app's trip planner. */
+"stop_page.directions.show_walking_directions" = "도보 경로 보기";
+
+/* VoiceOver hint on the stop page's walk-time buttons (header pill and departures divider) when the region has a trip planner. */
+"stop_page.directions.walk_a11y_hint" = "이 정류장까지의 도보 경로를 제공합니다.";
+
+/* Title of the sheet shown when the rider taps a walk time on the stop page. */
+"stop_page.directions.walk_sheet_title" = "이 정류장까지 도보로";
 
 /* Empty state shown when every route at the stop is hidden by the user's filter. */
 "stop_page.empty.all_filtered" = "이 정류장의 모든 노선이 필터링되었습니다";
@@ -1376,14 +1430,8 @@
 /* Caption above the upcoming-departure minute chips on a grouped route card at accessibility text sizes. */
 "stop_page.grouped.next_departures" = "다음 출발";
 
-/* VoiceOver hint on the stop header's bike-time button when the region has a trip planner. */
-"stop_page.header.bike_trip_planner_a11y_hint" = "앱에서 이 정류장까지의 자전거 경로를 계획합니다.";
-
 /* VoiceOver hint on the header card's walk-time button. */
 "stop_page.header.walk_a11y_hint" = "이 정류장까지의 도보 경로를 엽니다.";
-
-/* VoiceOver hint on the stop header's walk-time button when the region has a trip planner. */
-"stop_page.header.walk_trip_planner_a11y_hint" = "앱에서 이 정류장까지의 도보 경로를 계획합니다.";
 
 /* Extends the departure time window */
 "stop_page.load_more" = "더 불러오기";
@@ -1400,9 +1448,6 @@
 
 
 
-
-/* Button revealing recently departed trips. %d is the count. */
-"stop_page.past_toggle_fmt" = "지난 출발 · %d";
 
 /* Button hiding recently departed trips */
 "stop_page.past_toggle_hide" = "지난 출발 숨기기";
@@ -1518,11 +1563,11 @@
 /* Walk chip on the header card. %d is the walk time in minutes. */
 "stop_page.walk_chip_minutes_fmt" = "도보 %d분";
 
+/* Second half of the walk divider: when the rider would reach the stop if they left now. %@ is a clock time, e.g. 8:20 PM. */
+"stop_page.walk_divider.at_stop_fmt" = "%@ 정류장 도착";
+
 /* VoiceOver description of the walk divider. %d is walk minutes. */
 "stop_page.walk_divider_a11y_fmt" = "이 지점 위의 출발편은 정류장까지 도보 %d분보다 먼저 출발합니다";
-
-/* Divider between departures you'd miss on foot and ones you can still catch. %d is the walk time in minutes. */
-"stop_page.walk_divider_fmt" = "도보 %d분 — 아래부터 탑승 가능";
 
 /* Title of the Edit Stop preferences controller */
 "stop_preferences_controller.title" = "노선 필터";
@@ -1682,6 +1727,9 @@
 
 /* A notice when a transit alert doesn't have body text. */
 "transit_alert.no_additional_details.body" = "추가 세부 정보가 없습니다.";
+
+/* How stale the vehicle's last reported position is, when the map shows where the vehicle is estimated to be now rather than where it last reported. %@ is a relative time like '12s ago'. */
+"trip_page.position_estimated_fmt" = "추정 위치, 업데이트 %@";
 
 /* Shown beside a Retry button when loading the trip's stop list failed. */
 "trip_page.stops_failed" = "이 운행의 정류장을 불러오지 못했습니다.";
@@ -2376,3 +2424,15 @@
 
 /* VoiceOver hint for a quick search row, which runs a search and keeps the search field open. */
 "search_controller.accessibility.quick_search" = "이 항목을 검색합니다.";
+
+/* The stop number in the stop sheet header's subtitle, followed by " · " and the direction. %@ is the stop's code. */
+"stop_header.stop_code_fmt" = "정류장 %@";
+
+/* Visible text of the walk and bike pills in the stop sheet header; the icon says which. %d is the time in minutes. */
+"stop_header.travel_minutes_fmt" = "%d분";
+
+/* Button on the stop page revealing recently departed trips. %d is the count. Plural forms live in Localizable.stringsdict; this value is only the not-found fallback. */
+"stop_page.past_toggle_earlier_fmt" = "이전 %d건";
+
+/* Title of the first tab on the map panel's home sheet: the mixed view of the rider's bookmarks, departures from nearby stops, and recent stops. Short: it is one of three tabs, under an icon. */
+"home_sheet.tab.home" = "홈";

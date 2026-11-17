@@ -127,6 +127,18 @@ public extension Strings {
     // nonisolated: OBAKit defaults to @MainActor isolation. These constants are accessed from nonisolated
     // contexts (e.g., `NearbyStopsListViewController.Section`, which is `nonisolated`), so they must be
     // explicitly marked to remain reachable.
+    nonisolated static let explore = OBALoc(
+        "home_sheet.explore.title",
+        value: "Explore",
+        comment: "Header of a section on the map panel's home sheet that holds shortcuts to other features: the trip planner, bikes and scooters on the map, and alarms."
+    )
+
+    static let settingsAndMore = OBALoc(
+        "home_sheet.settings.title",
+        value: "Settings and More",
+        comment: "Header of the last section on the map panel's home sheet, which holds rows for map display options, app settings, and the More screen."
+    )
+
     nonisolated static let nearbyStops = OBALoc(
         "nearby_stops_controller.title",
         value: "Nearby Stops",

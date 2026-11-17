@@ -175,9 +175,8 @@ final class AppSheetRouteTests {
     /// cover. The map stays interactive up through `.medium`, as it does under a trip.
     @Test func `Stop details opens at medium over the panel's map`() {
         let config = AppSheetRoute.stopDetails(stopID: "1").detentConfiguration
-        #expect(config.detents == [.medium, .large])
+        #expect(config.detents == [AppSheetRoute.stopCollapsedDetent, .medium, .large])
         #expect(config.initialDetent == .medium)
-        #expect(config.isDismissDisabled == false)
         #expect(config.fullScreenDetent == nil)
         // Not `Equatable`; the descriptions differ for `.disabled`, which is what
         // left the map untouchable behind this sheet before.
@@ -185,6 +184,16 @@ final class AppSheetRouteTests {
             == String(describing: PresentationBackgroundInteraction.enabled(upThrough: .medium)))
         #expect(String(describing: config.backgroundInteraction)
             != String(describing: PresentationBackgroundInteraction.disabled))
+    }
+
+    /// A swipe down collapses the stop sheet rather than closing it; only its
+    /// Close button closes it (#1751). The collapsed detent is the measured
+    /// `StopCollapsedDetent`, so the rider gets the map back without losing the stop.
+    @Test func `Stop details collapses rather than dismissing`() {
+        let config = AppSheetRoute.stopDetails(stopID: "1").detentConfiguration
+        #expect(config.isDismissDisabled == true)
+        #expect(config.detents.contains(.custom(StopCollapsedDetent.self)))
+        #expect(AppSheetRoute.stopCollapsedDetent == .custom(StopCollapsedDetent.self))
     }
 
     /// Opens at `.medium`, not `.large`: the planner draws its route on the map behind
@@ -228,6 +237,41 @@ final class AppSheetRouteTests {
         }
     }
 
+    // MARK: - Sheet background
+
+    /// Detail pages get a sheet's default background before iOS 26, `systemBackground`,
+    /// so nothing changes there or in light mode; in dark mode on iOS 26 it is what
+    /// keeps the map's glass from washing them out.
+    @Test func `Detail pages get the plain background`() throws {
+        let routes: [AppSheetRoute] = [
+            .stopDetails(stopID: "1"), try tripRoute(), .routePicker, .currentTrip(route: try Fixtures.createRoute(id: "r")),
+            .transitAlert(alertID: "a"), .rentalDetail(rentalID: "bike_7"), .rentalCluster(memberIDs: ["bike_7", "bike_8"]),
+            .mapItem(MKMapItem(placemark: MKPlacemark(coordinate: CLLocationCoordinate2D(latitude: 47.6, longitude: -122.3)))),
+            .settings
+        ]
+        for route in routes {
+            #expect(route.sheetBackground == .plain, "\(route.id)")
+        }
+    }
+
+    /// The sheets built on grouped lists.
+    @Test func `List and index sheets get the grouped background`() {
+        for route: AppSheetRoute in [.home, .search, .nearbyAll, .recentStopsAll, .bookmarksAll, .tripPlanner(TripPlannerRequest()), .more] {
+            #expect(route.sheetBackground == .grouped, "\(route.id)")
+        }
+    }
+
+    /// `MapSheetView.mapSheetBackground()` draws its own.
+    @Test func `Map settings draws its own background`() {
+        #expect(AppSheetRoute.mapSettings.sheetBackground == .custom)
+    }
+
+    @Test func `Each background has its colour`() {
+        #expect(SheetBackground.grouped.opaqueColor == .searchSheetBackground)
+        #expect(SheetBackground.plain.opaqueColor == Color(uiColor: .systemBackground))
+        #expect(SheetBackground.custom.opaqueColor == nil)
+    }
+
     @Test func `All routes show drag indicator`() throws {
         // No route currently opts out of the drag indicator; this guards against
         // an accidental flip when adding a new case.
@@ -248,10 +292,10 @@ final class AppSheetRouteTests {
         #expect(AppSheetRoute.largeDetent == .fraction(0.99))
     }
 
-    @Test func `Home collapsed height estimate is the search row and the tab bar`() {
-        // The first-frame estimate, before the search row is measured; see
+    @Test func `Home collapsed height estimate is the search row and the chips`() {
+        // The first-frame estimate, before the header is measured; see
         // `HomeTabsTests`.
-        #expect(AppSheetRoute.homeCollapsedHeight == 136)
+        #expect(AppSheetRoute.homeCollapsedHeight == 135)
     }
 
     // MARK: - SheetDetentConfiguration defaults
@@ -389,8 +433,8 @@ final class AppSheetRouteTests {
     }
 
     /// Stacked so the home sheet peeks beneath, matching every other detail
-    /// destination — and because `SheetCoordinator.push` preconditions that a
-    /// stacked route allows interactive dismissal.
+    /// destination. It has no Close of its own to fall back on, so it leaves
+    /// dismissal to the drag-down gesture.
     @Test func `Map settings route stacks and allows dismissal`() {
         #expect(AppSheetRoute.mapSettings.prefersStacking)
         #expect(AppSheetRoute.mapSettings.detentConfiguration.isDismissDisabled == false)
@@ -485,9 +529,9 @@ final class AppSheetRouteTests {
         #expect(config.initialDetent == .medium)
     }
 
-    /// `SheetCoordinator.push` preconditions on this for every stacked route: the OS
-    /// owns drag-down on that layer, and locking dismissal would leave
-    /// `stackedEntries` pointing at a sheet that is no longer on screen.
+    /// These sheets leave dismissal to the drag-down gesture, which
+    /// `truncateStacked` keeps in sync with `stackedEntries`; only a route with
+    /// its own Close, like the stop sheet, may lock it.
     @Test func `Stacked search routes allow interactive dismissal`() throws {
         let item = MKMapItem(placemark: MKPlacemark(coordinate: CLLocationCoordinate2D(latitude: 1, longitude: 2)))
         let stopsForRoute = try Fixtures.loadRESTAPIPayload(type: StopsForRoute.self, fileName: "stops_for_route_1_44.json")

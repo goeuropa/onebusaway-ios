@@ -29,7 +29,8 @@ final class MapStopsObserver: NSObject, ObservableObject, MapRegionDelegate, Reg
     /// localized-string lookups off every frame.
     struct RenderStop: Identifiable {
         let stop: Stop
-        let title: String
+        /// The route pill under the pin, or `nil` when the stop has no route names.
+        let routeLabel: MapRouteLabel?
         let accessibilityLabel: String
         var id: StopID { stop.id }
     }
@@ -84,11 +85,20 @@ final class MapStopsObserver: NSObject, ObservableObject, MapRegionDelegate, Reg
     @Published private(set) var hasSettledOnce = false
 
     private let application: Application
+    private var bookmarksChangeTask: Task<Void, Never>?
 
-    init(application: Application, pruneSpanFactor: Double = 4.0, renderCap: Int = 400) {
+    init(
+        application: Application,
+        pruneSpanFactor: Double = 4.0,
+        renderCap: Int = 400,
+        notificationCenter: NotificationCenter = .default
+    ) {
         self.application = application
         self.pruneSpanFactor = pruneSpanFactor
         self.renderCap = renderCap
+        // Creating the sequence registers with NotificationCenter synchronously;
+        // only iteration is deferred to the owned task below.
+        let bookmarkChanges = notificationCenter.notifications(named: .bookmarksDidChange)
         super.init()
 
         // Seed the accumulator (and published set) so a re-created observer
@@ -103,19 +113,25 @@ final class MapStopsObserver: NSObject, ObservableObject, MapRegionDelegate, Reg
         stops = orderedStops()
         application.mapRegionManager.addDelegate(self)
 
-        // Re-decode on bookmark changes so a visible pin restyles. Selector-based
-        // observation is auto-removed on dealloc, so no token/deinit needed.
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(bookmarksDidChange),
-            name: .bookmarksDidChange,
-            object: nil
-        )
+        // Re-decode on bookmark changes so a visible pin restyles. The task owns
+        // the bounded AsyncSequence subscription and is cancelled in deinit or
+        // `stopObserving()`.
+        bookmarksChangeTask = Task { [weak self] in
+            for await _ in bookmarkChanges {
+                guard !Task.isCancelled, let self else { return }
+                self.reloadBookmarks()
+            }
+        }
         // A region switch changes which bookmarks are "current", but doesn't
         // repost `.bookmarksDidChange` — observe the region directly so the pins
         // don't stay filtered to the old region until an unrelated bookmark
-        // edit. The delegate table is weak, so no explicit removal is needed.
+        // edit. The delegate table is weak; `stopObserving()` removes it early when the
+        // observer outlives its panel.
         application.regionsService.addDelegate(self)
+    }
+
+    deinit {
+        bookmarksChangeTask?.cancel()
     }
 
     /// Clears the render set and prune reference on zoom-out. Bookmarks stay
@@ -161,15 +177,19 @@ final class MapStopsObserver: NSObject, ObservableObject, MapRegionDelegate, Reg
         }
     }
 
-    // MARK: - Bookmarks
+    // MARK: - Teardown
 
-    /// `.bookmarksDidChange` may be posted off the main actor, so hop rather
-    /// than assume isolation.
-    @objc
-    private nonisolated func bookmarksDidChange() {
-        Task { @MainActor [weak self] in
-            self?.reloadBookmarks()
-        }
+    /// Unhooks the observer from the shared services it registered with and
+    /// cancels its bookmark task.
+    ///
+    /// The delegate tables are weak, but the observer can outlive its panel (see
+    /// `MapPanelRootController`'s `deinit`), which calls this so a leftover observer no longer
+    /// reacts to map, region or bookmark changes.
+    func stopObserving() {
+        application.mapRegionManager.removeDelegate(self)
+        application.regionsService.removeDelegate(self)
+        bookmarksChangeTask?.cancel()
+        bookmarksChangeTask = nil
     }
 
     // MARK: - RegionsServiceDelegate
@@ -261,7 +281,7 @@ final class MapStopsObserver: NSObject, ObservableObject, MapRegionDelegate, Reg
         accumulated.values.sorted { $0.id < $1.id }
     }
 
-    /// Rebuilds `renderStops` so the filter, title, and accessibility-label
+    /// Rebuilds `renderStops` so the filter, route label, and accessibility-label
     /// formatting run once per change, not per body eval.
     private func rebuildRenderStops() {
         renderStops = stops
@@ -269,7 +289,7 @@ final class MapStopsObserver: NSObject, ObservableObject, MapRegionDelegate, Reg
             .map {
                 RenderStop(
                     stop: $0,
-                    title: Formatters.formattedTitle(stop: $0),
+                    routeLabel: Formatters.mapRouteLabel($0.routes),
                     accessibilityLabel: Formatters.formattedAccessibilityLabel(stop: $0)
                 )
             }

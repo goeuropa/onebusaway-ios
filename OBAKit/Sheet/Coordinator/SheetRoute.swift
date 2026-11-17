@@ -162,6 +162,23 @@ nonisolated protocol SheetRouteable: Identifiable, Hashable {
     /// When `true`, `SheetCoordinator.push(_:)` routes this case to the stacked
     /// layer (a second sheet over the base sheet); otherwise content-swap.
     var prefersStacking: Bool { get }
+    /// What the sheet shows behind its content where its glass doesn't; see
+    /// `SheetBackground`. `FloatingSheetContainer` applies it to every sheet.
+    var sheetBackground: SheetBackground { get }
+}
+
+/// A panel sheet's background where its Liquid Glass doesn't show (dark mode, and
+/// before iOS 26; see `ColorScheme.showsSheetGlass`). Over the dark map a sheet's
+/// glass washes out, so every sheet gets one of these unless it draws its own.
+nonisolated enum SheetBackground: Hashable {
+    /// `systemGroupedBackground`, for the list and index sheets; see
+    /// `searchSheetBackground()`.
+    case grouped
+    /// `systemBackground`: a sheet's own default before iOS 26, for the stop
+    /// sheet and the detail pages that don't sit on a grouped list.
+    case plain
+    /// The sheet's view sets its own background.
+    case custom
 }
 
 // MARK: - OnDemandPickerPayload
@@ -215,6 +232,8 @@ nonisolated enum AppSheetRoute: SheetRouteable {
     case nearbyStops(coordinate: CLLocationCoordinate2D)
 
     case more
+    /// Not pushed: Home's Settings row presents `SettingsViewController`
+    /// modally (`ViewRouter.presentSettings(from:)`), as the More screen does.
     case settings
     case mapSettings
 
@@ -315,6 +334,25 @@ nonisolated extension AppSheetRoute {
 }
 
 nonisolated extension AppSheetRoute {
+    /// Grouped for the sheets built on grouped lists; plain for the stop sheet and
+    /// the detail pages, whose look before iOS 26 is a sheet's default; the map
+    /// settings sheet draws its own. A new route has to pick one here.
+    var sheetBackground: SheetBackground {
+        switch self {
+        case .home, .search, .nearbyAll, .recentStopsAll, .bookmarksAll, .tripPlanner,
+             .searchResults, .routeStops, .nearbyStops, .more:
+            .grouped
+        case .stopDetails, .tripDetails, .routePicker, .currentTrip, .transitAlert, .rentalDetail,
+             .rentalCluster, .onDemandService, .onDemandPicker, .mapItem, .settings:
+            .plain
+        // `MapSheetView.mapSheetBackground()`.
+        case .mapSettings:
+            .custom
+        }
+    }
+}
+
+nonisolated extension AppSheetRoute {
     /// Detail destinations prefer the stacked layer so the base sheet peeks beneath.
     var prefersStacking: Bool {
         switch self {
@@ -346,31 +384,25 @@ nonisolated extension AppSheetRoute {
     }
 
     /// The collapsed home sheet's height at the default text size: the estimate
-    /// for the first frame, before `HomeCollapsedDetent` measures the search row.
+    /// for the first frame, before `HomeCollapsedDetent` measures the header,
+    /// and the least the detent asks for.
     ///
-    /// The search row and the tab bar under it, and nothing else, so the
-    /// collapsed sheet reads as those two controls rather than as a list that got
-    /// cut off. A regular-width sheet has no tab bar yet (`HomeTabs.showsTabs`),
-    /// so its collapsed sheet shows the top of the list in that space.
-    static let homeCollapsedHeight: CGFloat = homeSearchRowHeight + homeTabBarHeight
+    /// The header itself (the search field over the Home / Recent / Bookmarks
+    /// tab bar, #1750) decides the collapsed height; it is laid out at its
+    /// standard padding and comes to about this. This is a floor, kept as a
+    /// safety net: a regular-width sheet has no tab bar, and its shorter header
+    /// leaves the top of the list showing under the field.
+    ///
+    /// Not less: this is about as short as iOS 26 will draw a floating sheet.
+    /// Once the system's own extra is given back, a detent under ~100pt (on an
+    /// iPhone 17 Pro) draws the sheet narrower and lifted off the bottom.
+    static let homeCollapsedHeight: CGFloat = 135
 
     /// The home sheet's smallest detent; see `HomeCollapsedDetent`.
     static var homeCollapsedDetent: PresentationDetent { .custom(HomeCollapsedDetent.self) }
 
-    /// `HomeTabBar`'s 54pt capsule and the padding under it: 11pt, about its side
-    /// margin, so it sits evenly in the sheet's rounded bottom.
-    ///
-    /// Not less: with it, the collapsed sheet is as short as iOS 26 will draw a
-    /// floating sheet. A few points shorter (a detent under ~100pt on an iPhone 17
-    /// Pro) and it draws the sheet narrower and lifted off the bottom instead.
-    static let homeTabBarHeight: CGFloat = 65
-
-    /// `HomeSheetView`'s search row at the default text size: a body-metrics
-    /// capsule (~50pt: one line of text plus its 14pt vertical padding, top and
-    /// bottom) under the row's own 16pt top padding and
-    /// `HomeTabs.searchRowBottomPadding` under it. An estimate for the first
-    /// frame: `HomeCollapsedDetent` fits the row as measured.
-    static let homeSearchRowHeight: CGFloat = 71
+    /// The stop sheet's smallest detent; see `StopCollapsedDetent`.
+    static var stopCollapsedDetent: PresentationDetent { .custom(StopCollapsedDetent.self) }
 
     /// Height of the trip planner's tip detent — a "peek" rung that leaves the
     /// map dominant when the panel is minimized. OTPKit's
@@ -423,11 +455,17 @@ nonisolated extension AppSheetRoute {
             // `.enabled(upThrough: .medium)`, which needs `.medium` in `detents`.
             // Without it UIKit has no detent at which to begin dimming, so the
             // sheet stays non-modal and every touch falls through to the map; that
-            // is why the `[.large]`-only routes above state `.disabled`.
+            // is why the `[.large]`-only routes above state `.disabled`. The
+            // collapsed detent sits below `.medium`, so the map stays usable there.
+            //
+            // A swipe down stops at the collapsed detent rather than closing the
+            // sheet, so a rider dragging for more map, or scrolling the arrivals
+            // past the top, doesn't lose the stop. Only Close dismisses it, and
+            // Close pops the route through the coordinator itself (#1751).
             return SheetDetentConfiguration(
-                detents: [.medium, .large],
+                detents: [AppSheetRoute.stopCollapsedDetent, .medium, .large],
                 initialDetent: .medium,
-                isDismissDisabled: false
+                isDismissDisabled: true
             )
         case .tripPlanner:
             // Opens at `.medium`: planning a trip is a map task, and the origin and

@@ -114,9 +114,8 @@ final class AppSheetViewFactory {
 
         case .more:
             // MoreViewController clears its backgrounds for the sheet's, which
-            // only HomeSheetView sets when More is its tab.
+            // `FloatingSheetContainer` sets from `AppSheetRoute.sheetBackground`.
             moreView()
-                .searchSheetBackground()
 
         case .search:
             searchView()
@@ -197,6 +196,15 @@ final class AppSheetViewFactory {
                     return
                 }
                 application.viewRouter.navigateTo(alert: alert, from: host)
+            },
+            // Modally, as the More screen opens it: the controller owns its
+            // Done button and dismisses itself.
+            onOpenSettings: { [application, presentingController] in
+                guard let host = presentingController() else {
+                    Logger.error("AppSheetViewFactory: dropping Settings — no presenting controller resolved.")
+                    return
+                }
+                application.viewRouter.presentSettings(from: host)
             }
         )
     }
@@ -273,7 +281,7 @@ final class AppSheetViewFactory {
                     stopFocusMapDisplayModel.show(focus: focus, owner: owner)
                 }
             },
-            apply: { [stopFocusMapDisplayModel] arrivals, isListFiltered, preferences in
+            apply: { [stopFocusMapDisplayModel] arrivals, isListFiltered, preferences, serverClock in
                 // Behind `show`'s wait, so the first emission isn't dropped for
                 // arriving before its sheet is known.
                 Task { @MainActor in
@@ -281,6 +289,7 @@ final class AppSheetViewFactory {
                         arrivals: arrivals,
                         isListFiltered: isListFiltered,
                         preferences: preferences,
+                        serverClock: serverClock,
                         owner: owner
                     )
                 }

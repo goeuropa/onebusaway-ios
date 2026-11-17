@@ -12,6 +12,7 @@ import Foundation
 import MapKit
 import os
 import Testing
+import UIKit
 @testable import OBAKit
 @testable import OBAKitCore
 
@@ -62,6 +63,59 @@ final class OnDemandProbeControllerTests: OBATestCase {
                 try await clock.sleep(for: .seconds(seconds), tolerance: nil)
             }
         )
+    }
+
+    // MARK: - Detach
+
+    /// A foreground, a location update and a settled map each ask whether location may be
+    /// used, the first step of a probe. Once detached the controller is no longer asked: the map panel detaches
+    /// it as it goes away, because UIKit can keep the panel's models alive after a switch.
+    @Test func `A detached controller stops probing on foreground, location and map changes`() {
+        // The app's other location observers may fetch; none of that matters here.
+        dataLoader.mock(data: Data(), statusCode: 404) { _ in true }
+        let notificationCenter = NotificationCenter()
+        var authorizationChecks = 0
+        let controller = OnDemandProbeController(
+            apiService: { [weak application] in application?.apiService },
+            geometryCache: OnDemandGeometryCache { _, _ in [] },
+            isLocationAuthorized: {
+                authorizationChecks += 1
+                return false
+            },
+            notificationCenter: notificationCenter
+        )
+        application.locationService.addDelegate(controller)
+        application.regionsService.addDelegate(controller)
+
+        notificationCenter.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+        application.locationService.locationManager(CLLocationManager(), didUpdateLocations: [TestData.mockSeattleLocation])
+        controller.mapDidSettle(center: alexandriaPoint, zoomLevel: .region)
+        #expect(authorizationChecks == 3)
+
+        controller.detach(from: application)
+        notificationCenter.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+        application.locationService.locationManager(CLLocationManager(), didUpdateLocations: [TestData.mockSeattleLocation])
+        // A graph UIKit keeps alive can still report its map settling.
+        controller.mapDidSettle(center: alexandriaPoint, zoomLevel: .region)
+        #expect(authorizationChecks == 3)
+    }
+
+    /// The surface is gone, so a probe already on the wire must not land in the cache.
+    @Test func `Stopping cancels an in-flight probe and caches nothing`() async throws {
+        mockProbe(file: "ondemand_services_for_location_point.json")
+        let gate = GatedDataLoader(dataLoader, gating: Self.isProbe, holdsAfterResponse: true)
+        application = buildApplication(queue: OperationQueue(), dataLoader: dataLoader, transport: gate)
+        let controller = makeController()
+
+        let probe = Task { try await controller.probe(at: alexandriaPoint) }
+        await gate.waitForRequest()
+
+        controller.stopObserving()
+        gate.releaseRequest()
+
+        await #expect(throws: (any Error).self) { _ = try await probe.value }
+        _ = try await controller.probe(at: alexandriaPoint)
+        #expect(probeRequests.count == 2, "the cancelled result was not cached")
     }
 
     /// A settle loads full geometry for every match (spec 2.7), and the mock

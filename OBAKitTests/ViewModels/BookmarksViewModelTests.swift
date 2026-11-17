@@ -228,6 +228,42 @@ final class BookmarksViewModelTests: OBATestCase {
         #expect(viewModel.sections.first?.rows.count == 2)
     }
 
+    /// Below groups, ungrouped bookmarks are headed "Other". Alone, they get no
+    /// header at all: "Bookmarks" would repeat the sheet's own title.
+    @Test @MainActor
+    func `Ungrouped section header shows only below groups`() throws {
+        let dataLoader = MockDataLoader(testName: name)
+        let app = createApplication(dataLoader: dataLoader)
+
+        let stopArrivals = try Fixtures.loadRESTAPIPayload(
+            type: StopArrivals.self,
+            fileName: "arrivals-and-departures-for-stop-1_10914.json"
+        )
+        let arrivalDep = try #require(stopArrivals.arrivalsAndDepartures.first)
+
+        app.userDataStore.add(
+            Bookmark(name: "Ungrouped", regionIdentifier: pugetSoundRegionIdentifier, arrivalDeparture: arrivalDep),
+            to: nil
+        )
+
+        let viewModel = BookmarksViewModel(application: app)
+        viewModel.rebuildSections()
+
+        let alone = try #require(viewModel.sections.first)
+        #expect(viewModel.sections.count == 1)
+        #expect(alone.title == nil)
+
+        let group = BookmarkGroup(name: "Work", sortOrder: 0)
+        app.userDataStore.upsert(bookmarkGroup: group)
+        app.userDataStore.add(
+            Bookmark(name: "Grouped", regionIdentifier: pugetSoundRegionIdentifier, arrivalDeparture: arrivalDep),
+            to: group
+        )
+        viewModel.rebuildSections()
+
+        #expect(viewModel.sections.map(\.title) == ["Work", BookmarksViewModel.otherSectionTitle])
+    }
+
     /// Bookmarks from other regions must not appear, and a section whose
     /// bookmarks are all filtered out is omitted entirely — with the standard
     /// empty state shown rather than a blank list.
@@ -627,6 +663,7 @@ final class BookmarksViewModelTests: OBATestCase {
         dataLoader.mock(data: Data("null".utf8), statusCode: 200) {
             $0.url?.path.contains("/api/where/arrivals-and-departures-for-stop") ?? false
         }
+        Fixtures.stubMissingStop(dataLoader: dataLoader)
 
         let viewModel = BookmarksViewModel(application: app)
         await viewModel.refreshAndWait()
@@ -700,6 +737,7 @@ final class BookmarksViewModelTests: OBATestCase {
             staging.mock(data: Data("null".utf8), statusCode: 200) {
                 $0.url?.path.contains("/api/where/arrivals-and-departures-for-stop") ?? false
             }
+            Fixtures.stubMissingStop(dataLoader: staging)
         }
 
         await viewModel.refreshAndWait()
